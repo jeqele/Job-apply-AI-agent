@@ -37,6 +37,23 @@ def main():
     scraper_parser.add_argument('--location', required=True, help='Location to search in')
     scraper_parser.add_argument('--output', help='Output file path (Excel)')
     scraper_parser.add_argument('--max-jobs', type=int, default=10, help='Maximum number of jobs to scrape')
+    scraper_parser.add_argument('--max-days-old', type=int, default=30, help='Maximum age of job postings in days')
+    scraper_parser.add_argument(
+        '--sources',
+        default='all',
+        help='Comma-separated sources: linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
+    )
+    scraper_parser.add_argument(
+        '--mode',
+        choices=['api', 'scrape', 'both'],
+        default='both',
+        help='Use API, scrape, or both where available',
+    )
+    scraper_parser.add_argument(
+        '--no-enrich',
+        action='store_true',
+        help='Skip fetching job details and contact emails',
+    )
     
     # CV modifier command
     cv_parser = subparsers.add_parser('tailor', help='Tailor CV for a job')
@@ -61,34 +78,31 @@ def main():
         app.run(host=args.host, port=args.port, debug=args.debug)
         
     elif args.command == 'scrape':
-        from job_apply_ai.scraper.linkedin import LinkedInScraper
-        
-        scraper = LinkedInScraper(headless=True)
-        jobs = scraper.scrape_job_listings(args.keyword, args.location, max_jobs=args.max_jobs)
-        
+        from job_apply_ai.scraper.aggregator import search_and_save
+
+        output_file = args.output
+        if not output_file:
+            output_dir = os.path.join(os.getcwd(), "job_apply_ai", "outputs", "jobs")
+            os.makedirs(output_dir, exist_ok=True)
+            today_date = datetime.today().strftime("%Y-%m-%d")
+            output_file = os.path.join(output_dir, f"jobs_{today_date}.xlsx")
+
+        sources = [source.strip() for source in args.sources.split(",") if source.strip()]
+        jobs, filename = search_and_save(
+            args.keyword,
+            args.location,
+            output_file=output_file,
+            max_jobs=args.max_jobs,
+            max_days_old=args.max_days_old,
+            sources=sources,
+            mode=args.mode,
+            enrich_details=not args.no_enrich,
+        )
+
         if jobs:
-            output_file = args.output
-            if not output_file:
-                # Save to the jobs output directory
-                output_dir = os.path.join(os.getcwd(), "job_apply_ai", "outputs", "jobs")
-                os.makedirs(output_dir, exist_ok=True)
-                
-                today_date = datetime.today().strftime("%Y-%m-%d")
-                output_file = os.path.join(output_dir, f"linkedin_jobs_{today_date}.xlsx")
-            
-            filename = scraper.save_jobs_to_excel(jobs, output_file)
-            logger.info(f"Jobs saved to {filename}")
-            
-            # Fetch job descriptions
-            logger.info("Fetching job descriptions...")
-            for i, job in enumerate(jobs):
-                logger.info(f"Fetching description for job {i+1}/{len(jobs)}: {job['title']}")
-                title, company, description = scraper.fetch_job_description(job['link'])
-                jobs[i]['description'] = description
-            
-            # Save updated jobs with descriptions
-            scraper.save_jobs_to_excel(jobs, output_file)
-            logger.info(f"Updated jobs with descriptions saved to {filename}")
+            logger.info(f"Saved {len(jobs)} jobs to {filename}")
+            jobs_with_email = sum(1 for job in jobs if job.get("emails"))
+            logger.info(f"Jobs with contact emails: {jobs_with_email}/{len(jobs)}")
         else:
             logger.warning("No jobs found")
             

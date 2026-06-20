@@ -8,14 +8,17 @@ import os
 import logging
 import tempfile
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session, jsonify
-import pandas as pd
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session
 import zipfile
 import io
 
-from job_apply_ai.scraper.linkedin import LinkedInScraper
-from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer, CVModifier, batch_process_jobs
+from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
+from job_apply_ai.job_schema import JOB_COLUMNS
+from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer, CVModifier
 from job_apply_ai.utils.helpers import ensure_directory_exists
+from job_apply_ai.storage.database import init_db
+from job_apply_ai.storage.job_repository import JobRepository
+from job_apply_ai.storage.exports import export_jobs
 
 # Configure logging
 logging.basicConfig(
@@ -36,8 +39,41 @@ app.config['JOBS_OUTPUT_DIR'] = os.path.join(app.config['UPLOAD_FOLDER'], 'jobs'
 ensure_directory_exists(app.config['CV_OUTPUT_DIR'])
 ensure_directory_exists(app.config['JOBS_OUTPUT_DIR'])
 
+# Initialize SQLite database
+init_db()
+job_repo = JobRepository()
+
 # Ensure session data is saved
 app.config['SESSION_TYPE'] = 'filesystem'
+
+def _enrich_jobs_with_skills(jobs: list[dict]) -> list[dict]:
+    """Extract matched skills from job descriptions."""
+    analyzer = CVAnalyzer()
+    enriched = []
+    for job in jobs:
+        if job.get('description'):
+            matched_skills, _, matched_categories = analyzer.extract_skills_from_description(
+                job['description']
+            )
+            job['matched_skills'] = matched_skills
+            job['matched_categories'] = matched_categories
+        enriched.append(job)
+    return enriched
+
+
+def _get_jobs_for_view(search_run_id: int | None = None) -> list[dict]:
+    """Load jobs from SQLite for the current view."""
+    if search_run_id is not None:
+        jobs = job_repo.list_jobs(search_run_id=search_run_id)
+        if jobs:
+            return jobs
+    return job_repo.list_jobs()
+
+
+def _job_form_data() -> dict:
+    """Read job fields from the current request form."""
+    return {column: request.form.get(column, '') for column in JOB_COLUMNS}
+
 
 @app.route('/')
 def index():
@@ -51,56 +87,45 @@ def search_jobs():
         keyword = request.form.get('keyword', '')
         location = request.form.get('location', '')
         max_jobs = int(request.form.get('max_jobs', 10))
+        sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
+        mode = request.form.get('mode', 'both')
         
         if not keyword or not location:
             flash('Please enter both job title and location', 'error')
             return redirect(url_for('index'))
         
         try:
-            # Scrape jobs
-            scraper = LinkedInScraper(headless=True)
-            jobs = scraper.scrape_job_listings(keyword, location, max_jobs=max_jobs)
+            source_list = [source.strip() for source in sources.split(',') if source.strip()]
+            jobs = aggregate_search_jobs(
+                keyword,
+                location,
+                max_jobs=max_jobs,
+                sources=source_list,
+                mode=mode,
+                enrich_details=True,
+            )
             
             if not jobs:
                 flash('No jobs found. Try different search terms.', 'warning')
                 return redirect(url_for('index'))
-            
-            # Fetch job descriptions
-            for i, job in enumerate(jobs):
-                logger.info(f"Fetching description for job {i+1}/{len(jobs)}: {job['title']}")
-                title, company, description = scraper.fetch_job_description(job['link'])
-                jobs[i]['description'] = description
-            
-            # Save jobs to session
-            session['jobs'] = jobs
-            
-            # Save to Excel for reference
-            today_date = datetime.today().strftime("%Y-%m-%d")
-            filename = f"linkedin_jobs_{today_date}.xlsx"
-            filepath = os.path.join(app.config['JOBS_OUTPUT_DIR'], filename)
-            
-            df = pd.DataFrame(jobs)
-            df.to_excel(filepath, index=False)
-            session['jobs_file'] = filepath
-            session['excel_filename'] = filename
-            
-            # Process job descriptions to extract skills
-            analyzer = CVAnalyzer()
-            processed_jobs = []
-            
-            for job in jobs:
-                if job.get('description'):
-                    matched_skills, matched_requirements, matched_categories = analyzer.extract_skills_from_description(job['description'])
-                    job['matched_skills'] = matched_skills
-                    job['matched_categories'] = matched_categories
-                    processed_jobs.append(job)
-            
-            session['processed_jobs'] = processed_jobs
-            
-            return render_template('job_list.html', 
-                                  jobs=processed_jobs, 
-                                  excel_file=filename,
-                                  excel_path=filepath)
+
+            search_run_id = job_repo.create_search_run(
+                keyword,
+                location,
+                sources,
+                mode,
+            )
+            processed_jobs = _enrich_jobs_with_skills(jobs)
+            job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
+            processed_jobs = job_repo.list_jobs(search_run_id=search_run_id)
+
+            session['search_run_id'] = search_run_id
+
+            return render_template(
+                'job_list.html',
+                jobs=processed_jobs,
+                search_run_id=search_run_id,
+            )
             
         except Exception as e:
             logger.error(f"Error during job search: {str(e)}")
@@ -130,7 +155,7 @@ def upload_cv():
             flash('CV template uploaded successfully', 'success')
             
             # If we have jobs, redirect to job list
-            if session.get('processed_jobs'):
+            if session.get('search_run_id') or job_repo.count_jobs():
                 return redirect(url_for('job_list'))
             return redirect(url_for('index'))
         else:
@@ -142,46 +167,138 @@ def upload_cv():
 @app.route('/job_list')
 def job_list():
     """Display the list of jobs with Make CV buttons."""
-    processed_jobs = session.get('processed_jobs', [])
-    excel_filename = session.get('excel_filename')
-    excel_path = session.get('jobs_file')
-    
-    if not processed_jobs:
+    search_run_id = session.get('search_run_id')
+    jobs = _get_jobs_for_view(search_run_id)
+
+    if not jobs:
         flash('No jobs found. Please search for jobs first.', 'warning')
         return redirect(url_for('index'))
-    
-    return render_template('job_list.html', 
-                          jobs=processed_jobs, 
-                          excel_file=excel_filename,
-                          excel_path=excel_path)
+
+    return render_template(
+        'job_list.html',
+        jobs=jobs,
+        search_run_id=search_run_id,
+    )
+
+
+@app.route('/jobs/manage')
+def manage_jobs():
+    """Display all jobs stored in SQLite with CRUD actions."""
+    jobs = job_repo.list_jobs()
+    return render_template('manage_jobs.html', jobs=jobs)
+
+
+@app.route('/jobs/new', methods=['GET', 'POST'])
+def create_job():
+    """Create a job manually."""
+    if request.method == 'POST':
+        job_data = _job_form_data()
+        if not job_data.get('title'):
+            flash('Job title is required', 'error')
+            return render_template('job_form.html', job=job_data)
+
+        job_id = job_repo.create_job(job_data)
+        flash(f'Job #{job_id} created successfully', 'success')
+        return redirect(url_for('manage_jobs'))
+
+    return render_template('job_form.html', job=None)
+
+
+@app.route('/jobs/<int:job_id>/edit', methods=['GET', 'POST'])
+def edit_job(job_id):
+    """Update an existing job."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        flash('Job not found', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    if request.method == 'POST':
+        job_data = _job_form_data()
+        if not job_data.get('title'):
+            flash('Job title is required', 'error')
+            return render_template('job_form.html', job={**job, **job_data})
+
+        job_repo.update_job(job_id, job_data)
+        flash('Job updated successfully', 'success')
+        return redirect(url_for('manage_jobs'))
+
+    return render_template('job_form.html', job=job)
+
+
+@app.route('/jobs/<int:job_id>/delete', methods=['POST'])
+def delete_job(job_id):
+    """Delete a job from SQLite."""
+    if job_repo.delete_job(job_id):
+        flash('Job deleted successfully', 'success')
+    else:
+        flash('Job not found', 'error')
+    return redirect(url_for('manage_jobs'))
+
+
+@app.route('/export/<fmt>')
+def export_jobs_route(fmt):
+    """Export jobs as Excel, CSV, or PDF."""
+    if fmt not in ('excel', 'csv', 'pdf'):
+        flash('Unsupported export format', 'error')
+        return redirect(url_for('job_list'))
+
+    search_run_id = request.args.get('search_run_id', type=int) or session.get('search_run_id')
+    jobs = _get_jobs_for_view(search_run_id)
+
+    if not jobs:
+        flash('No jobs available to export', 'warning')
+        return redirect(url_for('index'))
+
+    today_date = datetime.today().strftime("%Y-%m-%d")
+    mimetypes = {
+        'excel': ('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', f'jobs_{today_date}.xlsx'),
+        'csv': ('text/csv', f'jobs_{today_date}.csv'),
+        'pdf': ('application/pdf', f'jobs_{today_date}.pdf'),
+    }
+    mimetype, filename = mimetypes[fmt]
+
+    if fmt == 'excel':
+        filepath = os.path.join(app.config['JOBS_OUTPUT_DIR'], filename)
+        export_jobs(jobs, 'excel', filepath)
+        return send_file(filepath, as_attachment=True, download_name=filename)
+
+    if fmt == 'csv':
+        buffer = export_jobs(jobs, 'csv')
+        return send_file(
+            buffer,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    buffer = export_jobs(jobs, 'pdf')
+    return send_file(
+        buffer,
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=filename,
+    )
+
 
 @app.route('/download_excel')
 def download_excel():
     """Download the Excel file with job listings."""
-    jobs_file = session.get('jobs_file')
-    
-    if not jobs_file or not os.path.exists(jobs_file):
-        flash('Excel file not found', 'error')
-        return redirect(url_for('index'))
-    
-    return send_file(jobs_file, as_attachment=True)
+    return redirect(url_for('export_jobs_route', fmt='excel'))
 
 @app.route('/make_cv/<int:job_id>')
 def make_cv(job_id):
     """Generate a CV for a specific job."""
-    processed_jobs = session.get('processed_jobs', [])
+    job = job_repo.get_job(job_id)
     cv_template = session.get('cv_template')
-    
-    if not processed_jobs or job_id >= len(processed_jobs):
+
+    if not job:
         flash('Job not found', 'error')
         return redirect(url_for('job_list'))
-    
+
     if not cv_template:
         flash('Please upload a CV template first', 'error')
         return redirect(url_for('upload_cv'))
-    
-    job = processed_jobs[job_id]
-    
+
     try:
         # Create CV modifier
         modifier = CVModifier(cv_template)
@@ -238,6 +355,7 @@ def make_cv(job_id):
                 
                 # Update the job with the matched categories if they were generated here
                 job['matched_categories'] = matched_categories
+                job_repo.update_job(job_id, job)
                 
                 flash('CV generated successfully', 'success')
                 return render_template('cv_success.html', 
@@ -267,9 +385,10 @@ def download_cv():
 @app.route('/make_all_cvs')
 def make_all_cvs():
     """Generate CVs for all jobs."""
-    processed_jobs = session.get('processed_jobs', [])
+    search_run_id = session.get('search_run_id')
+    processed_jobs = _get_jobs_for_view(search_run_id)
     cv_template = session.get('cv_template')
-    
+
     if not processed_jobs:
         flash('No jobs found. Please search for jobs first.', 'error')
         return redirect(url_for('index'))
@@ -289,6 +408,7 @@ def make_all_cvs():
         
         for job in processed_jobs:
             matched_categories = job.get('matched_categories', {})
+            job_id = job.get('id')
             
             # If no skills matched, try to extract them again
             if not matched_categories:
@@ -299,6 +419,8 @@ def make_all_cvs():
                     doc.user_data['job_title'] = job.get('title', '')
                     matched_skills, _, matched_categories = analyzer.extract_skills_from_description(description)
                     job['matched_categories'] = matched_categories
+                    if job_id:
+                        job_repo.update_job(job_id, job)
             
             # Create a fresh copy of the template for each job
             modifier = CVModifier(cv_template)

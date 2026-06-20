@@ -1,0 +1,27 @@
+"""Canonical job listing field names."""
+
+JOB_COLUMNS = [
+    "title",
+    "company",
+    "location",
+    "work_type",
+    "salary",
+    "employment_type",
+    "seniority_level",
+    "visa_sponsorship",
+    "relocation_support",
+    "relocation_info",
+    "job_function",
+    "industry",
+    "applicant_count",
+    "listing_benefit",
+    "emails",
+    "application_method",
+    "posted_days_ago",
+    "posted_date",
+    "link",
+    "company_url",
+    "description",
+    "source",
+    "fetch_method",
+]

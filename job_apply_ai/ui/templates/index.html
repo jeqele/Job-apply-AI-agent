@@ -263,6 +263,19 @@
                                 <label for="max_jobs" class="form-label">Number of Jobs</label>
                                 <input type="number" class="form-control" id="max_jobs" name="max_jobs" value="5" min="1" max="20">
                             </div>
+                            <div class="mb-3">
+                                <label for="sources" class="form-label">Job Sources</label>
+                                <input type="text" class="form-control" id="sources" name="sources" value="linkedin,adzuna,reed,indeed" placeholder="linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok">
+                                <div class="form-text">Comma-separated list, or use <code>all</code>.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="mode" class="form-label">Fetch Mode</label>
+                                <select class="form-control" id="mode" name="mode">
+                                    <option value="both" selected>API + Scrape (recommended)</option>
+                                    <option value="api">API only</option>
+                                    <option value="scrape">Scrape only</option>
+                                </select>
+                            </div>
                             <button type="submit" class="btn btn-primary w-100" id="search-button">
                                 <i class="fas fa-search me-2"></i>Search Jobs
                             </button>
@@ -274,6 +287,9 @@
         
         <div class="text-center mt-5 text-muted">
             <p>Job Application AI Agent helps you find relevant jobs and tailor your CV to match job requirements</p>
+            <a href="{{ url_for('manage_jobs') }}" class="btn btn-outline-primary mt-2">
+                <i class="fas fa-database me-2"></i>Manage Stored Jobs
+            </a>
         </div>
     </div>
     

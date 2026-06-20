@@ -1,0 +1,95 @@
+"""SQLite database initialization and connection helpers."""
+
+import os
+import sqlite3
+from contextlib import contextmanager
+from typing import Iterator
+
+DEFAULT_DB_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "outputs",
+    "data",
+)
+
+
+def get_db_path() -> str:
+    """Return the path to the SQLite database file."""
+    custom = os.environ.get("JOB_APPLY_AI_DB")
+    if custom:
+        return custom
+    os.makedirs(DEFAULT_DB_DIR, exist_ok=True)
+    return os.path.join(DEFAULT_DB_DIR, "jobs.db")
+
+
+def init_db(db_path: str | None = None) -> None:
+    """Create tables if they do not exist."""
+    path = db_path or get_db_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS search_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                location TEXT NOT NULL,
+                sources TEXT,
+                mode TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                search_run_id INTEGER,
+                title TEXT NOT NULL DEFAULT '',
+                company TEXT DEFAULT '',
+                location TEXT DEFAULT '',
+                work_type TEXT DEFAULT '',
+                salary TEXT DEFAULT '',
+                employment_type TEXT DEFAULT '',
+                seniority_level TEXT DEFAULT '',
+                visa_sponsorship TEXT DEFAULT '',
+                relocation_support TEXT DEFAULT '',
+                relocation_info TEXT DEFAULT '',
+                job_function TEXT DEFAULT '',
+                industry TEXT DEFAULT '',
+                applicant_count TEXT DEFAULT '',
+                listing_benefit TEXT DEFAULT '',
+                emails TEXT DEFAULT '',
+                application_method TEXT DEFAULT '',
+                posted_days_ago TEXT DEFAULT '',
+                posted_date TEXT DEFAULT '',
+                link TEXT DEFAULT '',
+                company_url TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                source TEXT DEFAULT '',
+                fetch_method TEXT DEFAULT '',
+                matched_skills TEXT DEFAULT '[]',
+                matched_categories TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (search_run_id) REFERENCES search_runs(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_jobs_search_run ON jobs(search_run_id);
+            CREATE INDEX IF NOT EXISTS idx_jobs_link ON jobs(link);
+            """
+        )
+        conn.commit()
+
+
+@contextmanager
+def get_connection(db_path: str | None = None) -> Iterator[sqlite3.Connection]:
+    """Yield a SQLite connection with row factory enabled."""
+    path = db_path or get_db_path()
+    init_db(path)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
