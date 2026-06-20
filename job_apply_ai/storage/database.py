@@ -1,9 +1,12 @@
 """SQLite database initialization and connection helpers."""
 
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_DIR = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -27,6 +30,7 @@ def init_db(db_path: str | None = None) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS search_runs (
@@ -66,6 +70,7 @@ def init_db(db_path: str | None = None) -> None:
                 fetch_method TEXT DEFAULT '',
                 matched_skills TEXT DEFAULT '[]',
                 matched_categories TEXT DEFAULT '{}',
+                dedupe_key TEXT NOT NULL DEFAULT '',
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (search_run_id) REFERENCES search_runs(id)
@@ -107,7 +112,108 @@ def init_db(db_path: str | None = None) -> None:
             WHERE workflow_status IS NULL OR workflow_status = ''
             """
         )
+
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        dedupe_column_added = False
+        if "dedupe_key" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE jobs
+                ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''
+                """
+            )
+            dedupe_column_added = True
+
+        if dedupe_column_added:
+            _backfill_dedupe_keys(conn)
+        else:
+            _ensure_dedupe_keys(conn)
+
+        conn.execute("DROP INDEX IF EXISTS idx_jobs_dedupe_key")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX idx_jobs_dedupe_key
+            ON jobs(dedupe_key)
+            """
+        )
         conn.commit()
+
+
+def _ensure_dedupe_keys(conn: sqlite3.Connection) -> None:
+    """Fill missing dedupe keys without re-processing fully keyed rows."""
+    from job_apply_ai.job_dedupe import compute_dedupe_key
+
+    rows = conn.execute(
+        """
+        SELECT id, title, company, location, link
+        FROM jobs
+        WHERE dedupe_key = '' OR dedupe_key IS NULL
+        ORDER BY id ASC
+        """
+    ).fetchall()
+
+    for row in rows:
+        job = {
+            "title": row["title"],
+            "company": row["company"],
+            "location": row["location"],
+            "link": row["link"],
+        }
+        dedupe_key = compute_dedupe_key(job) or f"legacy:{row['id']}"
+        existing = conn.execute(
+            "SELECT id FROM jobs WHERE dedupe_key = ? AND id != ?",
+            (dedupe_key, row["id"]),
+        ).fetchone()
+        if existing:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
+            continue
+
+        conn.execute(
+            "UPDATE jobs SET dedupe_key = ? WHERE id = ?",
+            (dedupe_key, row["id"]),
+        )
+
+
+def _backfill_dedupe_keys(conn: sqlite3.Connection) -> None:
+    """Populate dedupe keys and remove duplicate rows from existing databases."""
+    from job_apply_ai.job_dedupe import compute_dedupe_key
+
+    rows = conn.execute(
+        """
+        SELECT id, title, company, location, link
+        FROM jobs
+        ORDER BY id ASC
+        """
+    ).fetchall()
+
+    kept_by_key: dict[str, int] = {}
+    removed = 0
+
+    for row in rows:
+        job = {
+            "title": row["title"],
+            "company": row["company"],
+            "location": row["location"],
+            "link": row["link"],
+        }
+        dedupe_key = compute_dedupe_key(job) or f"legacy:{row['id']}"
+
+        existing_id = kept_by_key.get(dedupe_key)
+        if existing_id is not None:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
+            removed += 1
+            continue
+
+        kept_by_key[dedupe_key] = row["id"]
+        conn.execute(
+            "UPDATE jobs SET dedupe_key = ? WHERE id = ?",
+            (dedupe_key, row["id"]),
+        )
+
+    if removed:
+        logger.info("Removed %s duplicate jobs during dedupe_key migration", removed)
 
 
 @contextmanager

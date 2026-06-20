@@ -16,6 +16,7 @@ from job_apply_ai.scraper.job_metadata import (
 
 logger = logging.getLogger(__name__)
 
+from job_apply_ai.job_dedupe import dedupe_jobs
 from job_apply_ai.job_schema import JOB_COLUMNS
 
 
@@ -48,25 +49,6 @@ def enrich_job_metadata(job: dict) -> dict:
         job["relocation_info"] = extract_relocation_info(description)
     enrich_job_emails(job, fetch_page=False)
     return job
-
-
-def dedupe_jobs(jobs: list[dict]) -> list[dict]:
-    """Remove duplicate jobs by link or title+company pair."""
-    seen = set()
-    unique_jobs = []
-    for job in jobs:
-        link = (job.get("link") or "").strip().lower()
-        fallback_key = (
-            (job.get("title") or "").strip().lower(),
-            (job.get("company") or "").strip().lower(),
-            (job.get("source") or "").strip().lower(),
-        )
-        key = link or "|".join(fallback_key)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        unique_jobs.append(job)
-    return unique_jobs
 
 
 def save_jobs_to_excel(jobs: List[dict], filename: Optional[str] = None) -> Optional[str]:

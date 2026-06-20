@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from job_apply_ai.job_dedupe import compute_dedupe_key
 from job_apply_ai.job_schema import JOB_COLUMNS
 from job_apply_ai.job_status import DEFAULT_JOB_STATUS, is_valid_job_status
 from job_apply_ai.storage.database import get_connection
@@ -12,6 +13,13 @@ from job_apply_ai.storage.database import get_connection
 logger = logging.getLogger(__name__)
 
 JOB_DB_COLUMNS = JOB_COLUMNS + ["matched_skills", "matched_categories"]
+UPSERT_UPDATE_COLUMNS = [
+    *JOB_COLUMNS,
+    "matched_skills",
+    "matched_categories",
+    "search_run_id",
+    "updated_at",
+]
 
 
 def _serialize_value(value: Any) -> str:
@@ -30,7 +38,21 @@ def _deserialize_job(row: dict) -> dict:
             job[field] = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             job[field] = [] if field == "matched_skills" else {}
+    job.pop("dedupe_key", None)
     return job
+
+
+def _job_row_values(job: dict, now: str) -> dict[str, str]:
+    values = {
+        column: _serialize_value(job.get(column, ""))
+        for column in JOB_COLUMNS
+    }
+    values["matched_skills"] = _serialize_value(job.get("matched_skills", []))
+    values["matched_categories"] = _serialize_value(
+        job.get("matched_categories", {})
+    )
+    values["updated_at"] = now
+    return values
 
 
 class JobRepository:
@@ -58,55 +80,67 @@ class JobRepository:
         jobs: list[dict],
         search_run_id: int | None = None,
     ) -> list[int]:
-        """Insert jobs and return their database IDs."""
+        """Insert or update jobs by dedupe key and return their database IDs."""
         if not jobs:
             return []
 
         ids: list[int] = []
         now = datetime.utcnow().isoformat(timespec="seconds")
+        insert_columns = [
+            "search_run_id",
+            "workflow_status",
+            "dedupe_key",
+            *JOB_COLUMNS,
+            "matched_skills",
+            "matched_categories",
+            "created_at",
+            "updated_at",
+        ]
+        update_assignments = ", ".join(
+            f"{column} = excluded.{column}" for column in UPSERT_UPDATE_COLUMNS
+        )
 
         with get_connection() as conn:
             for job in jobs:
-                link = (job.get("link") or "").strip()
-                existing_id = None
-                if link:
-                    row = conn.execute(
-                        "SELECT id FROM jobs WHERE link = ?",
-                        (link,),
-                    ).fetchone()
-                    if row:
-                        existing_id = row["id"]
-
-                values = {
-                    column: _serialize_value(job.get(column, ""))
-                    for column in JOB_COLUMNS
-                }
-                values["matched_skills"] = _serialize_value(
-                    job.get("matched_skills", [])
-                )
-                values["matched_categories"] = _serialize_value(
-                    job.get("matched_categories", {})
-                )
-                values["updated_at"] = now
-
-                if existing_id:
-                    set_clause = ", ".join(f"{col} = ?" for col in values)
-                    conn.execute(
-                        f"UPDATE jobs SET {set_clause} WHERE id = ?",
-                        (*values.values(), existing_id),
+                dedupe_key = compute_dedupe_key(job)
+                if not dedupe_key:
+                    logger.warning(
+                        "Skipping job without dedupe key: %r",
+                        job.get("title", ""),
                     )
-                    ids.append(existing_id)
-                else:
-                    columns = ["search_run_id", "workflow_status", *values.keys()]
-                    placeholders = ", ".join("?" for _ in columns)
-                    cursor = conn.execute(
-                        f"""
-                        INSERT INTO jobs ({", ".join(columns)})
-                        VALUES ({placeholders})
-                        """,
-                        (search_run_id, DEFAULT_JOB_STATUS, *values.values()),
-                    )
-                    ids.append(int(cursor.lastrowid))
+                    continue
+
+                values = _job_row_values(job, now)
+                workflow_status = job.get("workflow_status", DEFAULT_JOB_STATUS)
+                if not is_valid_job_status(workflow_status):
+                    workflow_status = DEFAULT_JOB_STATUS
+
+                insert_values = (
+                    search_run_id,
+                    workflow_status,
+                    dedupe_key,
+                    *(values[column] for column in JOB_COLUMNS),
+                    values["matched_skills"],
+                    values["matched_categories"],
+                    now,
+                    values["updated_at"],
+                )
+
+                conn.execute(
+                    f"""
+                    INSERT INTO jobs ({", ".join(insert_columns)})
+                    VALUES ({", ".join("?" for _ in insert_columns)})
+                    ON CONFLICT(dedupe_key) DO UPDATE SET
+                        {update_assignments}
+                    """,
+                    insert_values,
+                )
+                row = conn.execute(
+                    "SELECT id FROM jobs WHERE dedupe_key = ?",
+                    (dedupe_key,),
+                ).fetchone()
+                if row:
+                    ids.append(int(row["id"]))
 
         logger.info("Upserted %s jobs into SQLite", len(ids))
         return ids
@@ -116,6 +150,7 @@ class JobRepository:
         search_run_id: int | None = None,
         workflow_status: str | None = None,
         search: str | None = None,
+        exclude_workflow_statuses: list[str] | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -127,6 +162,11 @@ class JobRepository:
         if workflow_status is not None:
             clauses.append("workflow_status = ?")
             params.append(workflow_status)
+
+        if exclude_workflow_statuses:
+            placeholders = ", ".join("?" for _ in exclude_workflow_statuses)
+            clauses.append(f"workflow_status NOT IN ({placeholders})")
+            params.extend(exclude_workflow_statuses)
 
         if search:
             term = f"%{search.strip()}%"
@@ -154,12 +194,14 @@ class JobRepository:
         workflow_status: str | None = None,
         search: str | None = None,
         limit: int | None = None,
+        exclude_workflow_statuses: list[str] | None = None,
     ) -> list[dict]:
         query = "SELECT * FROM jobs"
         where_clause, params = self._build_job_filters(
             search_run_id=search_run_id,
             workflow_status=workflow_status,
             search=search,
+            exclude_workflow_statuses=exclude_workflow_statuses,
         )
         query += where_clause
         query += " ORDER BY id DESC"
@@ -182,34 +224,10 @@ class JobRepository:
         return _deserialize_job(dict(row)) if row else None
 
     def create_job(self, job: dict, search_run_id: int | None = None) -> int:
-        now = datetime.utcnow().isoformat(timespec="seconds")
-        values = {
-            column: _serialize_value(job.get(column, ""))
-            for column in JOB_COLUMNS
-        }
-        values["matched_skills"] = _serialize_value(job.get("matched_skills", []))
-        values["matched_categories"] = _serialize_value(
-            job.get("matched_categories", {})
-        )
-        values["created_at"] = now
-        values["updated_at"] = now
-
-        workflow_status = job.get("workflow_status", DEFAULT_JOB_STATUS)
-        if not is_valid_job_status(workflow_status):
-            workflow_status = DEFAULT_JOB_STATUS
-
-        columns = ["search_run_id", "workflow_status", *values.keys()]
-        placeholders = ", ".join("?" for _ in columns)
-
-        with get_connection() as conn:
-            cursor = conn.execute(
-                f"""
-                INSERT INTO jobs ({", ".join(columns)})
-                VALUES ({placeholders})
-                """,
-                (search_run_id, workflow_status, *values.values()),
-            )
-            return int(cursor.lastrowid)
+        ids = self.upsert_jobs([job], search_run_id=search_run_id)
+        if not ids:
+            raise ValueError("Job must include at least a title to create a dedupe key")
+        return ids[0]
 
     def update_job(self, job_id: int, job: dict) -> bool:
         existing = self.get_job(job_id)
@@ -217,20 +235,14 @@ class JobRepository:
             return False
 
         now = datetime.utcnow().isoformat(timespec="seconds")
-        values = {
-            column: _serialize_value(job.get(column, existing.get(column, "")))
-            for column in JOB_COLUMNS
-        }
-        values["matched_skills"] = _serialize_value(
-            job.get("matched_skills", existing.get("matched_skills", []))
-        )
-        values["matched_categories"] = _serialize_value(
-            job.get("matched_categories", existing.get("matched_categories", {}))
-        )
+        merged = {**existing, **job}
+        values = _job_row_values(merged, now)
         values["cv_filename"] = _serialize_value(
             job.get("cv_filename", existing.get("cv_filename", ""))
         )
-        values["updated_at"] = now
+        dedupe_key = compute_dedupe_key(merged)
+        if dedupe_key:
+            values["dedupe_key"] = dedupe_key
 
         set_clause = ", ".join(f"{col} = ?" for col in values)
         with get_connection() as conn:
