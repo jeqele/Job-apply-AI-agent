@@ -96,7 +96,7 @@ def save_excel_file(df, file_path):
 
 def extract_text_from_docx(file_path):
     """
-    Extract text from a Word document.
+    Extract text from a Word document, including table cells.
     
     Args:
         file_path (str): Path to the Word document.
@@ -107,7 +107,14 @@ def extract_text_from_docx(file_path):
     try:
         from docx import Document
         doc = Document(file_path)
-        return "\n".join([paragraph.text for paragraph in doc.paragraphs])
+        parts = [paragraph.text.strip() for paragraph in doc.paragraphs if paragraph.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    cell_text = cell.text.strip()
+                    if cell_text:
+                        parts.append(cell_text)
+        return "\n".join(parts)
     except Exception as e:
         logger.error(f"Error extracting text from Word document {file_path}: {str(e)}")
         return None

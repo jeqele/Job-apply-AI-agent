@@ -227,6 +227,9 @@ class JobRepository:
         values["matched_categories"] = _serialize_value(
             job.get("matched_categories", existing.get("matched_categories", {}))
         )
+        values["cv_filename"] = _serialize_value(
+            job.get("cv_filename", existing.get("cv_filename", ""))
+        )
         values["updated_at"] = now
 
         set_clause = ", ".join(f"{col} = ?" for col in values)

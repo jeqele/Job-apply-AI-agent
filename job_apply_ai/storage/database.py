@@ -86,6 +86,13 @@ def init_db(db_path: str | None = None) -> None:
                 ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'new'
                 """
             )
+        if "cv_filename" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE jobs
+                ADD COLUMN cv_filename TEXT NOT NULL DEFAULT ''
+                """
+            )
 
         conn.execute(
             """

@@ -107,72 +107,59 @@ def main():
             logger.warning("No jobs found")
             
     elif args.command == 'tailor':
-        from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer, CVModifier, batch_process_jobs
-        
-        # Check if we're processing a single job or multiple jobs
+        from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator, batch_generate_cvs
+        import pandas as pd
+
+        output_dir = args.output_dir or os.path.join(os.getcwd(), "job_apply_ai", "outputs", "cvs")
+        os.makedirs(output_dir, exist_ok=True)
+
         if args.jobs_file:
-            # Process multiple jobs
-            output_dir = args.output_dir or os.path.join(os.getcwd(), "job_apply_ai", "outputs", "cvs")
-            generated_cvs = batch_process_jobs(args.jobs_file, args.cv, output_dir)
-            
+            jobs_df = pd.read_excel(args.jobs_file)
+            jobs = jobs_df.to_dict(orient="records")
+            generated_cvs = batch_generate_cvs(args.cv, jobs, output_dir)
             if generated_cvs:
                 logger.info(f"Generated {len(generated_cvs)} tailored CVs:")
                 for cv_path in generated_cvs:
                     logger.info(f"  - {cv_path}")
             else:
                 logger.warning("Failed to generate any CVs")
-        
+
         elif args.job:
-            # Process a single job
-            # Read job description
             try:
-                with open(args.job, 'r') as f:
-                    job_description = f.read()
+                with open(args.job, 'r', encoding='utf-8') as handle:
+                    job_description = handle.read()
             except Exception as e:
                 logger.error(f"Error reading job description: {str(e)}")
                 sys.exit(1)
-            
-            # Analyze job description
-            analyzer = CVAnalyzer()
-            matched_skills, matched_requirements, matched_categories = analyzer.extract_skills_from_description(job_description)
-            
-            logger.info(f"Found {len(matched_skills)} matching skills")
-            for category, skills in matched_categories.items():
-                logger.info(f"{category}: {', '.join(skills)}")
-            
-            # Modify CV
+
+            job = {
+                "title": "Target Role",
+                "company": "Target Company",
+                "description": job_description,
+            }
+            output_path = args.output or os.path.join(
+                output_dir,
+                f"Tailored_CV_{datetime.today().strftime('%Y-%m-%d')}.docx",
+            )
             try:
-                modifier = CVModifier(args.cv)
-                
-                if modifier.update_skills_section(matched_categories):
-                    # Determine output path
-                    if args.output:
-                        output_path = args.output
-                    else:
-                        output_dir = args.output_dir or os.path.join(os.getcwd(), "job_apply_ai", "outputs", "cvs")
-                        os.makedirs(output_dir, exist_ok=True)
-                        today_date = datetime.today().strftime("%Y-%m-%d")
-                        output_path = os.path.join(output_dir, f"Tailored_CV_{today_date}.docx")
-                    
-                    if modifier.save_modified_cv(output_path):
-                        logger.info(f"Tailored CV saved to {output_path}")
-                    else:
-                        logger.error("Failed to save tailored CV")
-                else:
-                    logger.error("Failed to update skills section")
+                generator = RAGCVGenerator()
+                generator.generate_cv(args.cv, job, output_path)
+                logger.info(f"Tailored CV saved to {output_path}")
             except Exception as e:
                 logger.error(f"Error tailoring CV: {str(e)}")
                 sys.exit(1)
-        
         else:
             logger.error("Either --job or --jobs-file must be specified")
             sys.exit(1)
-    
+
     elif args.command == 'batch':
-        from job_apply_ai.cv_modifier.cv_analyzer import batch_process_jobs
-        
+        from job_apply_ai.cv_modifier.cv_generator import batch_generate_cvs
+        import pandas as pd
+
         output_dir = args.output_dir or os.path.join(os.getcwd(), "job_apply_ai", "outputs", "cvs")
-        generated_cvs = batch_process_jobs(args.jobs_file, args.cv, output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        jobs_df = pd.read_excel(args.jobs_file)
+        generated_cvs = batch_generate_cvs(args.cv, jobs_df.to_dict(orient="records"), output_dir)
         
         if generated_cvs:
             logger.info(f"Generated {len(generated_cvs)} tailored CVs:")

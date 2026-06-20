@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generating AI CV{% if job %} — {{ job.title }}{% endif %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0b1220;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        .progress-shell {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        .progress-card {
+            width: min(720px, 100%);
+            background: #fff;
+            border-radius: 1.25rem;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35);
+            overflow: hidden;
+        }
+        .progress-header {
+            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
+            color: white;
+            padding: 1.75rem 2rem;
+        }
+        .progress-body {
+            padding: 2rem;
+        }
+        .progress-bar-wrap {
+            height: 12px;
+            background: #e9ecef;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #0d6efd, #20c997);
+            transition: width 0.45s ease;
+        }
+        .step-list {
+            list-style: none;
+            padding: 0;
+            margin: 1.5rem 0 0;
+        }
+        .step-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.85rem;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid #f1f3f5;
+            color: #868e96;
+        }
+        .step-item:last-child { border-bottom: none; }
+        .step-item.active {
+            color: #0d6efd;
+            font-weight: 600;
+        }
+        .step-item.done {
+            color: #198754;
+        }
+        .step-item.error {
+            color: #dc3545;
+        }
+        .step-icon {
+            width: 1.5rem;
+            text-align: center;
+            margin-top: 0.1rem;
+        }
+        .lock-banner {
+            background: #fff3cd;
+            border: 1px solid #ffe69c;
+            color: #664d03;
+            border-radius: 0.75rem;
+            padding: 0.85rem 1rem;
+            font-size: 0.95rem;
+        }
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+        }
+    </style>
+</head>
+<body class="cv-generation-locked">
+    <div class="progress-shell">
+        <div class="progress-card">
+            <div class="progress-header">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="fs-2"><i class="fas fa-wand-magic-sparkles"></i></div>
+                    <div>
+                        <h1 class="h3 mb-1">Generating AI CV</h1>
+                        {% if job %}
+                            <p class="mb-0 opacity-75">{{ job.title }} · {{ job.company }}</p>
+                        {% elif batch %}
+                            <p class="mb-0 opacity-75">Batch generation for {{ job_count }} jobs</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="progress-body">
+                <div class="lock-banner mb-4">
+                    <i class="fas fa-lock me-2"></i>
+                    Please keep this page open. Other actions are locked until AI CV generation finishes.
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong id="progress-label">Starting…</strong>
+                    <span id="progress-percent" class="text-muted">0%</span>
+                </div>
+                <div class="progress-bar-wrap mb-2">
+                    <div id="progress-bar" class="progress-bar-fill"></div>
+                </div>
+                <p id="progress-message" class="text-muted mb-0">Initializing…</p>
+
+                <ul class="step-list" id="step-list">
+                    <li class="step-item" data-step="validating_ollama"><span class="step-icon"><i class="far fa-circle"></i></span><span>Check Ollama and models</span></li>
+                    <li class="step-item" data-step="indexing_cv"><span class="step-icon"><i class="far fa-circle"></i></span><span>Index CV with RAG</span></li>
+                    <li class="step-item" data-step="retrieving_context"><span class="step-icon"><i class="far fa-circle"></i></span><span>Retrieve relevant CV sections</span></li>
+                    <li class="step-item" data-step="analyzing_job"><span class="step-icon"><i class="far fa-circle"></i></span><span>Analyze job requirements</span></li>
+                    <li class="step-item" data-step="generating_content"><span class="step-icon"><i class="far fa-circle"></i></span><span>Generate tailored CV content</span></li>
+                    <li class="step-item" data-step="building_document"><span class="step-icon"><i class="far fa-circle"></i></span><span>Build Word document</span></li>
+                    <li class="step-item" data-step="complete"><span class="step-icon"><i class="far fa-circle"></i></span><span>Complete</span></li>
+                </ul>
+
+                <div id="error-panel" class="alert alert-danger mt-4 d-none" role="alert"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const startUrl = {{ start_url|tojson }};
+        const statusUrlTemplate = {{ status_url_template|tojson }};
+        const completeUrlTemplate = {{ complete_url_template|tojson }};
+        const backUrl = {{ back_url|tojson }};
+        const releaseUrl = {{ url_for('release_cv_generation_lock')|tojson }};
+
+        const stepOrder = [
+            'validating_ollama',
+            'indexing_cv',
+            'retrieving_context',
+            'analyzing_job',
+            'generating_content',
+            'building_document',
+            'complete',
+        ];
+
+        let taskId = null;
+        let pollTimer = null;
+
+        window.addEventListener('beforeunload', (event) => {
+            if (taskId) {
+                event.preventDefault();
+                event.returnValue = '';
+            }
+        });
+
+        function setStepState(currentStep, status) {
+            const currentIndex = stepOrder.indexOf(currentStep);
+            document.querySelectorAll('#step-list .step-item').forEach((item) => {
+                const step = item.dataset.step;
+                const icon = item.querySelector('.step-icon');
+                const index = stepOrder.indexOf(step);
+                item.classList.remove('active', 'done', 'error');
+
+                if (status === 'error' && step === currentStep) {
+                    item.classList.add('error');
+                    icon.innerHTML = '<i class="fas fa-times-circle"></i>';
+                } else if (index < currentIndex || (status === 'complete' && step !== 'complete')) {
+                    item.classList.add('done');
+                    icon.innerHTML = '<i class="fas fa-check-circle"></i>';
+                } else if (step === currentStep && status !== 'complete') {
+                    item.classList.add('active');
+                    icon.innerHTML = '<span class="spinner-border spinner-border-sm text-primary"></span>';
+                } else if (step === 'complete' && status === 'complete') {
+                    item.classList.add('done');
+                    icon.innerHTML = '<i class="fas fa-check-circle"></i>';
+                } else {
+                    icon.innerHTML = '<i class="far fa-circle"></i>';
+                }
+            });
+        }
+
+        function updateUi(data) {
+            document.getElementById('progress-label').textContent = data.message || 'Working…';
+            document.getElementById('progress-message').textContent = data.message || '';
+            document.getElementById('progress-percent').textContent = `${data.percent || 0}%`;
+            document.getElementById('progress-bar').style.width = `${data.percent || 0}%`;
+            setStepState(data.step || 'starting', data.status);
+
+            if (data.meta && data.meta.current_job_title) {
+                document.getElementById('progress-message').textContent =
+                    `${data.message} (${data.meta.current_index}/${data.meta.total_jobs}: ${data.meta.current_job_title})`;
+            }
+        }
+
+        async function pollStatus() {
+            if (!taskId) return;
+            const response = await fetch(statusUrlTemplate.replace('TASK_ID', taskId));
+            const data = await response.json();
+            updateUi(data);
+
+            if (data.status === 'complete') {
+                clearInterval(pollTimer);
+                taskId = null;
+                window.location.href = completeUrlTemplate.replace('TASK_ID', data.task_id);
+                return;
+            }
+
+            if (data.status === 'error') {
+                clearInterval(pollTimer);
+                taskId = null;
+                fetch(releaseUrl, { method: 'POST' });
+                const panel = document.getElementById('error-panel');
+                panel.textContent = data.error || data.message || 'CV generation failed.';
+                panel.classList.remove('d-none');
+                document.querySelector('.lock-banner').innerHTML =
+                    `<i class="fas fa-unlock me-2"></i>Generation failed. You can go back and try again. ` +
+                    `<a href="${backUrl}" class="alert-link">Return</a>`;
+            }
+        }
+
+        async function startTask() {
+            const response = await fetch(startUrl, { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok) {
+                document.getElementById('error-panel').textContent = data.error || 'Could not start CV generation.';
+                document.getElementById('error-panel').classList.remove('d-none');
+                return;
+            }
+            taskId = data.task_id;
+            pollTimer = setInterval(pollStatus, 900);
+            pollStatus();
+        }
+
+        startTask();
+    </script>
+</body>
+</html>

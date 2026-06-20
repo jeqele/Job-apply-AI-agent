@@ -8,7 +8,7 @@ import os
 import logging
 import tempfile
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session, jsonify
 import zipfile
 import io
 
@@ -23,8 +23,16 @@ from job_apply_ai.job_status import (
     is_valid_job_status,
     job_status_label,
 )
-from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer, CVModifier
-from job_apply_ai.utils.helpers import ensure_directory_exists
+from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer
+from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
+from job_apply_ai.ui.cv_tasks import (
+    complete_task,
+    create_task,
+    get_task,
+    start_background_task,
+    update_task,
+)
+from job_apply_ai.utils.helpers import ensure_directory_exists, sanitize_filename
 from job_apply_ai.storage.database import init_db
 from job_apply_ai.storage.job_repository import JobRepository
 from job_apply_ai.storage.exports import export_jobs
@@ -68,6 +76,174 @@ def _enrich_jobs_with_skills(jobs: list[dict]) -> list[dict]:
             job['matched_categories'] = matched_categories
         enriched.append(job)
     return enriched
+
+
+def _cv_output_path(job: dict) -> tuple[str, str]:
+    """Build output filename and full path for a generated CV."""
+    today_date = datetime.today().strftime("%Y-%m-%d")
+    safe_company = sanitize_filename(job.get('company', 'Company'))
+    safe_title = sanitize_filename(job.get('title', 'Role'))
+    output_filename = f"CV_{today_date}_{safe_company}_{safe_title}.docx"
+    output_path = os.path.join(app.config['CV_OUTPUT_DIR'], output_filename)
+    return output_filename, output_path
+
+
+def _generate_rag_cv(
+    cv_template: str,
+    job: dict,
+    *,
+    reindex: bool = True,
+    task_id: str | None = None,
+) -> dict:
+    """Generate a tailored CV using RAG + Ollama."""
+    output_filename, output_path = _cv_output_path(job)
+    generator = RAGCVGenerator()
+
+    def on_progress(step: str, message: str, percent: int) -> None:
+        if task_id:
+            update_task(
+                task_id,
+                status='running',
+                step=step,
+                message=message,
+                percent=percent,
+            )
+
+    result = generator.generate_cv(
+        cv_template,
+        job,
+        output_path,
+        reindex=reindex,
+        on_progress=on_progress,
+    )
+    result['output_filename'] = output_filename
+    return result
+
+
+def _cv_generation_back_url(return_from_manage: bool, return_folder: str, return_search: str):
+    if return_from_manage:
+        kwargs = {}
+        if return_search:
+            kwargs['q'] = return_search
+        if return_folder and return_folder != 'all':
+            kwargs['folder'] = return_folder
+        return url_for('manage_jobs', **kwargs)
+    return url_for('job_list')
+
+
+def _run_single_cv_task(
+    task_id: str,
+    cv_template: str,
+    job: dict,
+    job_id: int,
+    return_folder: str,
+    return_search: str,
+    return_from_manage: bool,
+) -> None:
+    result = _generate_rag_cv(cv_template, job, task_id=task_id)
+    output_path = result['output_path']
+    output_filename = result['output_filename']
+    tailored_content = result.get('tailored_content', {})
+
+    matched_categories = {'Key Skills': tailored_content.get('key_skills', [])}
+    job['matched_categories'] = matched_categories
+    job['cv_filename'] = output_filename
+    job_repo.update_job(job_id, job)
+
+    complete_task(
+        task_id,
+        {
+            'job': job,
+            'cv_filename': output_filename,
+            'output_path': output_path,
+            'matched_categories': matched_categories,
+            'tailored_content': tailored_content,
+            'analysis': result.get('analysis', {}),
+            'generation_meta': result.get('models', {}),
+            'rag_chunk_count': result.get('chunk_count', 0),
+            'return_folder': return_folder,
+            'return_search': return_search,
+            'return_from_manage': return_from_manage,
+        },
+    )
+
+
+def _run_batch_cv_task(task_id: str, cv_template: str, jobs: list[dict]) -> None:
+    generator = RAGCVGenerator()
+
+    def on_progress(step: str, message: str, percent: int) -> None:
+        update_task(task_id, status='running', step=step, message=message, percent=percent)
+
+    on_progress('validating_ollama', 'Checking Ollama and installed models…', 5)
+    if not generator.ollama.is_available():
+        raise RuntimeError('Ollama is not reachable.')
+
+    generator.ollama.validate_models()
+    on_progress('indexing_cv', 'Indexing your CV with RAG…', 12)
+    generator.prepare_cv_index(cv_template)
+
+    successful_jobs = []
+    failed_jobs = []
+    generated_cvs = []
+    total = len(jobs)
+
+    for index, job in enumerate(jobs, start=1):
+        job_id = job.get('id')
+        title = job.get('title', 'Job')
+        base_percent = 15 + int(((index - 1) / max(total, 1)) * 80)
+        update_task(
+            task_id,
+            message=f'Generating CV {index} of {total}: {title}',
+            percent=base_percent,
+            meta={
+                'current_index': index,
+                'total_jobs': total,
+                'current_job_title': title,
+            },
+        )
+
+        try:
+            output_filename, output_path = _cv_output_path(job)
+            result = generator.generate_cv(
+                cv_template,
+                job,
+                output_path,
+                reindex=False,
+                on_progress=lambda step, message, percent, bp=base_percent: update_task(
+                    task_id,
+                    step=step,
+                    message=message,
+                    percent=min(95, bp + percent // 10),
+                    meta={
+                        'current_index': index,
+                        'total_jobs': total,
+                        'current_job_title': title,
+                    },
+                ),
+            )
+            generated_cvs.append(result['output_path'])
+            successful_jobs.append(job)
+            if job_id:
+                tailored_content = result.get('tailored_content', {})
+                job['matched_categories'] = {'Key Skills': tailored_content.get('key_skills', [])}
+                job['cv_filename'] = output_filename
+                job_repo.update_job(job_id, job)
+        except Exception as job_error:
+            logger.error('Batch CV failed for %s: %s', title, job_error)
+            failed_jobs.append(job)
+
+    if not generated_cvs:
+        raise RuntimeError('No CVs were generated.')
+
+    complete_task(
+        task_id,
+        {
+            'successful_jobs': successful_jobs,
+            'failed_jobs': failed_jobs,
+            'generated_cvs': generated_cvs,
+            'generated_count': len(generated_cvs),
+        },
+    )
 
 
 def _get_jobs_for_view(search_run_id: int | None = None) -> list[dict]:
@@ -181,7 +357,10 @@ def upload_cv():
             filename = os.path.join(app.config['UPLOAD_FOLDER'], 'cv_template.docx')
             file.save(filename)
             session['cv_template'] = filename
-            flash('CV template uploaded successfully', 'success')
+            flash(
+                'CV uploaded successfully. It will be indexed with RAG when you generate tailored CVs.',
+                'success',
+            )
             
             # If we have jobs, redirect to job list
             if session.get('search_run_id') or job_repo.count_jobs():
@@ -386,89 +565,113 @@ def download_excel():
 
 @app.route('/make_cv/<int:job_id>')
 def make_cv(job_id):
-    """Generate a CV for a specific job."""
+    """Show progress UI while AI CV generation runs in the background."""
     job = job_repo.get_job(job_id)
     cv_template = session.get('cv_template')
+    return_folder = request.args.get('folder', 'all')
+    return_search = request.args.get('q', '')
+    return_from_manage = 'folder' in request.args or bool(return_search)
 
     if not job:
         flash('Job not found', 'error')
+        if return_from_manage:
+            return _manage_jobs_redirect(return_folder, return_search)
         return redirect(url_for('job_list'))
 
     if not cv_template:
-        flash('Please upload a CV template first', 'error')
+        flash('Please upload your CV first', 'error')
         return redirect(url_for('upload_cv'))
 
-    try:
-        # Create CV modifier
-        modifier = CVModifier(cv_template)
-        
-        # Get matched categories
-        matched_categories = job.get('matched_categories', {})
-        
-        if not matched_categories:
-            # Try to extract skills again with the job title for context
-            analyzer = CVAnalyzer()
-            description = job.get('description', '')
-            if description:
-                # Add job title to the document's user_data for better skill extraction
-                doc = analyzer.nlp(description)
-                doc.user_data['job_title'] = job.get('title', '')
-                matched_skills, _, matched_categories = analyzer.extract_skills_from_description(description)
-                
-                if not matched_skills:
-                    # If still no skills, add some generic ones based on job title
-                    job_title = job.get('title', '').lower()
-                    logger.warning(f"No skills found for job: {job_title}")
-                    
-                    # Add some generic skills
-                    matched_categories = {
-                        "Soft Skills": ["communication", "teamwork", "problem solving", 
-                                       "time management", "adaptability"]
-                    }
-                    
-                    # Try to add some technical skills based on job title keywords
-                    if any(kw in job_title for kw in ["developer", "engineer", "programmer"]):
-                        matched_categories["Programming Languages"] = ["python", "javascript", "java"]
-                    elif any(kw in job_title for kw in ["data", "analyst", "analytics"]):
-                        matched_categories["Business & Analytics"] = ["excel", "sql", "data analysis"]
-                    elif any(kw in job_title for kw in ["manager", "lead", "director"]):
-                        matched_categories["Methodologies"] = ["agile", "scrum", "project management"]
-                    elif any(kw in job_title for kw in ["designer", "ux", "ui"]):
-                        matched_categories["Tools & Platforms"] = ["figma", "adobe", "sketch"]
-                    
-                    flash('No specific skills found in job description. Adding generic skills based on job title.', 'warning')
-        
-        # Update skills section
-        if modifier.update_skills_section(matched_categories):
-            # Save the modified CV
-            today_date = datetime.today().strftime("%Y-%m-%d")
-            safe_company = job['company'].replace(' ', '_')
-            safe_title = job['title'].replace(' ', '_')
-            output_filename = f"CV_{today_date}_{safe_company}_{safe_title}.docx"
-            output_path = os.path.join(app.config['CV_OUTPUT_DIR'], output_filename)
-            
-            if modifier.save_modified_cv(output_path):
-                # Store the path for download
-                session['current_cv'] = output_path
-                session['current_cv_filename'] = output_filename
-                
-                # Update the job with the matched categories if they were generated here
-                job['matched_categories'] = matched_categories
-                job_repo.update_job(job_id, job)
-                
-                flash('CV generated successfully', 'success')
-                return render_template('cv_success.html', 
-                                      job=job, 
-                                      cv_filename=output_filename,
-                                      matched_categories=matched_categories)
-        
-        flash('Failed to generate CV. Please check if your CV template has a skills section.', 'error')
+    return render_template(
+        'cv_progress.html',
+        job=job,
+        batch=False,
+        start_url=url_for('start_make_cv', job_id=job_id, folder=return_folder, q=return_search or None),
+        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
+        complete_url_template=url_for('make_cv_complete', task_id='TASK_ID'),
+        back_url=_cv_generation_back_url(return_from_manage, return_folder, return_search),
+    )
+
+
+@app.route('/make_cv/<int:job_id>/start', methods=['POST'])
+def start_make_cv(job_id):
+    """Start background AI CV generation for one job."""
+    job = job_repo.get_job(job_id)
+    cv_template = session.get('cv_template')
+    return_folder = request.args.get('folder', 'all')
+    return_search = request.args.get('q', '')
+    return_from_manage = 'folder' in request.args or bool(return_search)
+
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if not cv_template:
+        return jsonify({'error': 'Please upload your CV first'}), 400
+
+    task_id = create_task('single_cv', job_id=job_id)
+    session['cv_generation_active'] = task_id
+    start_background_task(
+        task_id,
+        lambda: _run_single_cv_task(
+            task_id,
+            cv_template,
+            job,
+            job_id,
+            return_folder,
+            return_search,
+            return_from_manage,
+        ),
+    )
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/api/cv_generation/release', methods=['POST'])
+def release_cv_generation_lock():
+    """Clear UI lock after failed or abandoned CV generation."""
+    session.pop('cv_generation_active', None)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/cv_tasks/<task_id>/status')
+def cv_task_status(task_id):
+    """Poll background CV generation progress."""
+    task = get_task(task_id)
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
+    return jsonify(task)
+
+
+@app.route('/make_cv/complete/<task_id>')
+def make_cv_complete(task_id):
+    """Render success page after background CV generation completes."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('CV generation result not found', 'error')
         return redirect(url_for('job_list'))
-        
-    except Exception as e:
-        logger.error(f"Error generating CV: {str(e)}")
-        flash(f'An error occurred: {str(e)}', 'error')
-        return redirect(url_for('job_list'))
+
+    result = task['result']
+    session.pop('cv_generation_active', None)
+    session['current_cv'] = result.get('output_path')
+    session['current_cv_filename'] = result.get('cv_filename')
+
+    flash('Professional CV generated successfully with RAG + Ollama', 'success')
+    return_from_manage = result.get('return_from_manage', False)
+    return_folder = result.get('return_folder', 'all')
+    return_search = result.get('return_search', '')
+    return render_template(
+        'cv_success.html',
+        job=result.get('job'),
+        cv_filename=result.get('cv_filename'),
+        matched_categories=result.get('matched_categories', {}),
+        tailored_content=result.get('tailored_content', {}),
+        analysis=result.get('analysis', {}),
+        generation_meta=result.get('generation_meta', {}),
+        rag_chunk_count=result.get('rag_chunk_count', 0),
+        return_folder=return_folder,
+        return_search=return_search,
+        return_from_manage=return_from_manage,
+        back_url=_cv_generation_back_url(return_from_manage, return_folder, return_search),
+        back_label='Back to Jobs' if return_from_manage else 'Back to Job List',
+    )
 
 @app.route('/download_cv')
 def download_cv():
@@ -481,9 +684,27 @@ def download_cv():
     
     return send_file(cv_path, as_attachment=True)
 
+
+@app.route('/jobs/<int:job_id>/cv')
+def download_job_cv(job_id):
+    """Download the AI-generated CV stored for a job."""
+    job = job_repo.get_job(job_id)
+    cv_filename = (job or {}).get('cv_filename', '')
+    if not job or not cv_filename:
+        flash('No CV has been generated for this job yet', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    if not os.path.exists(cv_path):
+        flash('CV file not found on disk', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    return send_file(cv_path, as_attachment=True, download_name=cv_filename)
+
+
 @app.route('/make_all_cvs')
 def make_all_cvs():
-    """Generate CVs for all jobs."""
+    """Show progress UI while batch AI CV generation runs."""
     search_run_id = session.get('search_run_id')
     processed_jobs = _get_jobs_for_view(search_run_id)
     cv_template = session.get('cv_template')
@@ -491,76 +712,67 @@ def make_all_cvs():
     if not processed_jobs:
         flash('No jobs found. Please search for jobs first.', 'error')
         return redirect(url_for('index'))
-    
+
     if not cv_template:
-        flash('Please upload a CV template first', 'error')
+        flash('Please upload your CV first', 'error')
         return redirect(url_for('upload_cv'))
-    
-    try:
-        # Generate CVs for all jobs
-        successful_jobs = []
-        failed_jobs = []
-        generated_cvs = []
-        
-        # Create analyzer for re-extracting skills if needed
-        analyzer = CVAnalyzer()
-        
-        for job in processed_jobs:
-            matched_categories = job.get('matched_categories', {})
-            job_id = job.get('id')
-            
-            # If no skills matched, try to extract them again
-            if not matched_categories:
-                description = job.get('description', '')
-                if description:
-                    # Add job title to the document's user_data for better skill extraction
-                    doc = analyzer.nlp(description)
-                    doc.user_data['job_title'] = job.get('title', '')
-                    matched_skills, _, matched_categories = analyzer.extract_skills_from_description(description)
-                    job['matched_categories'] = matched_categories
-                    if job_id:
-                        job_repo.update_job(job_id, job)
-            
-            # Create a fresh copy of the template for each job
-            modifier = CVModifier(cv_template)
-            
-            # Update skills section
-            if modifier.update_skills_section(matched_categories):
-                # Save the modified CV
-                today_date = datetime.today().strftime("%Y-%m-%d")
-                safe_company = job['company'].replace(' ', '_')
-                safe_title = job['title'].replace(' ', '_')
-                output_filename = f"CV_{today_date}_{safe_company}_{safe_title}.docx"
-                output_path = os.path.join(app.config['CV_OUTPUT_DIR'], output_filename)
-                
-                if modifier.save_modified_cv(output_path):
-                    generated_cvs.append(output_path)
-                    successful_jobs.append(job)
-                else:
-                    failed_jobs.append(job)
-            else:
-                failed_jobs.append(job)
-        
-        if generated_cvs:
-            session['generated_cvs'] = generated_cvs
-            session['successful_jobs'] = successful_jobs
-            session['failed_jobs'] = failed_jobs
-            
-            flash(f'Successfully generated {len(generated_cvs)} CVs', 'success')
-            if failed_jobs:
-                flash(f'Failed to generate {len(failed_jobs)} CVs', 'warning')
-                
-            return render_template('all_cvs_success.html', 
-                                  successful_jobs=successful_jobs,
-                                  failed_jobs=failed_jobs)
-        else:
-            flash('No CVs were generated. Make sure your CV template has a skills section.', 'warning')
-            return redirect(url_for('job_list'))
-        
-    except Exception as e:
-        logger.error(f"Error generating CVs: {str(e)}")
-        flash(f'An error occurred: {str(e)}', 'error')
+
+    return render_template(
+        'cv_progress.html',
+        job=None,
+        batch=True,
+        job_count=len(processed_jobs),
+        start_url=url_for('start_make_all_cvs'),
+        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
+        complete_url_template=url_for('make_all_cvs_complete', task_id='TASK_ID'),
+        back_url=url_for('job_list'),
+    )
+
+
+@app.route('/make_all_cvs/start', methods=['POST'])
+def start_make_all_cvs():
+    """Start background batch AI CV generation."""
+    search_run_id = session.get('search_run_id')
+    processed_jobs = _get_jobs_for_view(search_run_id)
+    cv_template = session.get('cv_template')
+
+    if not processed_jobs:
+        return jsonify({'error': 'No jobs found'}), 404
+    if not cv_template:
+        return jsonify({'error': 'Please upload your CV first'}), 400
+
+    task_id = create_task('batch_cv', meta={'total_jobs': len(processed_jobs)})
+    session['cv_generation_active'] = task_id
+    start_background_task(
+        task_id,
+        lambda: _run_batch_cv_task(task_id, cv_template, processed_jobs),
+    )
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/make_all_cvs/complete/<task_id>')
+def make_all_cvs_complete(task_id):
+    """Render batch success page after background generation completes."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Batch CV generation result not found', 'error')
         return redirect(url_for('job_list'))
+
+    result = task['result']
+    session.pop('cv_generation_active', None)
+    session['generated_cvs'] = result.get('generated_cvs', [])
+    session['successful_jobs'] = result.get('successful_jobs', [])
+    session['failed_jobs'] = result.get('failed_jobs', [])
+
+    flash(f"Successfully generated {result.get('generated_count', 0)} tailored CVs with RAG + Ollama", 'success')
+    if result.get('failed_jobs'):
+        flash(f"Failed to generate {len(result['failed_jobs'])} CVs", 'warning')
+
+    return render_template(
+        'all_cvs_success.html',
+        successful_jobs=result.get('successful_jobs', []),
+        failed_jobs=result.get('failed_jobs', []),
+    )
 
 @app.route('/download_all_cvs')
 def download_all_cvs():
