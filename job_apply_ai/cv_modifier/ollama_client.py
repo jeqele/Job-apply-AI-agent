@@ -73,6 +73,7 @@ class OllamaClient:
         model: str | None = None,
         system: str | None = None,
         temperature: float = 0.3,
+        json_format: bool = False,
     ) -> str:
         resolved_model = self._resolve_model(
             model or self.main_model,
@@ -87,6 +88,8 @@ class OllamaClient:
         }
         if system:
             payload["system"] = system
+        if json_format:
+            payload["format"] = "json"
 
         response = requests.post(
             f"{self.base_url}/api/generate",
@@ -108,14 +111,41 @@ class OllamaClient:
         model: str | None = None,
         system: str | None = None,
         temperature: float = 0.2,
+        max_attempts: int = 2,
     ) -> dict[str, Any]:
-        raw = self.generate(
-            prompt,
-            model=model,
-            system=system,
-            temperature=temperature,
-        )
-        return self._parse_json_response(raw)
+        json_system = (system or "") + " Return only a single valid JSON object."
+        last_error: Exception | None = None
+
+        for attempt in range(max_attempts):
+            attempt_prompt = prompt
+            if attempt > 0:
+                attempt_prompt = (
+                    f"{prompt}\n\n"
+                    "Your previous answer was not valid JSON. "
+                    "Reply again with ONLY one JSON object. "
+                    "Use double quotes for all keys and strings. "
+                    "Do not include markdown fences, comments, or trailing commas."
+                )
+
+            raw = self.generate(
+                attempt_prompt,
+                model=model,
+                system=json_system.strip(),
+                temperature=max(temperature - (attempt * 0.05), 0.05),
+                json_format=True,
+            )
+            try:
+                return self._parse_json_response(raw)
+            except ValueError as exc:
+                last_error = exc
+                logger.warning(
+                    "Failed to parse Ollama JSON on attempt %s/%s: %s",
+                    attempt + 1,
+                    max_attempts,
+                    exc,
+                )
+
+        raise ValueError(str(last_error) if last_error else "Model response was not valid JSON")
 
     def _resolve_model(self, model: str, available: list[str], role: str) -> str:
         if model in available:
@@ -161,22 +191,78 @@ class OllamaClient:
 
     @staticmethod
     def _parse_json_response(raw: str) -> dict[str, Any]:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-
-        try:
-            parsed = json.loads(cleaned)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict):
-                return parsed
+        for candidate in OllamaClient._json_candidates(raw):
+            for repaired in (candidate, OllamaClient._repair_json(candidate)):
+                if not repaired:
+                    continue
+                try:
+                    parsed = json.loads(repaired)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
 
         raise ValueError("Model response was not valid JSON")
+
+    @staticmethod
+    def _json_candidates(raw: str) -> list[str]:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add(value: str) -> None:
+            value = value.strip()
+            if value and value not in seen:
+                seen.add(value)
+                candidates.append(value)
+
+        add(cleaned)
+
+        for index, char in enumerate(cleaned):
+            if char == "{":
+                extracted = OllamaClient._extract_balanced_json(cleaned, index)
+                if extracted:
+                    add(extracted)
+
+        return candidates
+
+    @staticmethod
+    def _extract_balanced_json(text: str, start: int) -> str | None:
+        depth = 0
+        in_string = False
+        escape = False
+
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+
+        return None
+
+    @staticmethod
+    def _repair_json(text: str) -> str:
+        repaired = text.strip()
+        repaired = repaired.replace("\u201c", '"').replace("\u201d", '"')
+        repaired = repaired.replace("\u2018", "'").replace("\u2019", "'")
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        repaired = re.sub(r"\}\s*\{", "},{", repaired)
+        return repaired

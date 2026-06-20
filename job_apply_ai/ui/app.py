@@ -28,6 +28,7 @@ from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.ui.cv_tasks import (
     complete_task,
     create_task,
+    fail_task,
     get_task,
     start_background_task,
     update_task,
@@ -60,8 +61,57 @@ ensure_directory_exists(app.config['JOBS_OUTPUT_DIR'])
 init_db()
 job_repo = JobRepository()
 
+# Clear abandoned CV generation locks after this many seconds without progress
+CV_GENERATION_STALE_SECONDS = 900
+
 # Ensure session data is saved
 app.config['SESSION_TYPE'] = 'filesystem'
+
+
+def _sync_cv_generation_lock() -> str | None:
+    """Drop stale session locks and return the task id only if generation is active."""
+    task_id = session.get('cv_generation_active')
+    if not task_id:
+        return None
+
+    task = get_task(task_id)
+    if not task:
+        session.pop('cv_generation_active', None)
+        return None
+
+    status = task.get('status')
+    if status in ('complete', 'error'):
+        session.pop('cv_generation_active', None)
+        return None
+
+    if status in ('pending', 'running'):
+        updated_at = task.get('updated_at')
+        if updated_at:
+            try:
+                last_update = datetime.fromisoformat(updated_at)
+                age_seconds = (datetime.utcnow() - last_update).total_seconds()
+                if age_seconds > CV_GENERATION_STALE_SECONDS:
+                    fail_task(task_id, 'CV generation timed out or was interrupted.')
+                    session.pop('cv_generation_active', None)
+                    logger.warning('Cleared stale CV generation lock for task %s', task_id)
+                    return None
+            except ValueError:
+                pass
+        return task_id
+
+    session.pop('cv_generation_active', None)
+    return None
+
+
+@app.before_request
+def _refresh_cv_generation_lock():
+    _sync_cv_generation_lock()
+
+
+@app.context_processor
+def _inject_cv_generation_lock():
+    return {'cv_generation_active': session.get('cv_generation_active')}
+
 
 def _enrich_jobs_with_skills(jobs: list[dict]) -> list[dict]:
     """Extract matched skills from job descriptions."""
@@ -400,11 +450,18 @@ def manage_jobs(folder='all'):
         return redirect(url_for('manage_jobs'))
 
     workflow_status = None if folder == 'all' else folder
-    jobs = job_repo.list_jobs(workflow_status=workflow_status, search=search or None)
+    exclude_statuses = ['archived'] if folder == 'all' else None
+    jobs = job_repo.list_jobs(
+        workflow_status=workflow_status,
+        search=search or None,
+        exclude_workflow_statuses=exclude_statuses,
+    )
     status_counts = job_repo.count_jobs_by_status()
     total_count = sum(status_counts.values())
 
-    folder_counts = {'all': total_count}
+    folder_counts = {
+        'all': total_count - status_counts.get('archived', 0),
+    }
     for status in JOB_WORKFLOW_STATUSES:
         folder_counts[status] = status_counts.get(status, 0)
 
@@ -607,6 +664,9 @@ def start_make_cv(job_id):
     if not cv_template:
         return jsonify({'error': 'Please upload your CV first'}), 400
 
+    if _sync_cv_generation_lock():
+        return jsonify({'error': 'Another CV generation is already in progress'}), 409
+
     task_id = create_task('single_cv', job_id=job_id)
     session['cv_generation_active'] = task_id
     start_background_task(
@@ -624,10 +684,13 @@ def start_make_cv(job_id):
     return jsonify({'task_id': task_id})
 
 
-@app.route('/api/cv_generation/release', methods=['POST'])
+@app.route('/api/cv_generation/release', methods=['POST', 'GET'])
 def release_cv_generation_lock():
-    """Clear UI lock after failed or abandoned CV generation."""
+    """Clear UI lock after failed, abandoned, or stale CV generation."""
     session.pop('cv_generation_active', None)
+    if request.method == 'GET':
+        flash('CV generation lock cleared. You can start a new CV.', 'info')
+        return redirect(request.referrer or url_for('manage_jobs'))
     return jsonify({'ok': True})
 
 
@@ -740,6 +803,9 @@ def start_make_all_cvs():
         return jsonify({'error': 'No jobs found'}), 404
     if not cv_template:
         return jsonify({'error': 'Please upload your CV first'}), 400
+
+    if _sync_cv_generation_lock():
+        return jsonify({'error': 'Another CV generation is already in progress'}), 409
 
     task_id = create_task('batch_cv', meta={'total_jobs': len(processed_jobs)})
     session['cv_generation_active'] = task_id

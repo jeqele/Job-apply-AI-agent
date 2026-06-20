@@ -156,6 +156,7 @@ Return JSON with this exact shape:
             model=self.ollama.fast_model,
             system=ANALYSIS_SYSTEM_PROMPT,
             temperature=0.1,
+            max_attempts=2,
         )
 
     def _generate_tailored_cv(
@@ -215,6 +216,7 @@ Return JSON with this exact shape:
             model=self.ollama.main_model,
             system=GENERATION_SYSTEM_PROMPT,
             temperature=0.25,
+            max_attempts=3,
         )
         return self._normalize_generated_content(content)
 

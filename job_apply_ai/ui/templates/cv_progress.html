@@ -203,6 +203,18 @@
         async function pollStatus() {
             if (!taskId) return;
             const response = await fetch(statusUrlTemplate.replace('TASK_ID', taskId));
+            if (response.status === 404) {
+                clearInterval(pollTimer);
+                taskId = null;
+                await fetch(releaseUrl, { method: 'POST' });
+                const panel = document.getElementById('error-panel');
+                panel.textContent = 'CV generation session was lost (server may have restarted). You can go back and try again.';
+                panel.classList.remove('d-none');
+                document.querySelector('.lock-banner').innerHTML =
+                    `<i class="fas fa-unlock me-2"></i>Generation session lost. ` +
+                    `<a href="${backUrl}" class="alert-link">Return</a>`;
+                return;
+            }
             const data = await response.json();
             updateUi(data);
 
