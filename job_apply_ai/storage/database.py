@@ -75,6 +75,31 @@ def init_db(db_path: str | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_jobs_link ON jobs(link);
             """
         )
+
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "workflow_status" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE jobs
+                ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'new'
+                """
+            )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_jobs_workflow_status
+            ON jobs(workflow_status)
+            """
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET workflow_status = 'new'
+            WHERE workflow_status IS NULL OR workflow_status = ''
+            """
+        )
         conn.commit()
 
 

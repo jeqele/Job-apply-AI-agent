@@ -14,6 +14,15 @@ import io
 
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
 from job_apply_ai.job_schema import JOB_COLUMNS
+from job_apply_ai.job_status import (
+    DEFAULT_JOB_STATUS,
+    JOB_STATUS_BADGE_CLASSES,
+    JOB_STATUS_ICONS,
+    JOB_STATUS_LABELS,
+    JOB_WORKFLOW_STATUSES,
+    is_valid_job_status,
+    job_status_label,
+)
 from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer, CVModifier
 from job_apply_ai.utils.helpers import ensure_directory_exists
 from job_apply_ai.storage.database import init_db
@@ -72,7 +81,27 @@ def _get_jobs_for_view(search_run_id: int | None = None) -> list[dict]:
 
 def _job_form_data() -> dict:
     """Read job fields from the current request form."""
-    return {column: request.form.get(column, '') for column in JOB_COLUMNS}
+    data = {column: request.form.get(column, '') for column in JOB_COLUMNS}
+    workflow_status = request.form.get('workflow_status', DEFAULT_JOB_STATUS)
+    data['workflow_status'] = (
+        workflow_status if is_valid_job_status(workflow_status) else DEFAULT_JOB_STATUS
+    )
+    return data
+
+
+def _manage_jobs_redirect(folder: str = 'all', search: str = ''):
+    """Redirect back to the manage jobs view preserving folder context."""
+    kwargs = {}
+    if search:
+        kwargs['q'] = search
+    if folder and folder != 'all':
+        kwargs['folder'] = folder
+    return redirect(url_for('manage_jobs', **kwargs))
+
+
+@app.template_filter('job_status_label')
+def _job_status_label_filter(status):
+    return job_status_label(status)
 
 
 @app.route('/')
@@ -182,10 +211,35 @@ def job_list():
 
 
 @app.route('/jobs/manage')
-def manage_jobs():
-    """Display all jobs stored in SQLite with CRUD actions."""
-    jobs = job_repo.list_jobs()
-    return render_template('manage_jobs.html', jobs=jobs)
+@app.route('/jobs/manage/<folder>')
+def manage_jobs(folder='all'):
+    """Display jobs grouped by workflow status with folder navigation."""
+    search = request.args.get('q', '').strip()
+
+    if folder != 'all' and not is_valid_job_status(folder):
+        flash('Unknown job folder', 'warning')
+        return redirect(url_for('manage_jobs'))
+
+    workflow_status = None if folder == 'all' else folder
+    jobs = job_repo.list_jobs(workflow_status=workflow_status, search=search or None)
+    status_counts = job_repo.count_jobs_by_status()
+    total_count = sum(status_counts.values())
+
+    folder_counts = {'all': total_count}
+    for status in JOB_WORKFLOW_STATUSES:
+        folder_counts[status] = status_counts.get(status, 0)
+
+    return render_template(
+        'manage_jobs.html',
+        jobs=jobs,
+        current_folder=folder,
+        search_query=search,
+        folder_counts=folder_counts,
+        job_statuses=JOB_WORKFLOW_STATUSES,
+        status_labels=JOB_STATUS_LABELS,
+        status_icons=JOB_STATUS_ICONS,
+        status_badges=JOB_STATUS_BADGE_CLASSES,
+    )
 
 
 @app.route('/jobs/new', methods=['GET', 'POST'])
@@ -195,13 +249,30 @@ def create_job():
         job_data = _job_form_data()
         if not job_data.get('title'):
             flash('Job title is required', 'error')
-            return render_template('job_form.html', job=job_data)
+            return render_template(
+                'job_form.html',
+                job=job_data,
+                job_statuses=JOB_WORKFLOW_STATUSES,
+                status_labels=JOB_STATUS_LABELS,
+                return_folder=request.form.get('return_folder', 'all'),
+                return_search=request.form.get('return_search', ''),
+            )
 
         job_id = job_repo.create_job(job_data)
         flash(f'Job #{job_id} created successfully', 'success')
-        return redirect(url_for('manage_jobs'))
+        return _manage_jobs_redirect(
+            request.form.get('return_folder', 'all'),
+            request.form.get('return_search', ''),
+        )
 
-    return render_template('job_form.html', job=None)
+    return render_template(
+        'job_form.html',
+        job=None,
+        job_statuses=JOB_WORKFLOW_STATUSES,
+        status_labels=JOB_STATUS_LABELS,
+        return_folder=request.args.get('folder', 'all'),
+        return_search=request.args.get('q', ''),
+    )
 
 
 @app.route('/jobs/<int:job_id>/edit', methods=['GET', 'POST'])
@@ -210,29 +281,57 @@ def edit_job(job_id):
     job = job_repo.get_job(job_id)
     if not job:
         flash('Job not found', 'error')
-        return redirect(url_for('manage_jobs'))
+        return _manage_jobs_redirect()
+
+    return_folder = request.args.get('folder') or request.form.get('return_folder', 'all')
+    return_search = request.args.get('q') or request.form.get('return_search', '')
 
     if request.method == 'POST':
         job_data = _job_form_data()
         if not job_data.get('title'):
             flash('Job title is required', 'error')
-            return render_template('job_form.html', job={**job, **job_data})
+            return render_template(
+                'job_form.html',
+                job={**job, **job_data},
+                job_statuses=JOB_WORKFLOW_STATUSES,
+                status_labels=JOB_STATUS_LABELS,
+                return_folder=return_folder,
+                return_search=return_search,
+            )
 
+        workflow_status = job_data.pop('workflow_status', DEFAULT_JOB_STATUS)
         job_repo.update_job(job_id, job_data)
+        if workflow_status != job.get('workflow_status', DEFAULT_JOB_STATUS):
+            job_repo.update_job_status(job_id, workflow_status)
         flash('Job updated successfully', 'success')
-        return redirect(url_for('manage_jobs'))
+        return _manage_jobs_redirect(return_folder, return_search)
 
-    return render_template('job_form.html', job=job)
+    return render_template(
+        'job_form.html',
+        job=job,
+        job_statuses=JOB_WORKFLOW_STATUSES,
+        status_labels=JOB_STATUS_LABELS,
+        return_folder=return_folder,
+        return_search=return_search,
+    )
 
 
-@app.route('/jobs/<int:job_id>/delete', methods=['POST'])
-def delete_job(job_id):
-    """Delete a job from SQLite."""
-    if job_repo.delete_job(job_id):
-        flash('Job deleted successfully', 'success')
+@app.route('/jobs/<int:job_id>/status', methods=['POST'])
+def update_job_status(job_id):
+    """Move a job to another workflow folder."""
+    workflow_status = request.form.get('workflow_status', '')
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '')
+
+    if not is_valid_job_status(workflow_status):
+        flash('Invalid job status', 'error')
+        return _manage_jobs_redirect(return_folder, return_search)
+
+    if job_repo.update_job_status(job_id, workflow_status):
+        flash(f'Job moved to {job_status_label(workflow_status)}', 'success')
     else:
         flash('Job not found', 'error')
-    return redirect(url_for('manage_jobs'))
+    return _manage_jobs_redirect(return_folder, return_search)
 
 
 @app.route('/export/<fmt>')

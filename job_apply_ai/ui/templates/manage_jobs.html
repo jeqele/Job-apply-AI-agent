@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Manage Jobs</title>
+    <title>Manage Jobs{% if current_folder != 'all' %} — {{ status_labels[current_folder] }}{% endif %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -19,20 +19,73 @@
             color: white;
             box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
         }
-        .table-card {
+        .layout-card {
             border: none;
             border-radius: 1rem;
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
             overflow: hidden;
         }
+        .folder-sidebar {
+            background: #fff;
+            border-right: 1px solid #e9ecef;
+            min-height: 520px;
+        }
+        .folder-link {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.65rem 1rem;
+            color: #495057;
+            text-decoration: none;
+            border-left: 3px solid transparent;
+            transition: background 0.15s ease;
+        }
+        .folder-link:hover {
+            background: #f1f3f5;
+            color: #0d6efd;
+        }
+        .folder-link.active {
+            background: #e7f1ff;
+            color: #0d6efd;
+            border-left-color: #0d6efd;
+            font-weight: 600;
+        }
+        .folder-link .folder-label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            min-width: 0;
+        }
+        .folder-link .folder-label span {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .folder-count {
+            font-size: 0.75rem;
+            min-width: 1.75rem;
+            text-align: center;
+        }
+        .folder-section-title {
+            font-size: 0.7rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #868e96;
+            padding: 1rem 1rem 0.35rem;
+            font-weight: 700;
+        }
+        .status-select {
+            min-width: 150px;
+            max-width: 180px;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container-fluid px-4">
         <div class="page-header d-flex justify-content-between align-items-center">
             <div>
                 <h1 class="fw-bold mb-0">Manage Jobs</h1>
-                <p class="lead mb-0">View, edit, and delete jobs stored in SQLite</p>
+                <p class="lead mb-0">Organize jobs by workflow status — nothing is permanently deleted</p>
             </div>
             <a href="{{ url_for('index') }}" class="btn btn-light">
                 <i class="fas fa-home me-2"></i>Home
@@ -50,12 +103,9 @@
             {% endif %}
         {% endwith %}
 
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-            <div>
-                <span class="badge bg-primary fs-6">{{ jobs|length }} jobs in database</span>
-            </div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div class="d-flex flex-wrap gap-2">
-                <a href="{{ url_for('create_job') }}" class="btn btn-primary">
+                <a href="{{ url_for('create_job', folder=current_folder, q=search_query or none) }}" class="btn btn-primary">
                     <i class="fas fa-plus me-2"></i>Add Job
                 </a>
                 <a href="{{ url_for('export_jobs_route', fmt='excel') }}" class="btn btn-success">
@@ -70,56 +120,158 @@
             </div>
         </div>
 
-        <div class="card table-card">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0 align-middle">
-                    <thead class="table-light">
-                        <tr>
-                            <th>ID</th>
-                            <th>Title</th>
-                            <th>Company</th>
-                            <th>Location</th>
-                            <th>Source</th>
-                            <th>Updated</th>
-                            <th class="text-end">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for job in jobs %}
-                        <tr>
-                            <td>{{ job.id }}</td>
-                            <td>{{ job.title }}</td>
-                            <td>{{ job.company }}</td>
-                            <td>{{ job.location }}</td>
-                            <td>{{ job.source }}</td>
-                            <td class="text-muted small">{{ job.updated_at }}</td>
-                            <td class="text-end">
-                                <div class="btn-group btn-group-sm">
-                                    {% if job.link %}
-                                        <a href="{{ job.link }}" target="_blank" class="btn btn-outline-primary" title="Open link">
-                                            <i class="fas fa-external-link-alt"></i>
-                                        </a>
+        <div class="card layout-card">
+            <div class="row g-0">
+                <div class="col-lg-3 col-xl-2 folder-sidebar">
+                    <div class="folder-section-title">Folders</div>
+                    <a href="{{ url_for('manage_jobs') }}"
+                       class="folder-link {% if current_folder == 'all' %}active{% endif %}">
+                        <div class="folder-label">
+                            <i class="fas fa-layer-group"></i>
+                            <span>All Jobs</span>
+                        </div>
+                        <span class="badge rounded-pill bg-secondary folder-count">{{ folder_counts.all }}</span>
+                    </a>
+
+                    <div class="folder-section-title">Pipeline</div>
+                    {% for status in job_statuses[:10] %}
+                        <a href="{{ url_for('manage_jobs', folder=status) }}"
+                           class="folder-link {% if current_folder == status %}active{% endif %}">
+                            <div class="folder-label">
+                                <i class="fas {{ status_icons.get(status, 'fa-folder') }}"></i>
+                                <span>{{ status_labels[status] }}</span>
+                            </div>
+                            <span class="badge rounded-pill bg-light text-dark folder-count">{{ folder_counts[status] }}</span>
+                        </a>
+                    {% endfor %}
+
+                    <div class="folder-section-title">Outcomes</div>
+                    {% for status in job_statuses[10:] %}
+                        <a href="{{ url_for('manage_jobs', folder=status) }}"
+                           class="folder-link {% if current_folder == status %}active{% endif %}">
+                            <div class="folder-label">
+                                <i class="fas {{ status_icons.get(status, 'fa-folder') }}"></i>
+                                <span>{{ status_labels[status] }}</span>
+                            </div>
+                            <span class="badge rounded-pill bg-light text-dark folder-count">{{ folder_counts[status] }}</span>
+                        </a>
+                    {% endfor %}
+                </div>
+
+                <div class="col-lg-9 col-xl-10">
+                    <div class="p-3 border-bottom bg-white">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                            <div>
+                                <h5 class="mb-1 fw-semibold">
+                                    {% if current_folder == 'all' %}
+                                        All Jobs
+                                    {% else %}
+                                        {{ status_labels[current_folder] }}
                                     {% endif %}
-                                    <a href="{{ url_for('edit_job', job_id=job.id) }}" class="btn btn-outline-secondary" title="Edit">
-                                        <i class="fas fa-edit"></i>
+                                </h5>
+                                <span class="text-muted small">
+                                    {{ jobs|length }} job{% if jobs|length != 1 %}s{% endif %} in this folder
+                                    {% if search_query %} matching "{{ search_query }}"{% endif %}
+                                </span>
+                            </div>
+                            <form method="get"
+                                  action="{% if current_folder == 'all' %}{{ url_for('manage_jobs') }}{% else %}{{ url_for('manage_jobs', folder=current_folder) }}{% endif %}"
+                                  class="d-flex gap-2 flex-grow-1 justify-content-end"
+                                  style="max-width: 420px;">
+                                <input type="search"
+                                       class="form-control"
+                                       name="q"
+                                       value="{{ search_query }}"
+                                       placeholder="Search in this folder…"
+                                       aria-label="Search jobs in current folder">
+                                <button type="submit" class="btn btn-outline-primary">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                                {% if search_query %}
+                                    <a href="{% if current_folder == 'all' %}{{ url_for('manage_jobs') }}{% else %}{{ url_for('manage_jobs', folder=current_folder) }}{% endif %}"
+                                       class="btn btn-outline-secondary" title="Clear search">
+                                        <i class="fas fa-times"></i>
                                     </a>
-                                    <form method="post" action="{{ url_for('delete_job', job_id=job.id) }}" class="d-inline" onsubmit="return confirm('Delete this job?');">
-                                        <button type="submit" class="btn btn-outline-danger" title="Delete">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </form>
-                                </div>
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="7" class="text-center text-muted py-5">
-                                No jobs stored yet. Search for jobs or add one manually.
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                                {% endif %}
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0 align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Title</th>
+                                    <th>Company</th>
+                                    <th>Location</th>
+                                    <th>Status</th>
+                                    <th>Updated</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for job in jobs %}
+                                <tr>
+                                    <td>{{ job.id }}</td>
+                                    <td>{{ job.title }}</td>
+                                    <td>{{ job.company }}</td>
+                                    <td>{{ job.location }}</td>
+                                    <td>
+                                        {% set status = job.workflow_status or 'new' %}
+                                        <span class="badge {{ status_badges.get(status, 'bg-secondary') }}">
+                                            {{ status_labels.get(status, status|job_status_label) }}
+                                        </span>
+                                    </td>
+                                    <td class="text-muted small">{{ job.updated_at }}</td>
+                                    <td class="text-end">
+                                        <div class="d-flex flex-wrap justify-content-end align-items-center gap-2">
+                                            {% if job.link %}
+                                                <a href="{{ job.link }}" target="_blank" class="btn btn-outline-primary btn-sm" title="Open link">
+                                                    <i class="fas fa-external-link-alt"></i>
+                                                </a>
+                                            {% endif %}
+                                            <a href="{{ url_for('edit_job', job_id=job.id, folder=current_folder, q=search_query or none) }}"
+                                               class="btn btn-outline-secondary btn-sm" title="Edit">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                            <form method="post"
+                                                  action="{{ url_for('update_job_status', job_id=job.id) }}"
+                                                  class="d-inline-flex align-items-center gap-1">
+                                                <input type="hidden" name="return_folder" value="{{ current_folder }}">
+                                                <input type="hidden" name="return_search" value="{{ search_query }}">
+                                                <select name="workflow_status"
+                                                        class="form-select form-select-sm status-select"
+                                                        aria-label="Move job to folder"
+                                                        onchange="this.form.submit()">
+                                                    {% for status in job_statuses %}
+                                                        <option value="{{ status }}"
+                                                                {% if (job.workflow_status or 'new') == status %}selected{% endif %}>
+                                                            {{ status_labels[status] }}
+                                                        </option>
+                                                    {% endfor %}
+                                                </select>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted py-5">
+                                        {% if search_query %}
+                                            No jobs match your search in this folder.
+                                        {% elif current_folder == 'all' %}
+                                            No jobs stored yet. Search for jobs or add one manually.
+                                        {% else %}
+                                            No jobs in {{ status_labels[current_folder] }} yet.
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

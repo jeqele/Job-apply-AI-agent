@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from job_apply_ai.job_schema import JOB_COLUMNS
+from job_apply_ai.job_status import DEFAULT_JOB_STATUS, is_valid_job_status
 from job_apply_ai.storage.database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -96,33 +97,71 @@ class JobRepository:
                     )
                     ids.append(existing_id)
                 else:
-                    values["search_run_id"] = search_run_id
-                    columns = ["search_run_id", *values.keys()]
+                    columns = ["search_run_id", "workflow_status", *values.keys()]
                     placeholders = ", ".join("?" for _ in columns)
                     cursor = conn.execute(
                         f"""
                         INSERT INTO jobs ({", ".join(columns)})
                         VALUES ({placeholders})
                         """,
-                        (search_run_id, *values.values()),
+                        (search_run_id, DEFAULT_JOB_STATUS, *values.values()),
                     )
                     ids.append(int(cursor.lastrowid))
 
         logger.info("Upserted %s jobs into SQLite", len(ids))
         return ids
 
-    def list_jobs(
+    def _build_job_filters(
         self,
         search_run_id: int | None = None,
-        limit: int | None = None,
-    ) -> list[dict]:
-        query = "SELECT * FROM jobs"
+        workflow_status: str | None = None,
+        search: str | None = None,
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
         params: list[Any] = []
 
         if search_run_id is not None:
-            query += " WHERE search_run_id = ?"
+            clauses.append("search_run_id = ?")
             params.append(search_run_id)
 
+        if workflow_status is not None:
+            clauses.append("workflow_status = ?")
+            params.append(workflow_status)
+
+        if search:
+            term = f"%{search.strip()}%"
+            search_clause = " OR ".join(
+                f"{column} LIKE ?"
+                for column in (
+                    "title",
+                    "company",
+                    "location",
+                    "description",
+                    "source",
+                    "emails",
+                )
+            )
+            clauses.append(f"({search_clause})")
+            params.extend([term] * 6)
+
+        if not clauses:
+            return "", params
+        return " WHERE " + " AND ".join(clauses), params
+
+    def list_jobs(
+        self,
+        search_run_id: int | None = None,
+        workflow_status: str | None = None,
+        search: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        query = "SELECT * FROM jobs"
+        where_clause, params = self._build_job_filters(
+            search_run_id=search_run_id,
+            workflow_status=workflow_status,
+            search=search,
+        )
+        query += where_clause
         query += " ORDER BY id DESC"
 
         if limit:
@@ -155,7 +194,11 @@ class JobRepository:
         values["created_at"] = now
         values["updated_at"] = now
 
-        columns = ["search_run_id", *values.keys()]
+        workflow_status = job.get("workflow_status", DEFAULT_JOB_STATUS)
+        if not is_valid_job_status(workflow_status):
+            workflow_status = DEFAULT_JOB_STATUS
+
+        columns = ["search_run_id", "workflow_status", *values.keys()]
         placeholders = ", ".join("?" for _ in columns)
 
         with get_connection() as conn:
@@ -164,7 +207,7 @@ class JobRepository:
                 INSERT INTO jobs ({", ".join(columns)})
                 VALUES ({placeholders})
                 """,
-                (search_run_id, *values.values()),
+                (search_run_id, workflow_status, *values.values()),
             )
             return int(cursor.lastrowid)
 
@@ -194,18 +237,56 @@ class JobRepository:
             )
         return True
 
-    def delete_job(self, job_id: int) -> bool:
-        with get_connection() as conn:
-            cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        return cursor.rowcount > 0
+    def update_job_status(self, job_id: int, workflow_status: str) -> bool:
+        if not is_valid_job_status(workflow_status):
+            return False
 
-    def count_jobs(self, search_run_id: int | None = None) -> int:
+        existing = self.get_job(job_id)
+        if not existing:
+            return False
+
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET workflow_status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (workflow_status, now, job_id),
+            )
+        return True
+
+    def count_jobs(
+        self,
+        search_run_id: int | None = None,
+        workflow_status: str | None = None,
+        search: str | None = None,
+    ) -> int:
         query = "SELECT COUNT(*) AS total FROM jobs"
-        params: list[Any] = []
-        if search_run_id is not None:
-            query += " WHERE search_run_id = ?"
-            params.append(search_run_id)
+        where_clause, params = self._build_job_filters(
+            search_run_id=search_run_id,
+            workflow_status=workflow_status,
+            search=search,
+        )
+        query += where_clause
 
         with get_connection() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["total"]) if row else 0
+
+    def count_jobs_by_status(self) -> dict[str, int]:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT workflow_status, COUNT(*) AS total
+                FROM jobs
+                GROUP BY workflow_status
+                """
+            ).fetchall()
+
+        counts: dict[str, int] = {}
+        for row in rows:
+            status = row["workflow_status"] or DEFAULT_JOB_STATUS
+            counts[status] = counts.get(status, 0) + int(row["total"])
+        return counts

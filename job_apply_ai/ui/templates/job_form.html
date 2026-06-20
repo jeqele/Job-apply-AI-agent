@@ -31,7 +31,7 @@
             <h1 class="fw-bold mb-0">
                 {% if job %}<i class="fas fa-edit me-2"></i>Edit Job{% else %}<i class="fas fa-plus me-2"></i>Add Job{% endif %}
             </h1>
-            <a href="{{ url_for('manage_jobs') }}" class="btn btn-secondary">
+            <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-secondary">
                 <i class="fas fa-arrow-left me-2"></i>Back to Jobs
             </a>
         </div>
@@ -53,7 +53,20 @@
             </div>
             <div class="card-body">
                 <form method="post">
+                    <input type="hidden" name="return_folder" value="{{ return_folder|default('all') }}">
+                    <input type="hidden" name="return_search" value="{{ return_search|default('') }}">
                     <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label" for="workflow_status">Status / Folder</label>
+                            <select class="form-select" id="workflow_status" name="workflow_status">
+                                {% for status in job_statuses|default([]) %}
+                                    <option value="{{ status }}"
+                                            {% if job and (job.workflow_status or 'new') == status %}selected{% elif not job and status == 'new' %}selected{% endif %}>
+                                        {{ status_labels[status] }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label" for="title">Title *</label>
                             <input class="form-control" id="title" name="title" value="{{ job.title if job else '' }}" required>
@@ -111,7 +124,7 @@
                         <button type="submit" class="btn btn-primary">
                             <i class="fas fa-save me-2"></i>Save Job
                         </button>
-                        <a href="{{ url_for('manage_jobs') }}" class="btn btn-outline-secondary">Cancel</a>
+                        <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-outline-secondary">Cancel</a>
                     </div>
                 </form>
             </div>
