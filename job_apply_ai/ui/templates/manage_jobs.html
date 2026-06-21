@@ -255,6 +255,19 @@
                                                     <i class="fas fa-envelope me-1"></i>Letter
                                                 </a>
                                                 {% endif %}
+                                                {% if smtp_configured and job.emails %}
+                                                <form method="post"
+                                                      action="{{ url_for('send_job_application', job_id=job.id) }}"
+                                                      class="d-inline"
+                                                      onsubmit="return confirm('Send application email to {{ job.emails.split(',')[0].strip() }}?');">
+                                                    <input type="hidden" name="return_folder" value="{{ current_folder }}">
+                                                    <input type="hidden" name="return_search" value="{{ search_query }}">
+                                                    <input type="hidden" name="return_from_manage" value="1">
+                                                    <button type="submit" class="btn btn-success btn-sm" title="Email CV and cover letter">
+                                                        <i class="fas fa-paper-plane"></i>
+                                                    </button>
+                                                </form>
+                                                {% endif %}
                                             {% endif %}
                                             {% if cv_generation_active %}
                                                 <button type="button" class="btn btn-success btn-sm" disabled title="AI CV generation in progress">

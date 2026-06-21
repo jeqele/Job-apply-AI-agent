@@ -335,6 +335,14 @@
                                 <i class="fas fa-envelope me-2"></i>Cover Letter
                             </a>
                             {% endif %}
+                            {% if smtp_configured and job.emails and job.cv_filename %}
+                            <form method="post" action="{{ url_for('send_job_application', job_id=job.id) }}" class="d-inline"
+                                  onsubmit="return confirm('Send your CV{% if job.cover_letter_filename %} and cover letter{% endif %} to {{ job.emails.split(',')[0].strip() }}?');">
+                                <button type="submit" class="btn btn-success">
+                                    <i class="fas fa-paper-plane me-2"></i>Send Application
+                                </button>
+                            </form>
+                            {% endif %}
                         {% endif %}
                         <a href="{{ url_for('edit_job', job_id=job.id) }}" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-edit"></i>

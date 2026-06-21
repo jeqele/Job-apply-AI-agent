@@ -58,6 +58,16 @@
                     <i class="fas fa-envelope me-2"></i>Download Cover Letter
                 </button>
                 {% endif %}
+                {% if can_send_application and send_application_url %}
+                <button type="button" class="btn btn-success btn-sm" id="sendApplicationBtn"
+                        title="Send CV and cover letter to {{ job_recipient_emails }}">
+                    <i class="fas fa-paper-plane me-2"></i>Send Application
+                </button>
+                {% elif job_recipient_emails and not smtp_configured %}
+                <span class="badge bg-warning text-dark align-self-center" title="Configure SMTP in .env to send emails">
+                    SMTP not configured
+                </span>
+                {% endif %}
             </div>
         </div>
 
@@ -168,6 +178,7 @@
     <script>
         const chatApiUrl = {{ chat_api_url | tojson }};
         const generateCoverLetterUrl = {{ generate_cover_letter_url | tojson }};
+        const sendApplicationUrl = {{ send_application_url | tojson }};
         const profileName = JSON.parse(document.getElementById('profileNameData').textContent || '""');
         let cvContent = JSON.parse(document.getElementById('cvContentData').textContent || '{}');
         let coverLetter = JSON.parse(document.getElementById('coverLetterData').textContent || '{}');
@@ -408,6 +419,29 @@
                     submitBtn.disabled = false;
                     typing.classList.add('d-none');
                     input.focus();
+                }
+            });
+        }
+
+        const sendApplicationBtn = document.getElementById('sendApplicationBtn');
+        if (sendApplicationBtn && sendApplicationUrl) {
+            sendApplicationBtn.addEventListener('click', async () => {
+                if (!confirm('Send your CV and cover letter to the job contact email?')) return;
+                sendApplicationBtn.disabled = true;
+                sendApplicationBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Sending…';
+                try {
+                    const response = await fetch(sendApplicationUrl, {
+                        method: 'POST',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Send failed');
+                    alert(data.message || 'Application sent successfully');
+                    sendApplicationBtn.innerHTML = '<i class="fas fa-check me-2"></i>Sent';
+                } catch (error) {
+                    alert(error.message);
+                    sendApplicationBtn.disabled = false;
+                    sendApplicationBtn.innerHTML = '<i class="fas fa-paper-plane me-2"></i>Send Application';
                 }
             });
         }

@@ -53,6 +53,14 @@ from job_apply_ai.storage.user_profile import (
     summarize_import_changes,
 )
 from job_apply_ai.storage.exports import export_jobs
+from job_apply_ai.email.application_mailer import (
+    ApplicationMailer,
+    build_application_body,
+    build_application_subject,
+    load_smtp_config,
+    parse_recipient_emails,
+    smtp_is_configured,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -127,7 +135,11 @@ def _refresh_cv_generation_lock():
 
 @app.context_processor
 def _inject_cv_generation_lock():
-    return {'cv_generation_active': session.get('cv_generation_active')}
+    profile = profile_repo.get_profile()
+    return {
+        'cv_generation_active': session.get('cv_generation_active'),
+        'smtp_configured': smtp_is_configured(profile),
+    }
 
 
 def _enrich_jobs_with_skills(jobs: list[dict]) -> list[dict]:
@@ -171,6 +183,80 @@ def _save_job_cv_content(cv_filename: str, tailored_content: dict, **kwargs) -> 
 
 def _load_job_cv_store(cv_filename: str) -> dict | None:
     return load_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename)
+
+
+def _job_has_sendable_cv(job: dict) -> bool:
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return False
+    return os.path.exists(os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename))
+
+
+def _can_send_application(job: dict, profile: dict) -> bool:
+    return bool(
+        smtp_is_configured(profile)
+        and parse_recipient_emails(job)
+        and _job_has_sendable_cv(job)
+    )
+
+
+def _send_application_for_job(job_id: int) -> tuple[dict, int]:
+    """Send CV (and cover letter when available) to the job contact emails."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return {'error': 'Job not found'}, 404
+
+    profile = profile_repo.get_profile()
+    smtp_config = load_smtp_config(profile)
+    if not smtp_config:
+        return {
+            'error': (
+                'SMTP is not configured. Add SMTP_HOST, SMTP_USER, and SMTP_PASSWORD to your .env file.'
+            ),
+        }, 400
+
+    recipients = parse_recipient_emails(job)
+    if not recipients:
+        return {'error': 'No contact email found for this job'}, 400
+
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return {'error': 'Generate a CV before sending an application email'}, 400
+
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    if not os.path.exists(cv_path):
+        return {'error': 'CV file not found on disk. Regenerate the CV first.'}, 400
+
+    attachments = [(cv_filename, cv_path)]
+    cl_filename = job.get('cover_letter_filename', '')
+    if cl_filename:
+        cl_path = os.path.join(app.config['CV_OUTPUT_DIR'], cl_filename)
+        if os.path.exists(cl_path):
+            attachments.append((cl_filename, cl_path))
+
+    store = _load_job_cv_store(cv_filename) or {}
+    cover_letter = store.get('cover_letter', {})
+    subject = build_application_subject(job, profile)
+    body = build_application_body(job, profile, cover_letter)
+
+    try:
+        ApplicationMailer(smtp_config).send(
+            to_emails=recipients,
+            subject=subject,
+            body=body,
+            attachments=attachments,
+        )
+    except Exception as exc:
+        logger.error('Application email failed for job %s: %s', job_id, exc)
+        return {'error': f'Failed to send email: {exc}'}, 500
+
+    job_repo.update_job_status(job_id, 'cv_sent')
+    return {
+        'ok': True,
+        'message': f'Application sent to {", ".join(recipients)}',
+        'recipients': recipients,
+        'workflow_status': 'cv_sent',
+    }, 200
 
 
 def _generate_and_save_cover_letter(
@@ -265,6 +351,11 @@ def _cv_preview_context(
         'generate_cover_letter_url': (
             url_for('generate_job_cover_letter', job_id=job_id) if job_id else None
         ),
+        'can_send_application': _can_send_application(job, profile) if job_id else False,
+        'send_application_url': (
+            url_for('send_job_application', job_id=job_id) if job_id else None
+        ),
+        'job_recipient_emails': ', '.join(parse_recipient_emails(job)) if job_id else '',
     }
 
 
@@ -1183,6 +1274,33 @@ def generate_job_cover_letter(job_id):
     except Exception as exc:
         logger.error('Cover letter generation failed for job %s: %s', job_id, exc)
         return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/jobs/<int:job_id>/send-application', methods=['POST'])
+@app.route('/api/jobs/<int:job_id>/send-application', methods=['POST'])
+def send_job_application(job_id):
+    """Email the generated CV and cover letter to the job contact address."""
+    payload, status = _send_application_for_job(job_id)
+    wants_json = (
+        request.path.startswith('/api/')
+        or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+        or request.accept_mimetypes.best == 'application/json'
+    )
+    if wants_json:
+        return jsonify(payload), status
+
+    if payload.get('ok'):
+        flash(payload.get('message', 'Application email sent'), 'success')
+    else:
+        flash(payload.get('error', 'Failed to send application email'), 'error')
+
+    return_folder = request.form.get('return_folder', request.args.get('folder', 'all'))
+    return_search = request.form.get('return_search', request.args.get('q', ''))
+    if request.form.get('return_from_manage') or request.args.get('folder') or return_search:
+        return _manage_jobs_redirect(return_folder, return_search)
+    if request.referrer and 'job_list' in request.referrer:
+        return redirect(url_for('job_list'))
+    return redirect(url_for('preview_job_cv', job_id=job_id, folder=return_folder, q=return_search or None))
 
 
 @app.route('/download_cv')
