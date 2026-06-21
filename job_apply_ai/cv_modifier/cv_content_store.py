@@ -29,11 +29,24 @@ def save_cv_content(
     tailored_content: dict[str, Any],
     *,
     chat_history: list[dict[str, str]] | None = None,
+    cover_letter: dict[str, Any] | None = None,
+    cover_letter_chat_history: list[dict[str, str]] | None = None,
 ) -> str:
-    """Save tailored content and optional chat history to disk."""
+    """Save tailored CV content, cover letter, and chat histories to disk."""
+    existing = load_cv_content(output_dir, cv_filename) or deepcopy(DEFAULT_STORE)
     payload = {
         "tailored_content": deepcopy(tailored_content),
-        "chat_history": deepcopy(chat_history or []),
+        "chat_history": deepcopy(
+            chat_history if chat_history is not None else existing.get("chat_history", [])
+        ),
+        "cover_letter": deepcopy(
+            cover_letter if cover_letter is not None else existing.get("cover_letter", {})
+        ),
+        "cover_letter_chat_history": deepcopy(
+            cover_letter_chat_history
+            if cover_letter_chat_history is not None
+            else existing.get("cover_letter_chat_history", [])
+        ),
         "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
     }
     path = cv_content_path(output_dir, cv_filename)
@@ -74,4 +87,6 @@ def append_chat_message(
         cv_filename,
         store.get("tailored_content", {}),
         chat_history=store.get("chat_history", []),
+        cover_letter=store.get("cover_letter", {}),
+        cover_letter_chat_history=store.get("cover_letter_chat_history", []),
     )

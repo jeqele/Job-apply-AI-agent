@@ -330,6 +330,11 @@
                             <a href="{{ url_for('download_job_cv', job_id=job.id) }}" class="btn btn-outline-success">
                                 <i class="fas fa-file-word me-2"></i>Download CV
                             </a>
+                            {% if job.cover_letter_filename %}
+                            <a href="{{ url_for('download_job_cover_letter', job_id=job.id) }}" class="btn btn-outline-primary">
+                                <i class="fas fa-envelope me-2"></i>Cover Letter
+                            </a>
+                            {% endif %}
                         {% endif %}
                         <a href="{{ url_for('edit_job', job_id=job.id) }}" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-edit"></i>

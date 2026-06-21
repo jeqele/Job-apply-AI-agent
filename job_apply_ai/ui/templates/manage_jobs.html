@@ -249,6 +249,12 @@
                                                    class="btn btn-outline-success btn-sm" title="Download AI CV">
                                                     <i class="fas fa-file-word me-1"></i>CV
                                                 </a>
+                                                {% if job.cover_letter_filename %}
+                                                <a href="{{ url_for('download_job_cover_letter', job_id=job.id) }}"
+                                                   class="btn btn-outline-primary btn-sm" title="Download cover letter">
+                                                    <i class="fas fa-envelope me-1"></i>Letter
+                                                </a>
+                                                {% endif %}
                                             {% endif %}
                                             {% if cv_generation_active %}
                                                 <button type="button" class="btn btn-success btn-sm" disabled title="AI CV generation in progress">

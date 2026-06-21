@@ -24,6 +24,9 @@ from job_apply_ai.job_status import (
     job_status_label,
 )
 from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer
+from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
+from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
+from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
 from job_apply_ai.cv_modifier.cv_content_store import load_cv_content, save_cv_content
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
@@ -152,12 +155,54 @@ def _cv_output_path(job: dict) -> tuple[str, str]:
     return output_filename, output_path
 
 
-def _save_job_cv_content(cv_filename: str, tailored_content: dict) -> None:
-    save_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename, tailored_content, chat_history=[])
+def _cover_letter_output_path(job: dict) -> tuple[str, str]:
+    """Build output filename and full path for a generated cover letter."""
+    today_date = datetime.today().strftime("%Y-%m-%d")
+    safe_company = sanitize_filename(job.get('company', 'Company'))
+    safe_title = sanitize_filename(job.get('title', 'Role'))
+    output_filename = f"CoverLetter_{today_date}_{safe_company}_{safe_title}.docx"
+    output_path = os.path.join(app.config['CV_OUTPUT_DIR'], output_filename)
+    return output_filename, output_path
+
+
+def _save_job_cv_content(cv_filename: str, tailored_content: dict, **kwargs) -> None:
+    save_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename, tailored_content, **kwargs)
 
 
 def _load_job_cv_store(cv_filename: str) -> dict | None:
     return load_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename)
+
+
+def _generate_and_save_cover_letter(
+    job: dict,
+    job_id: int | None,
+    profile: dict,
+    tailored_content: dict,
+    cv_filename: str,
+    *,
+    reset_cover_letter_chat: bool = False,
+) -> tuple[str, str, dict]:
+    """Generate a cover letter docx and persist its structured content."""
+    cl_filename, cl_path = _cover_letter_output_path(job)
+    generator = CoverLetterGenerator()
+    cl_content = generator.generate(job, profile, tailored_content)
+    CoverLetterBuilder().build(cl_path, cl_content)
+
+    if job_id:
+        job['cover_letter_filename'] = cl_filename
+        job_repo.update_job(job_id, job)
+
+    store = _load_job_cv_store(cv_filename) or {}
+    _save_job_cv_content(
+        cv_filename,
+        store.get('tailored_content', tailored_content),
+        chat_history=store.get('chat_history', []),
+        cover_letter=cl_content,
+        cover_letter_chat_history=(
+            [] if reset_cover_letter_chat else store.get('cover_letter_chat_history', [])
+        ),
+    )
+    return cl_filename, cl_path, cl_content
 
 
 def _cv_preview_context(
@@ -179,20 +224,27 @@ def _cv_preview_context(
     profile = profile_repo.get_profile()
     content = tailored_content or (store or {}).get('tailored_content', {})
     chat_history = (store or {}).get('chat_history', [])
+    cover_letter = (store or {}).get('cover_letter', {})
+    cover_letter_chat_history = (store or {}).get('cover_letter_chat_history', [])
     categories = matched_categories or CVChatEditor.content_to_matched_categories(content)
     job_id = job.get('id')
+    cover_letter_filename = job.get('cover_letter_filename', '')
 
     return {
         'job': job,
         'job_id': job_id,
         'profile_name': profile.get('full_name', ''),
         'cv_filename': cv_filename,
+        'cover_letter_filename': cover_letter_filename,
         'tailored_content': content,
+        'cover_letter': cover_letter,
         'matched_categories': categories,
         'analysis': analysis or {},
         'generation_meta': generation_meta or {},
         'rag_chunk_count': rag_chunk_count,
         'chat_history': chat_history,
+        'cover_letter_chat_history': cover_letter_chat_history,
+        'has_cover_letter': bool(cover_letter_filename and cover_letter.get('body_paragraphs')),
         'show_success_banner': show_success_banner,
         'return_folder': return_folder,
         'return_search': return_search,
@@ -204,7 +256,15 @@ def _cv_preview_context(
             if job_id
             else url_for('download_cv')
         ),
-        'chat_api_url': url_for('cv_chat', job_id=job_id) if job_id else None,
+        'cover_letter_download_url': (
+            url_for('download_job_cover_letter', job_id=job_id)
+            if job_id and cover_letter_filename
+            else None
+        ),
+        'chat_api_url': url_for('document_chat', job_id=job_id) if job_id else None,
+        'generate_cover_letter_url': (
+            url_for('generate_job_cover_letter', job_id=job_id) if job_id else None
+        ),
     }
 
 
@@ -275,13 +335,24 @@ def _run_single_cv_task(
     job['matched_categories'] = matched_categories
     job['cv_filename'] = output_filename
     job_repo.update_job(job_id, job)
-    _save_job_cv_content(output_filename, tailored_content)
+    _save_job_cv_content(output_filename, tailored_content, chat_history=[])
+
+    try:
+        cl_filename, _, cl_content = _generate_and_save_cover_letter(
+            job, job_id, profile, tailored_content, output_filename
+        )
+    except Exception as cl_error:
+        logger.error('Cover letter generation failed for job %s: %s', job_id, cl_error)
+        cl_filename = ''
+        cl_content = {}
 
     complete_task(
         task_id,
         {
             'job': job,
             'cv_filename': output_filename,
+            'cover_letter_filename': cl_filename,
+            'cover_letter': cl_content,
             'output_path': output_path,
             'matched_categories': matched_categories,
             'tailored_content': tailored_content,
@@ -361,7 +432,13 @@ def _run_batch_cv_task(task_id: str, profile: dict, jobs: list[dict]) -> None:
                 }
                 job['cv_filename'] = output_filename
                 job_repo.update_job(job_id, job)
-                _save_job_cv_content(output_filename, tailored_content)
+                _save_job_cv_content(output_filename, tailored_content, chat_history=[])
+                try:
+                    _generate_and_save_cover_letter(
+                        job, job_id, profile, tailored_content, output_filename
+                    )
+                except Exception as cl_error:
+                    logger.error('Batch cover letter failed for %s: %s', title, cl_error)
         except Exception as job_error:
             logger.error('Batch CV failed for %s: %s', title, job_error)
             failed_jobs.append(job)
@@ -967,9 +1044,10 @@ def preview_job_cv(job_id):
     return render_template('cv_success.html', **context)
 
 
+@app.route('/api/jobs/<int:job_id>/documents/chat', methods=['POST'])
 @app.route('/api/jobs/<int:job_id>/cv/chat', methods=['POST'])
-def cv_chat(job_id):
-    """Apply a chat instruction to refine a generated CV."""
+def document_chat(job_id):
+    """Apply a chat instruction to refine a generated CV or cover letter."""
     job = job_repo.get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
@@ -981,18 +1059,58 @@ def cv_chat(job_id):
 
     payload = request.get_json(silent=True) or {}
     user_message = str(payload.get('message', '')).strip()
+    document_type = str(payload.get('document', 'cv')).strip().lower()
     if not user_message:
         return jsonify({'error': 'Message is required'}), 400
 
-    store = _load_job_cv_store(cv_filename)
-    if not store or not store.get('tailored_content'):
-        return jsonify({'error': 'CV content not available for editing'}), 404
-
+    store = _load_job_cv_store(cv_filename) or {}
     profile = profile_repo.get_profile()
-    chat_history = store.get('chat_history', [])
-    current_content = store['tailored_content']
 
     try:
+        if document_type == 'cover_letter':
+            cl_filename = job.get('cover_letter_filename', '')
+            cl_path = os.path.join(app.config['CV_OUTPUT_DIR'], cl_filename)
+            if not cl_filename or not store.get('cover_letter'):
+                return jsonify({'error': 'Cover letter not available for editing'}), 404
+
+            chat_history = store.get('cover_letter_chat_history', [])
+            editor = CoverLetterChatEditor()
+            result = editor.modify(
+                current_content=store['cover_letter'],
+                user_message=user_message,
+                job=job,
+                profile=profile,
+                tailored_cv_content=store.get('tailored_content', {}),
+                chat_history=chat_history,
+            )
+            updated_content = result['content']
+            reply = result['reply']
+            editor.rebuild_document(cl_path, updated_content)
+
+            chat_history = chat_history + [
+                {'role': 'user', 'content': user_message},
+                {'role': 'assistant', 'content': reply},
+            ]
+            _save_job_cv_content(
+                cv_filename,
+                store.get('tailored_content', {}),
+                chat_history=store.get('chat_history', []),
+                cover_letter=updated_content,
+                cover_letter_chat_history=chat_history,
+            )
+
+            return jsonify({
+                'reply': reply,
+                'document': 'cover_letter',
+                'cover_letter': updated_content,
+                'cover_letter_chat_history': chat_history,
+            })
+
+        if not store.get('tailored_content'):
+            return jsonify({'error': 'CV content not available for editing'}), 404
+
+        chat_history = store.get('chat_history', [])
+        current_content = store['tailored_content']
         editor = CVChatEditor()
         result = editor.modify(
             current_content=current_content,
@@ -1013,11 +1131,12 @@ def cv_chat(job_id):
             {'role': 'user', 'content': user_message},
             {'role': 'assistant', 'content': reply},
         ]
-        save_cv_content(
-            app.config['CV_OUTPUT_DIR'],
+        _save_job_cv_content(
             cv_filename,
             updated_content,
             chat_history=chat_history,
+            cover_letter=store.get('cover_letter', {}),
+            cover_letter_chat_history=store.get('cover_letter_chat_history', []),
         )
 
         session['current_cv'] = cv_path
@@ -1025,13 +1144,46 @@ def cv_chat(job_id):
 
         return jsonify({
             'reply': reply,
+            'document': 'cv',
             'content': updated_content,
             'matched_categories': matched_categories,
             'chat_history': chat_history,
         })
     except Exception as exc:
-        logger.error('CV chat edit failed for job %s: %s', job_id, exc)
+        logger.error('Document chat edit failed for job %s: %s', job_id, exc)
         return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/jobs/<int:job_id>/cover-letter/generate', methods=['POST'])
+def generate_job_cover_letter(job_id):
+    """Generate or regenerate a cover letter from the job CV and description."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return jsonify({'error': 'Generate a CV first before creating a cover letter'}), 400
+
+    store = _load_job_cv_store(cv_filename)
+    tailored_content = (store or {}).get('tailored_content', {})
+    if not tailored_content:
+        return jsonify({'error': 'CV content not found. Regenerate the CV first.'}), 404
+
+    profile = profile_repo.get_profile()
+    try:
+        cl_filename, _, cl_content = _generate_and_save_cover_letter(
+            job, job_id, profile, tailored_content, cv_filename
+        )
+        return jsonify({
+            'cover_letter_filename': cl_filename,
+            'cover_letter': cl_content,
+            'cover_letter_download_url': url_for('download_job_cover_letter', job_id=job_id),
+        })
+    except Exception as exc:
+        logger.error('Cover letter generation failed for job %s: %s', job_id, exc)
+        return jsonify({'error': str(exc)}), 500
+
 
 @app.route('/download_cv')
 def download_cv():
@@ -1060,6 +1212,23 @@ def download_job_cv(job_id):
         return redirect(url_for('manage_jobs'))
 
     return send_file(cv_path, as_attachment=True, download_name=cv_filename)
+
+
+@app.route('/jobs/<int:job_id>/cover-letter')
+def download_job_cover_letter(job_id):
+    """Download the AI-generated cover letter stored for a job."""
+    job = job_repo.get_job(job_id)
+    cl_filename = (job or {}).get('cover_letter_filename', '')
+    if not job or not cl_filename:
+        flash('No cover letter has been generated for this job yet', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    cl_path = os.path.join(app.config['CV_OUTPUT_DIR'], cl_filename)
+    if not os.path.exists(cl_path):
+        flash('Cover letter file not found on disk', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    return send_file(cl_path, as_attachment=True, download_name=cl_filename)
 
 
 @app.route('/make_all_cvs')

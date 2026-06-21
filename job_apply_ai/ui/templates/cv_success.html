@@ -1,149 +1,63 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{% if show_success_banner %}CV Generated Successfully{% else %}CV Preview & Editor{% endif %}</title>
+    <title>{% if show_success_banner %}Application Pack Ready{% else %}CV & Cover Letter Editor{% endif %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            padding-top: 30px;
-            padding-bottom: 50px;
-            color: #343a40;
-        }
-        .success-header {
-            background: linear-gradient(135deg, #198754 0%, #20c997 100%);
-            padding: 2.5rem;
-            border-radius: 1rem;
-            margin-bottom: 2rem;
-            color: white;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8f9fa; padding-top: 30px; padding-bottom: 50px; color: #343a40; }
+        .success-header { background: linear-gradient(135deg, #198754 0%, #20c997 100%); padding: 2.5rem; border-radius: 1rem; margin-bottom: 2rem; color: white; box-shadow: 0 10px 20px rgba(0,0,0,0.1); text-align: center; }
         .success-icon { font-size: 4rem; margin-bottom: 1rem; }
-        .card {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-            margin-bottom: 1.5rem;
-            overflow: hidden;
-        }
-        .card-header {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            color: white;
-            font-weight: 600;
-            padding: 1rem 1.25rem;
-            border-bottom: none;
-        }
-        .preview-pane {
-            background: white;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-            min-height: 520px;
-            max-height: 72vh;
-            overflow-y: auto;
-        }
-        .preview-header {
-            border-bottom: 2px solid #0d6efd;
-            padding: 1.5rem;
-            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-        }
-        .preview-name {
-            font-size: 1.75rem;
-            font-weight: 700;
-            color: #212529;
-        }
-        .preview-title {
-            font-size: 1.1rem;
-            color: #0d6efd;
-            font-weight: 600;
-        }
-        .preview-section {
-            padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid #eef2f7;
-        }
+        .card { border: none; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 1.5rem; overflow: hidden; }
+        .card-header { background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%); color: white; font-weight: 600; padding: 1rem 1.25rem; border-bottom: none; }
+        .preview-pane { background: white; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); min-height: 520px; max-height: 72vh; overflow-y: auto; }
+        .preview-header { border-bottom: 2px solid #0d6efd; padding: 1.5rem; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
+        .preview-name { font-size: 1.75rem; font-weight: 700; color: #212529; }
+        .preview-title { font-size: 1.1rem; color: #0d6efd; font-weight: 600; }
+        .preview-section { padding: 1.25rem 1.5rem; border-bottom: 1px solid #eef2f7; }
         .preview-section:last-child { border-bottom: none; }
-        .preview-section h6 {
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-size: 0.78rem;
-            color: #6c757d;
-            margin-bottom: 0.75rem;
-            font-weight: 700;
-        }
-        .skill-pill {
-            display: inline-block;
-            background-color: #f8f9fa;
-            padding: 0.35rem 0.75rem;
-            border-radius: 2rem;
-            margin: 0 0.4rem 0.4rem 0;
-            font-size: 0.85rem;
-            color: #495057;
-            border: 1px solid #dee2e6;
-        }
+        .preview-section h6 { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.78rem; color: #6c757d; margin-bottom: 0.75rem; font-weight: 700; }
+        .letter-meta { color: #6c757d; margin-bottom: 0.75rem; }
+        .letter-paragraph { margin-bottom: 1rem; line-height: 1.6; }
+        .skill-pill { display: inline-block; background-color: #f8f9fa; padding: 0.35rem 0.75rem; border-radius: 2rem; margin: 0 0.4rem 0.4rem 0; font-size: 0.85rem; color: #495057; border: 1px solid #dee2e6; }
         .skill-pill.matched { background: #e7f1ff; border-color: #b6d4fe; color: #084298; }
         .skill-pill.missing { background: #fff3cd; border-color: #ffecb5; color: #664d03; }
         .experience-block { margin-bottom: 1rem; }
-        .experience-block:last-child { margin-bottom: 0; }
         .experience-role { font-weight: 600; color: #212529; }
         .experience-meta { color: #6c757d; font-size: 0.9rem; margin-bottom: 0.35rem; }
-        .chat-pane {
-            display: flex;
-            flex-direction: column;
-            height: 72vh;
-            min-height: 520px;
-        }
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 1rem;
-            background: #f8f9fa;
-        }
-        .chat-message {
-            max-width: 92%;
-            margin-bottom: 0.85rem;
-            padding: 0.75rem 1rem;
-            border-radius: 1rem;
-            line-height: 1.45;
-            white-space: pre-wrap;
-        }
-        .chat-message.user {
-            margin-left: auto;
-            background: #0d6efd;
-            color: white;
-            border-bottom-right-radius: 0.25rem;
-        }
-        .chat-message.assistant {
-            background: white;
-            border: 1px solid #dee2e6;
-            border-bottom-left-radius: 0.25rem;
-        }
-        .chat-input-area {
-            border-top: 1px solid #dee2e6;
-            padding: 1rem;
-            background: white;
-        }
-        .chat-empty {
-            color: #6c757d;
-            text-align: center;
-            padding: 2rem 1rem;
-        }
+        .chat-pane { display: flex; flex-direction: column; height: 72vh; min-height: 520px; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 1rem; background: #f8f9fa; }
+        .chat-message { max-width: 92%; margin-bottom: 0.85rem; padding: 0.75rem 1rem; border-radius: 1rem; line-height: 1.45; white-space: pre-wrap; }
+        .chat-message.user { margin-left: auto; background: #0d6efd; color: white; border-bottom-right-radius: 0.25rem; }
+        .chat-message.assistant { background: white; border: 1px solid #dee2e6; border-bottom-left-radius: 0.25rem; }
+        .chat-input-area { border-top: 1px solid #dee2e6; padding: 1rem; background: white; }
+        .chat-empty { color: #6c757d; text-align: center; padding: 2rem 1rem; }
         .job-sidebar .job-title { font-size: 1.2rem; font-weight: 600; }
         .job-sidebar .company-name { color: #6c757d; }
         .typing-indicator { color: #6c757d; font-size: 0.9rem; padding: 0.5rem 1rem; }
+        .doc-tabs .nav-link { border-radius: 0.75rem 0.75rem 0 0; font-weight: 600; }
+        .empty-cover-letter { text-align: center; padding: 4rem 2rem; color: #6c757d; }
     </style>
 </head>
 <body>
     <div class="container-fluid px-4">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <a href="{{ back_url }}" class="btn btn-secondary btn-sm">
                 <i class="fas fa-arrow-left me-2"></i>{{ back_label }}
             </a>
-            <div class="d-flex gap-2">
-                <a href="{{ download_url }}" class="btn btn-primary btn-sm" id="downloadBtn">
+            <div class="d-flex gap-2 flex-wrap">
+                <a href="{{ download_url }}" class="btn btn-primary btn-sm">
                     <i class="fas fa-download me-2"></i>Download CV
                 </a>
+                {% if cover_letter_download_url %}
+                <a href="{{ cover_letter_download_url }}" class="btn btn-outline-primary btn-sm" id="downloadCoverLetterBtn">
+                    <i class="fas fa-envelope me-2"></i>Download Cover Letter
+                </a>
+                {% else %}
+                <button type="button" class="btn btn-outline-primary btn-sm d-none" id="downloadCoverLetterBtn">
+                    <i class="fas fa-envelope me-2"></i>Download Cover Letter
+                </button>
+                {% endif %}
             </div>
         </div>
 
@@ -151,12 +65,12 @@
         <div class="success-header">
             <div class="success-icon"><i class="fas fa-check-circle"></i></div>
             <h1 class="display-6 fw-bold mb-2">CV Generated Successfully!</h1>
-            <p class="lead mb-0">Preview your tailored CV below and chat with the AI to refine it before downloading.</p>
+            <p class="lead mb-0">Preview your CV and cover letter, then chat with the AI to refine either document before downloading.</p>
         </div>
         {% else %}
         <div class="mb-3">
-            <h1 class="h3 fw-bold mb-1"><i class="fas fa-file-lines me-2 text-primary"></i>CV Preview & Editor</h1>
-            <p class="text-muted mb-0">Review your tailored CV and ask the AI to make changes.</p>
+            <h1 class="h3 fw-bold mb-1"><i class="fas fa-file-lines me-2 text-primary"></i>CV & Cover Letter Editor</h1>
+            <p class="text-muted mb-0">Review your application documents and ask the AI to make changes.</p>
         </div>
         {% endif %}
 
@@ -197,40 +111,49 @@
             </div>
 
             <div class="col-lg-5">
-                <div class="preview-pane" id="cvPreview">
-                    <!-- Rendered by JavaScript from tailored_content -->
+                <ul class="nav nav-tabs doc-tabs mb-0" id="documentTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="cv-tab" data-bs-toggle="tab" data-bs-target="#cvPanel" type="button" role="tab">CV</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="cover-letter-tab" data-bs-toggle="tab" data-bs-target="#coverLetterPanel" type="button" role="tab">Cover Letter</button>
+                    </li>
+                </ul>
+                <div class="tab-content">
+                    <div class="tab-pane fade show active" id="cvPanel" role="tabpanel">
+                        <div class="preview-pane" id="cvPreview"></div>
+                    </div>
+                    <div class="tab-pane fade" id="coverLetterPanel" role="tabpanel">
+                        <div class="preview-pane" id="coverLetterPreview"></div>
+                    </div>
                 </div>
             </div>
 
             <div class="col-lg-4">
                 <div class="card chat-pane">
-                    <div class="card-header">
+                    <div class="card-header" id="chatHeader">
                         <i class="fas fa-comments me-2"></i>Chat to Modify CV
                     </div>
                     <div class="chat-messages" id="chatMessages"></div>
                     <div class="typing-indicator d-none" id="chatTyping">
-                        <i class="fas fa-spinner fa-spin me-2"></i>AI is updating your CV…
+                        <i class="fas fa-spinner fa-spin me-2"></i><span id="chatTypingText">AI is updating your CV…</span>
                     </div>
                     {% if chat_api_url %}
                     <div class="chat-input-area">
                         <form id="chatForm">
                             <div class="input-group">
-                                <textarea class="form-control" id="chatInput" rows="2"
-                                    placeholder="e.g. Make the summary shorter and emphasize Python experience"
-                                    required></textarea>
+                                <textarea class="form-control" id="chatInput" rows="2" required></textarea>
                                 <button type="submit" class="btn btn-primary" id="chatSubmit">
                                     <i class="fas fa-paper-plane"></i>
                                 </button>
                             </div>
-                            <div class="form-text mt-2">
+                            <div class="form-text mt-2" id="chatHelpText">
                                 Ask for changes to summary, skills, experience bullets, or professional title.
                             </div>
                         </form>
                     </div>
                     {% else %}
-                    <div class="chat-input-area text-muted small">
-                        Chat editing is unavailable for this session.
-                    </div>
+                    <div class="chat-input-area text-muted small">Chat editing is unavailable for this session.</div>
                     {% endif %}
                 </div>
             </div>
@@ -239,17 +162,45 @@
 
     <script id="profileNameData" type="application/json">{{ profile_name | tojson }}</script>
     <script id="cvContentData" type="application/json">{{ tailored_content | tojson }}</script>
+    <script id="coverLetterData" type="application/json">{{ cover_letter | tojson }}</script>
     <script id="chatHistoryData" type="application/json">{{ chat_history | tojson }}</script>
+    <script id="coverLetterChatData" type="application/json">{{ cover_letter_chat_history | tojson }}</script>
     <script>
         const chatApiUrl = {{ chat_api_url | tojson }};
+        const generateCoverLetterUrl = {{ generate_cover_letter_url | tojson }};
         const profileName = JSON.parse(document.getElementById('profileNameData').textContent || '""');
         let cvContent = JSON.parse(document.getElementById('cvContentData').textContent || '{}');
-        let chatHistory = JSON.parse(document.getElementById('chatHistoryData').textContent || '[]');
+        let coverLetter = JSON.parse(document.getElementById('coverLetterData').textContent || '{}');
+        let activeDocument = 'cv';
+        let cvChatHistory = JSON.parse(document.getElementById('chatHistoryData').textContent || '[]');
+        let coverLetterChatHistory = JSON.parse(document.getElementById('coverLetterChatData').textContent || '[]');
+
+        const chatPlaceholders = {
+            cv: 'e.g. Make the summary shorter and emphasize Python experience',
+            cover_letter: 'e.g. Make the opening paragraph more enthusiastic and mention the company mission',
+        };
+        const chatHelp = {
+            cv: 'Ask for changes to summary, skills, experience bullets, or professional title.',
+            cover_letter: 'Ask for changes to tone, opening hook, paragraph length, or closing call to action.',
+        };
+        const chatEmptyHints = {
+            cv: '"Shorten the summary to 2 sentences"<br>"Reorder skills to put cloud tools first"',
+            cover_letter: '"Make the tone more confident"<br>"Shorten to 3 paragraphs and mention remote work interest"',
+        };
 
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text || '';
             return div.innerHTML;
+        }
+
+        function activeChatHistory() {
+            return activeDocument === 'cover_letter' ? coverLetterChatHistory : cvChatHistory;
+        }
+
+        function setActiveChatHistory(history) {
+            if (activeDocument === 'cover_letter') coverLetterChatHistory = history;
+            else cvChatHistory = history;
         }
 
         function renderSkillPills(items, cssClass = '') {
@@ -263,9 +214,7 @@
         }
 
         function renderExperience(entries) {
-            if (!entries || !entries.length) {
-                return '<p class="text-muted small mb-0">No experience highlights.</p>';
-            }
+            if (!entries || !entries.length) return '<p class="text-muted small mb-0">No experience highlights.</p>';
             return entries.map(entry => `
                 <div class="experience-block">
                     <div class="experience-role">${escapeHtml(entry.role || '')}</div>
@@ -276,9 +225,7 @@
         }
 
         function renderProjects(entries) {
-            if (!entries || !entries.length) {
-                return '<p class="text-muted small mb-0">No projects listed.</p>';
-            }
+            if (!entries || !entries.length) return '<p class="text-muted small mb-0">No projects listed.</p>';
             return entries.map(entry => `
                 <div class="experience-block">
                     <div class="experience-role">${escapeHtml(entry.name || '')}</div>
@@ -288,86 +235,145 @@
             `).join('');
         }
 
-        function renderPreview(content) {
+        function renderCvPreview() {
             const preview = document.getElementById('cvPreview');
-            const title = content.professional_title || '';
+            const title = cvContent.professional_title || '';
             preview.innerHTML = `
                 <div class="preview-header">
                     <div class="preview-name">${escapeHtml(profileName || 'Your Name')}</div>
                     ${title ? `<div class="preview-title">${escapeHtml(title)}</div>` : ''}
                 </div>
+                <div class="preview-section"><h6>Professional Summary</h6><p class="mb-0">${escapeHtml(cvContent.professional_summary || 'No summary yet.')}</p></div>
+                <div class="preview-section"><h6>Skills Matching Job</h6>${renderSkillPills(cvContent.job_matched_skills, 'matched')}</div>
+                <div class="preview-section"><h6>Job Skills Not In CV</h6>${renderSkillPills(cvContent.job_skills_not_in_cv, 'missing')}</div>
+                <div class="preview-section"><h6>Technical Skills</h6>${renderSkillPills(cvContent.technical_skills || cvContent.key_skills)}</div>
+                <div class="preview-section"><h6>Tools & Platforms</h6>${renderSkillPills(cvContent.tools_platforms)}</div>
+                <div class="preview-section"><h6>Experience Highlights</h6>${renderExperience(cvContent.experience_highlights)}</div>
+                <div class="preview-section"><h6>Personal Projects</h6>${renderProjects(cvContent.personal_projects)}</div>
+                <div class="preview-section"><h6>Soft Skills</h6>${renderSkillPills(cvContent.soft_skills)}</div>
+                <div class="preview-section"><h6>Languages</h6>${renderSkillPills(cvContent.languages)}</div>
+            `;
+        }
+
+        function renderCoverLetterPreview() {
+            const preview = document.getElementById('coverLetterPreview');
+            const paragraphs = coverLetter.body_paragraphs || [];
+            if (!paragraphs.length) {
+                preview.innerHTML = `
+                    <div class="empty-cover-letter">
+                        <i class="fas fa-envelope-open-text fa-3x mb-3"></i>
+                        <h5>No cover letter yet</h5>
+                        <p class="mb-3">Generate one from your CV and the job description.</p>
+                        ${generateCoverLetterUrl ? '<button type="button" class="btn btn-primary" id="generateCoverLetterBtn"><i class="fas fa-wand-magic-sparkles me-2"></i>Generate Cover Letter</button>' : ''}
+                    </div>`;
+                bindGenerateCoverLetterButton();
+                return;
+            }
+            preview.innerHTML = `
                 <div class="preview-section">
-                    <h6>Professional Summary</h6>
-                    <p class="mb-0">${escapeHtml(content.professional_summary || 'No summary yet.')}</p>
+                    ${coverLetter.date ? `<div class="letter-meta">${escapeHtml(coverLetter.date)}</div>` : ''}
+                    ${coverLetter.recipient_name ? `<div>${escapeHtml(coverLetter.recipient_name)}</div>` : ''}
+                    ${coverLetter.recipient_company ? `<div class="letter-meta">${escapeHtml(coverLetter.recipient_company)}</div>` : ''}
                 </div>
                 <div class="preview-section">
-                    <h6>Skills Matching Job</h6>
-                    ${renderSkillPills(content.job_matched_skills, 'matched')}
-                </div>
-                <div class="preview-section">
-                    <h6>Job Skills Not In CV</h6>
-                    ${renderSkillPills(content.job_skills_not_in_cv, 'missing')}
-                </div>
-                <div class="preview-section">
-                    <h6>Technical Skills</h6>
-                    ${renderSkillPills(content.technical_skills || content.key_skills)}
-                </div>
-                <div class="preview-section">
-                    <h6>Tools & Platforms</h6>
-                    ${renderSkillPills(content.tools_platforms)}
-                </div>
-                <div class="preview-section">
-                    <h6>Experience Highlights</h6>
-                    ${renderExperience(content.experience_highlights)}
-                </div>
-                <div class="preview-section">
-                    <h6>Personal Projects</h6>
-                    ${renderProjects(content.personal_projects)}
-                </div>
-                <div class="preview-section">
-                    <h6>Soft Skills</h6>
-                    ${renderSkillPills(content.soft_skills)}
-                </div>
-                <div class="preview-section">
-                    <h6>Languages</h6>
-                    ${renderSkillPills(content.languages)}
+                    <p class="mb-3">${escapeHtml(coverLetter.greeting || 'Dear Hiring Manager,')}</p>
+                    ${paragraphs.map(p => `<p class="letter-paragraph">${escapeHtml(p)}</p>`).join('')}
+                    <p class="mb-1">${escapeHtml(coverLetter.closing || 'Yours sincerely,')}</p>
+                    <p class="fw-semibold mb-0">${escapeHtml(coverLetter.signature_name || profileName || '')}</p>
                 </div>
             `;
         }
 
+        function bindGenerateCoverLetterButton() {
+            const btn = document.getElementById('generateCoverLetterBtn');
+            if (!btn || btn.dataset.bound) return;
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', async () => {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating…';
+                try {
+                    const response = await fetch(generateCoverLetterUrl, { method: 'POST' });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Generation failed');
+                    coverLetter = data.cover_letter || coverLetter;
+                    showCoverLetterDownload(data.cover_letter_download_url);
+                    renderCoverLetterPreview();
+                    document.getElementById('cover-letter-tab').click();
+                } catch (error) {
+                    alert(error.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-wand-magic-sparkles me-2"></i>Generate Cover Letter';
+                }
+            });
+        }
+
+        function showCoverLetterDownload(url) {
+            const btn = document.getElementById('downloadCoverLetterBtn');
+            if (!btn || !url) return;
+            btn.href = url;
+            btn.classList.remove('d-none');
+            if (btn.tagName === 'BUTTON') {
+                const link = document.createElement('a');
+                link.id = 'downloadCoverLetterBtn';
+                link.className = btn.className.replace('d-none', '').trim();
+                link.href = url;
+                link.innerHTML = btn.innerHTML;
+                btn.replaceWith(link);
+            }
+        }
+
+        function updateChatChrome() {
+            const label = activeDocument === 'cover_letter' ? 'Cover Letter' : 'CV';
+            document.getElementById('chatHeader').innerHTML = `<i class="fas fa-comments me-2"></i>Chat to Modify ${label}`;
+            document.getElementById('chatTypingText').textContent = `AI is updating your ${label}…`;
+            document.getElementById('chatInput').placeholder = chatPlaceholders[activeDocument];
+            document.getElementById('chatHelpText').textContent = chatHelp[activeDocument];
+            renderChat();
+        }
+
         function renderChat() {
             const container = document.getElementById('chatMessages');
-            if (!chatHistory.length) {
+            const history = activeChatHistory();
+            if (!history.length) {
                 container.innerHTML = `
                     <div class="chat-empty">
                         <i class="fas fa-lightbulb fa-2x mb-3 d-block"></i>
                         <p class="mb-1">Try asking:</p>
-                        <p class="small mb-0">"Shorten the summary to 2 sentences"<br>
-                        "Add more emphasis on leadership in my last role"<br>
-                        "Reorder skills to put cloud tools first"</p>
+                        <p class="small mb-0">${chatEmptyHints[activeDocument]}</p>
                     </div>`;
                 return;
             }
-            container.innerHTML = chatHistory.map(msg => `
+            container.innerHTML = history.map(msg => `
                 <div class="chat-message ${msg.role === 'user' ? 'user' : 'assistant'}">${escapeHtml(msg.content)}</div>
             `).join('');
             container.scrollTop = container.scrollHeight;
         }
 
-        renderPreview(cvContent);
-        renderChat();
+        document.getElementById('cv-tab').addEventListener('shown.bs.tab', () => { activeDocument = 'cv'; updateChatChrome(); });
+        document.getElementById('cover-letter-tab').addEventListener('shown.bs.tab', () => { activeDocument = 'cover_letter'; updateChatChrome(); });
+
+        renderCvPreview();
+        renderCoverLetterPreview();
+        updateChatChrome();
 
         const chatForm = document.getElementById('chatForm');
         if (chatForm && chatApiUrl) {
             chatForm.addEventListener('submit', async (event) => {
                 event.preventDefault();
+                if (activeDocument === 'cover_letter' && !(coverLetter.body_paragraphs || []).length) {
+                    alert('Generate a cover letter first.');
+                    return;
+                }
                 const input = document.getElementById('chatInput');
                 const submitBtn = document.getElementById('chatSubmit');
                 const typing = document.getElementById('chatTyping');
                 const message = input.value.trim();
                 if (!message) return;
 
-                chatHistory.push({ role: 'user', content: message });
+                let history = activeChatHistory();
+                history = history.concat([{ role: 'user', content: message }]);
+                setActiveChatHistory(history);
                 renderChat();
                 input.value = '';
                 input.disabled = true;
@@ -378,21 +384,24 @@
                     const response = await fetch(chatApiUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message }),
+                        body: JSON.stringify({ message, document: activeDocument }),
                     });
                     const data = await response.json();
-                    if (!response.ok) {
-                        throw new Error(data.error || 'Request failed');
+                    if (!response.ok) throw new Error(data.error || 'Request failed');
+
+                    if (data.document === 'cover_letter') {
+                        coverLetter = data.cover_letter || coverLetter;
+                        setActiveChatHistory(data.cover_letter_chat_history || history);
+                        renderCoverLetterPreview();
+                    } else {
+                        cvContent = data.content || cvContent;
+                        setActiveChatHistory(data.chat_history || history);
+                        renderCvPreview();
                     }
-                    cvContent = data.content || cvContent;
-                    chatHistory = data.chat_history || chatHistory;
-                    renderPreview(cvContent);
                     renderChat();
                 } catch (error) {
-                    chatHistory.push({
-                        role: 'assistant',
-                        content: 'Sorry, I could not apply that change: ' + error.message,
-                    });
+                    history = activeChatHistory().concat([{ role: 'assistant', content: 'Sorry, I could not apply that change: ' + error.message }]);
+                    setActiveChatHistory(history);
                     renderChat();
                 } finally {
                     input.disabled = false;

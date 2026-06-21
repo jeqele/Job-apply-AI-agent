@@ -240,6 +240,9 @@ class JobRepository:
         values["cv_filename"] = _serialize_value(
             job.get("cv_filename", existing.get("cv_filename", ""))
         )
+        values["cover_letter_filename"] = _serialize_value(
+            job.get("cover_letter_filename", existing.get("cover_letter_filename", ""))
+        )
         dedupe_key = compute_dedupe_key(merged)
         if dedupe_key:
             values["dedupe_key"] = dedupe_key
