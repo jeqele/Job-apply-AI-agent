@@ -324,6 +324,9 @@
                             <i class="fas fa-external-link-alt me-2"></i>View Job
                         </a>
                         {% if job.cv_filename %}
+                            <a href="{{ url_for('preview_job_cv', job_id=job.id) }}" class="btn btn-outline-info">
+                                <i class="fas fa-eye me-2"></i>Preview & Edit
+                            </a>
                             <a href="{{ url_for('download_job_cv', job_id=job.id) }}" class="btn btn-outline-success">
                                 <i class="fas fa-file-word me-2"></i>Download CV
                             </a>

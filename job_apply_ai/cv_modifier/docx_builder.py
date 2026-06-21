@@ -10,12 +10,15 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.text.paragraph import Paragraph
 
+from job_apply_ai.storage.user_profile import parse_professional_titles
+
 logger = logging.getLogger(__name__)
 
 SECTION_KEYWORDS = {
     "summary": [
         "summary",
         "profile",
+        "personal summary",
         "professional summary",
         "about me",
         "personal statement",
@@ -30,12 +33,47 @@ SECTION_KEYWORDS = {
         "expertise",
         "qualifications",
     ],
+    "job_matched_skills": [
+        "skills matching job description",
+        "job-matched skills",
+        "matched job skills",
+        "skills in job and cv",
+    ],
+    "job_missing_skills": [
+        "job skills not in cv",
+        "skills not in cv",
+        "job requirements not in cv",
+        "missing job skills",
+    ],
+    "tools": [
+        "tool & platforms",
+        "tools & platforms",
+        "tools and platforms",
+        "tool and platforms",
+        "tools",
+        "platforms",
+    ],
     "experience": [
         "experience",
         "work experience",
         "employment history",
         "professional experience",
         "career history",
+    ],
+    "projects": [
+        "personal projects",
+        "projects",
+        "portfolio",
+        "selected projects",
+    ],
+    "soft_skills": [
+        "soft skills",
+        "interpersonal skills",
+        "personal skills",
+    ],
+    "languages": [
+        "languages",
+        "language skills",
     ],
     "education": [
         "education",
@@ -51,9 +89,17 @@ class CVDocumentBuilder:
     def __init__(self, template_path: str):
         self.template_path = template_path
 
-    def build(self, output_path: str, content: dict[str, Any]) -> bool:
+    def build(
+        self,
+        output_path: str,
+        content: dict[str, Any],
+        profile: dict[str, Any] | None = None,
+    ) -> bool:
         shutil.copy2(self.template_path, output_path)
         doc = Document(output_path)
+
+        if profile:
+            self._fill_header(doc, profile, content)
 
         updated = False
         if content.get("professional_summary"):
@@ -63,12 +109,40 @@ class CVDocumentBuilder:
                 [content["professional_summary"]],
             )
 
-        skills = content.get("key_skills") or []
+        job_matched_skills = content.get("job_matched_skills") or []
+        if job_matched_skills:
+            updated |= self._replace_section(
+                doc,
+                SECTION_KEYWORDS["job_matched_skills"],
+                [self._format_inline_bullets(job_matched_skills)],
+                bullet_style="inline",
+            )
+
+        job_missing_skills = content.get("job_skills_not_in_cv") or []
+        if job_missing_skills:
+            updated |= self._replace_section(
+                doc,
+                SECTION_KEYWORDS["job_missing_skills"],
+                [self._format_inline_bullets(job_missing_skills)],
+                bullet_style="inline",
+            )
+
+        skills = content.get("technical_skills") or content.get("key_skills") or []
         if skills:
             updated |= self._replace_section(
                 doc,
                 SECTION_KEYWORDS["skills"],
-                [f"• {skill}" if not str(skill).startswith("•") else str(skill) for skill in skills],
+                [self._format_inline_bullets(skills)],
+                bullet_style="inline",
+            )
+
+        tools = content.get("tools_platforms") or []
+        if tools:
+            updated |= self._replace_section(
+                doc,
+                SECTION_KEYWORDS["tools"],
+                [self._format_inline_bullets(tools)],
+                bullet_style="inline",
             )
 
         experience_entries = content.get("experience_highlights") or []
@@ -78,6 +152,28 @@ class CVDocumentBuilder:
                 SECTION_KEYWORDS["experience"],
                 self._format_experience_entries(experience_entries),
             )
+
+        project_entries = content.get("personal_projects") or []
+        if project_entries:
+            updated |= self._replace_section(
+                doc,
+                SECTION_KEYWORDS["projects"],
+                self._format_project_entries(project_entries),
+            )
+
+        soft_skills = content.get("soft_skills") or []
+        if soft_skills:
+            updated |= self._replace_section(
+                doc,
+                SECTION_KEYWORDS["soft_skills"],
+                [f"• {skill}" if not str(skill).startswith("•") else str(skill) for skill in soft_skills],
+            )
+
+        language_lines = content.get("languages") or []
+        if isinstance(language_lines, str):
+            language_lines = [language_lines]
+        if language_lines:
+            updated |= self._replace_section(doc, SECTION_KEYWORDS["languages"], language_lines)
 
         education_lines = content.get("education") or []
         if isinstance(education_lines, str):
@@ -99,6 +195,46 @@ class CVDocumentBuilder:
         doc.save(output_path)
         return True
 
+    def _fill_header(
+        self,
+        doc: Document,
+        profile: dict[str, Any],
+        content: dict[str, Any] | None = None,
+    ) -> None:
+        if not doc.paragraphs:
+            return
+
+        name = profile.get("full_name", "").strip()
+        title = str((content or {}).get("professional_title", "")).strip()
+        if not title:
+            titles = parse_professional_titles(profile.get("professional_title", ""))
+            title = titles[0] if len(titles) == 1 else ""
+        doc.paragraphs[0].text = f"{name}\t\t{title}" if name and title else name or title
+
+        if len(doc.paragraphs) < 2:
+            return
+
+        contact_parts = []
+        if profile.get("email"):
+            contact_parts.append(f"Email: {profile['email']}")
+        if profile.get("github"):
+            contact_parts.append(f"GitHub: {profile['github']}")
+        if profile.get("phone"):
+            contact_parts.append(f"Phone: {profile['phone']}")
+        if profile.get("linkedin"):
+            contact_parts.append(f"LinkedIn: {profile['linkedin']}")
+
+        if contact_parts:
+            doc.paragraphs[1].text = " | ".join(contact_parts)
+
+    @staticmethod
+    def _format_inline_bullets(items: list[Any]) -> str:
+        """Join skill/tool items on one line with bullet separators."""
+        cleaned = [str(item).strip().lstrip("•").strip() for item in items if str(item).strip()]
+        if not cleaned:
+            return ""
+        return " • ".join(f"• {item}" for item in cleaned)
+
     def _format_experience_entries(self, entries: list[Any]) -> list[str]:
         lines: list[str] = []
         for entry in entries:
@@ -117,7 +253,31 @@ class CVDocumentBuilder:
             lines.append("")
         return lines
 
-    def _replace_section(self, doc: Document, keywords: list[str], lines: list[str]) -> bool:
+    def _format_project_entries(self, entries: list[Any]) -> list[str]:
+        lines: list[str] = []
+        for entry in entries:
+            if isinstance(entry, str):
+                lines.append(entry)
+                continue
+            name = entry.get("name") or entry.get("title") or "Project"
+            description = entry.get("description") or ""
+            header_parts = [part for part in [name, description] if part]
+            lines.append(" | ".join(header_parts))
+            for bullet in entry.get("bullets") or entry.get("highlights") or []:
+                bullet_text = str(bullet).strip()
+                if bullet_text:
+                    lines.append(f"• {bullet_text.lstrip('•').strip()}")
+            lines.append("")
+        return lines
+
+    def _replace_section(
+        self,
+        doc: Document,
+        keywords: list[str],
+        lines: list[str],
+        *,
+        bullet_style: str = "list",
+    ) -> bool:
         start_idx = self._find_section_start(doc, keywords)
         if start_idx is None:
             return False
@@ -130,10 +290,17 @@ class CVDocumentBuilder:
             if not str(line).strip():
                 anchor = self._insert_paragraph_after(anchor, "")
                 continue
-            anchor = self._insert_paragraph_after(anchor, str(line).lstrip("•").strip())
-            if str(line).startswith("•"):
+
+            text = str(line).strip()
+            if bullet_style == "inline":
+                anchor = self._insert_paragraph_after(anchor, text)
+                anchor.style = "Normal"
+                continue
+
+            anchor = self._insert_paragraph_after(anchor, text.lstrip("•").strip())
+            if text.startswith("•"):
                 anchor.style = "List Bullet"
-            elif "|" in str(line):
+            elif "|" in text:
                 for run in anchor.runs:
                     run.bold = True
         return True
@@ -177,21 +344,37 @@ class CVDocumentBuilder:
         heading.style = "Heading 1"
 
         if content.get("professional_summary"):
-            title = doc.add_paragraph("Professional Summary")
+            title = doc.add_paragraph("Personal Summary")
             title.style = "Heading 2"
             doc.add_paragraph(content["professional_summary"])
 
-        skills = content.get("key_skills") or []
-        if skills:
-            title = doc.add_paragraph("Key Skills")
+        job_matched_skills = content.get("job_matched_skills") or []
+        if job_matched_skills:
+            title = doc.add_paragraph("Skills Matching Job Description")
             title.style = "Heading 2"
-            for skill in skills:
-                paragraph = doc.add_paragraph(str(skill))
-                paragraph.style = "List Bullet"
+            doc.add_paragraph(self._format_inline_bullets(job_matched_skills))
+
+        job_missing_skills = content.get("job_skills_not_in_cv") or []
+        if job_missing_skills:
+            title = doc.add_paragraph("Job Skills Not In CV")
+            title.style = "Heading 2"
+            doc.add_paragraph(self._format_inline_bullets(job_missing_skills))
+
+        skills = content.get("technical_skills") or content.get("key_skills") or []
+        if skills:
+            title = doc.add_paragraph("Technical Skills")
+            title.style = "Heading 2"
+            doc.add_paragraph(self._format_inline_bullets(skills))
+
+        tools = content.get("tools_platforms") or []
+        if tools:
+            title = doc.add_paragraph("Tools & Platforms")
+            title.style = "Heading 2"
+            doc.add_paragraph(self._format_inline_bullets(tools))
 
         experience_entries = content.get("experience_highlights") or []
         if experience_entries:
-            title = doc.add_paragraph("Relevant Experience")
+            title = doc.add_paragraph("Work Experience")
             title.style = "Heading 2"
             for line in self._format_experience_entries(experience_entries):
                 if line.startswith("•"):
@@ -202,6 +385,37 @@ class CVDocumentBuilder:
                     if "|" in line:
                         for run in paragraph.runs:
                             run.bold = True
+
+        project_entries = content.get("personal_projects") or []
+        if project_entries:
+            title = doc.add_paragraph("Personal Projects")
+            title.style = "Heading 2"
+            for line in self._format_project_entries(project_entries):
+                if line.startswith("•"):
+                    paragraph = doc.add_paragraph(line.lstrip("•").strip())
+                    paragraph.style = "List Bullet"
+                elif line.strip():
+                    paragraph = doc.add_paragraph(line)
+                    if "|" in line:
+                        for run in paragraph.runs:
+                            run.bold = True
+
+        soft_skills = content.get("soft_skills") or []
+        if soft_skills:
+            title = doc.add_paragraph("Soft Skills")
+            title.style = "Heading 2"
+            for skill in soft_skills:
+                paragraph = doc.add_paragraph(str(skill))
+                paragraph.style = "List Bullet"
+
+        language_lines = content.get("languages") or []
+        if isinstance(language_lines, str):
+            language_lines = [language_lines]
+        if language_lines:
+            title = doc.add_paragraph("Languages")
+            title.style = "Heading 2"
+            for line in language_lines:
+                doc.add_paragraph(str(line))
 
         education_lines = content.get("education") or []
         if isinstance(education_lines, str):

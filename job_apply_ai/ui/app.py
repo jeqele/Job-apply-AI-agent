@@ -24,7 +24,10 @@ from job_apply_ai.job_status import (
     job_status_label,
 )
 from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer
+from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
+from job_apply_ai.cv_modifier.cv_content_store import load_cv_content, save_cv_content
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
+from job_apply_ai.cv_modifier.profile_importer import ProfileImporter
 from job_apply_ai.ui.cv_tasks import (
     complete_task,
     create_task,
@@ -36,6 +39,16 @@ from job_apply_ai.ui.cv_tasks import (
 from job_apply_ai.utils.helpers import ensure_directory_exists, sanitize_filename
 from job_apply_ai.storage.database import init_db
 from job_apply_ai.storage.job_repository import JobRepository
+from job_apply_ai.storage.user_profile import (
+    UserProfileRepository,
+    get_default_cv_template_path,
+    import_has_changes,
+    merge_profiles,
+    profile_from_form,
+    profile_is_ready,
+    profile_to_form_fields,
+    summarize_import_changes,
+)
 from job_apply_ai.storage.exports import export_jobs
 
 # Configure logging
@@ -60,6 +73,7 @@ ensure_directory_exists(app.config['JOBS_OUTPUT_DIR'])
 # Initialize SQLite database
 init_db()
 job_repo = JobRepository()
+profile_repo = UserProfileRepository()
 
 # Clear abandoned CV generation locks after this many seconds without progress
 CV_GENERATION_STALE_SECONDS = 900
@@ -138,14 +152,70 @@ def _cv_output_path(job: dict) -> tuple[str, str]:
     return output_filename, output_path
 
 
-def _generate_rag_cv(
-    cv_template: str,
+def _save_job_cv_content(cv_filename: str, tailored_content: dict) -> None:
+    save_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename, tailored_content, chat_history=[])
+
+
+def _load_job_cv_store(cv_filename: str) -> dict | None:
+    return load_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename)
+
+
+def _cv_preview_context(
     job: dict,
+    *,
+    tailored_content: dict | None = None,
+    matched_categories: dict | None = None,
+    analysis: dict | None = None,
+    generation_meta: dict | None = None,
+    rag_chunk_count: int = 0,
+    show_success_banner: bool = True,
+    return_folder: str = 'all',
+    return_search: str = '',
+    return_from_manage: bool = False,
+) -> dict:
+    """Build template context for the CV preview / success page."""
+    cv_filename = job.get('cv_filename', '')
+    store = _load_job_cv_store(cv_filename) if cv_filename else None
+    profile = profile_repo.get_profile()
+    content = tailored_content or (store or {}).get('tailored_content', {})
+    chat_history = (store or {}).get('chat_history', [])
+    categories = matched_categories or CVChatEditor.content_to_matched_categories(content)
+    job_id = job.get('id')
+
+    return {
+        'job': job,
+        'job_id': job_id,
+        'profile_name': profile.get('full_name', ''),
+        'cv_filename': cv_filename,
+        'tailored_content': content,
+        'matched_categories': categories,
+        'analysis': analysis or {},
+        'generation_meta': generation_meta or {},
+        'rag_chunk_count': rag_chunk_count,
+        'chat_history': chat_history,
+        'show_success_banner': show_success_banner,
+        'return_folder': return_folder,
+        'return_search': return_search,
+        'return_from_manage': return_from_manage,
+        'back_url': _cv_generation_back_url(return_from_manage, return_folder, return_search),
+        'back_label': 'Back to Jobs' if return_from_manage else 'Back to Job List',
+        'download_url': (
+            url_for('download_job_cv', job_id=job_id)
+            if job_id
+            else url_for('download_cv')
+        ),
+        'chat_api_url': url_for('cv_chat', job_id=job_id) if job_id else None,
+    }
+
+
+def _generate_rag_cv(
+    job: dict,
+    profile: dict,
     *,
     reindex: bool = True,
     task_id: str | None = None,
 ) -> dict:
-    """Generate a tailored CV using RAG + Ollama."""
+    """Generate a tailored CV using RAG + Ollama and the stored user profile."""
     output_filename, output_path = _cv_output_path(job)
     generator = RAGCVGenerator()
 
@@ -160,9 +230,10 @@ def _generate_rag_cv(
             )
 
     result = generator.generate_cv(
-        cv_template,
         job,
         output_path,
+        profile=profile,
+        cv_template_path=get_default_cv_template_path(),
         reindex=reindex,
         on_progress=on_progress,
     )
@@ -183,22 +254,28 @@ def _cv_generation_back_url(return_from_manage: bool, return_folder: str, return
 
 def _run_single_cv_task(
     task_id: str,
-    cv_template: str,
+    profile: dict,
     job: dict,
     job_id: int,
     return_folder: str,
     return_search: str,
     return_from_manage: bool,
 ) -> None:
-    result = _generate_rag_cv(cv_template, job, task_id=task_id)
+    result = _generate_rag_cv(job, profile, task_id=task_id)
     output_path = result['output_path']
     output_filename = result['output_filename']
     tailored_content = result.get('tailored_content', {})
 
-    matched_categories = {'Key Skills': tailored_content.get('key_skills', [])}
+    matched_categories = {
+        'Skills Matching Job Description': tailored_content.get('job_matched_skills', []),
+        'Job Skills Not In CV': tailored_content.get('job_skills_not_in_cv', []),
+        'Technical Skills': tailored_content.get('technical_skills', tailored_content.get('key_skills', [])),
+        'Tools & Platforms': tailored_content.get('tools_platforms', []),
+    }
     job['matched_categories'] = matched_categories
     job['cv_filename'] = output_filename
     job_repo.update_job(job_id, job)
+    _save_job_cv_content(output_filename, tailored_content)
 
     complete_task(
         task_id,
@@ -218,7 +295,7 @@ def _run_single_cv_task(
     )
 
 
-def _run_batch_cv_task(task_id: str, cv_template: str, jobs: list[dict]) -> None:
+def _run_batch_cv_task(task_id: str, profile: dict, jobs: list[dict]) -> None:
     generator = RAGCVGenerator()
 
     def on_progress(step: str, message: str, percent: int) -> None:
@@ -229,8 +306,8 @@ def _run_batch_cv_task(task_id: str, cv_template: str, jobs: list[dict]) -> None
         raise RuntimeError('Ollama is not reachable.')
 
     generator.ollama.validate_models()
-    on_progress('indexing_cv', 'Indexing your CV with RAG…', 12)
-    generator.prepare_cv_index(cv_template)
+    on_progress('indexing_cv', 'Indexing your profile with RAG…', 12)
+    generator.prepare_profile_index(profile)
 
     successful_jobs = []
     failed_jobs = []
@@ -255,9 +332,10 @@ def _run_batch_cv_task(task_id: str, cv_template: str, jobs: list[dict]) -> None
         try:
             output_filename, output_path = _cv_output_path(job)
             result = generator.generate_cv(
-                cv_template,
                 job,
                 output_path,
+                profile=profile,
+                cv_template_path=get_default_cv_template_path(),
                 reindex=False,
                 on_progress=lambda step, message, percent, bp=base_percent: update_task(
                     task_id,
@@ -275,9 +353,15 @@ def _run_batch_cv_task(task_id: str, cv_template: str, jobs: list[dict]) -> None
             successful_jobs.append(job)
             if job_id:
                 tailored_content = result.get('tailored_content', {})
-                job['matched_categories'] = {'Key Skills': tailored_content.get('key_skills', [])}
+                job['matched_categories'] = {
+                    'Skills Matching Job Description': tailored_content.get('job_matched_skills', []),
+                    'Job Skills Not In CV': tailored_content.get('job_skills_not_in_cv', []),
+                    'Technical Skills': tailored_content.get('technical_skills', tailored_content.get('key_skills', [])),
+                    'Tools & Platforms': tailored_content.get('tools_platforms', []),
+                }
                 job['cv_filename'] = output_filename
                 job_repo.update_job(job_id, job)
+                _save_job_cv_content(output_filename, tailored_content)
         except Exception as job_error:
             logger.error('Batch CV failed for %s: %s', title, job_error)
             failed_jobs.append(job)
@@ -333,7 +417,11 @@ def _job_status_label_filter(status):
 @app.route('/')
 def index():
     """Render the home page."""
-    return render_template('index.html')
+    profile = profile_repo.get_profile()
+    return render_template(
+        'index.html',
+        profile_ready=profile_is_ready(profile),
+    )
 
 @app.route('/search', methods=['GET', 'POST'])
 def search_jobs():
@@ -389,38 +477,145 @@ def search_jobs():
     
     return redirect(url_for('index'))
 
-@app.route('/upload_cv', methods=['GET', 'POST'])
-def upload_cv():
-    """Handle CV template upload."""
+def _clear_profile_import_session() -> None:
+    session.pop('profile_draft', None)
+    session.pop('profile_import_summary', None)
+
+
+def _run_profile_import_task(task_id: str, cv_path: str, current_profile: dict) -> None:
+    try:
+        update_task(task_id, status='running', step='extracting', message='Reading CV document…', percent=10)
+        importer = ProfileImporter()
+        extracted = importer.extract_from_docx(cv_path)
+
+        update_task(
+            task_id,
+            step='merging',
+            message='Merging new details into your profile…',
+            percent=70,
+        )
+        merged_profile, changes = merge_profiles(current_profile, extracted)
+        summary_lines = summarize_import_changes(changes)
+
+        complete_task(
+            task_id,
+            {
+                'form': profile_to_form_fields(merged_profile),
+                'import_summary': summary_lines,
+                'has_changes': import_has_changes(changes),
+                'merged_profile': merged_profile,
+            },
+        )
+    finally:
+        if os.path.exists(cv_path):
+            os.remove(cv_path)
+
+
+@app.route('/profile', methods=['GET', 'POST'], endpoint='user_profile')
+@app.route('/upload_cv', methods=['GET', 'POST'], endpoint='upload_cv')
+def user_profile():
+    """Create or update the stored CV profile used for generation."""
     if request.method == 'POST':
-        if 'cv_file' not in request.files:
-            flash('No file part', 'error')
-            return redirect(request.url)
-        
-        file = request.files['cv_file']
-        
-        if file.filename == '':
-            flash('No selected file', 'error')
-            return redirect(request.url)
-        
-        if file and file.filename.endswith('.docx'):
-            filename = os.path.join(app.config['UPLOAD_FOLDER'], 'cv_template.docx')
-            file.save(filename)
-            session['cv_template'] = filename
-            flash(
-                'CV uploaded successfully. It will be indexed with RAG when you generate tailored CVs.',
-                'success',
+        if request.form.get('action') == 'discard_import':
+            _clear_profile_import_session()
+            flash('Import review discarded.', 'info')
+            return redirect(url_for('user_profile'))
+
+        profile = profile_from_form(request.form.to_dict())
+        if not profile.get('full_name'):
+            flash('Full name is required', 'error')
+            return render_template(
+                'profile_form.html',
+                form=profile_to_form_fields(profile),
+                import_review=bool(session.get('profile_draft')),
+                import_summary=session.get('profile_import_summary'),
             )
-            
-            # If we have jobs, redirect to job list
-            if session.get('search_run_id') or job_repo.count_jobs():
-                return redirect(url_for('job_list'))
-            return redirect(url_for('index'))
-        else:
-            flash('Please upload a .docx file', 'error')
-            return redirect(request.url)
-    
-    return render_template('upload_cv.html')
+
+        profile_repo.save_profile(profile)
+        _clear_profile_import_session()
+        flash('Profile saved successfully. You can now generate tailored CVs.', 'success')
+
+        if session.get('search_run_id') or job_repo.count_jobs():
+            return redirect(url_for('job_list'))
+        return redirect(url_for('index'))
+
+    form = session.get('profile_draft') or profile_to_form_fields(profile_repo.get_profile())
+    return render_template(
+        'profile_form.html',
+        form=form,
+        import_review=bool(session.get('profile_draft')),
+        import_summary=session.get('profile_import_summary'),
+    )
+
+
+@app.route('/profile/import/start', methods=['POST'])
+def start_profile_import():
+    """Upload a CV and extract profile data in the background."""
+    if 'cv_file' not in request.files:
+        flash('No file selected', 'error')
+        return redirect(url_for('user_profile'))
+
+    file = request.files['cv_file']
+    if not file.filename:
+        flash('No file selected', 'error')
+        return redirect(url_for('user_profile'))
+    if not file.filename.lower().endswith('.docx'):
+        flash('Please upload a .docx CV file', 'error')
+        return redirect(url_for('user_profile'))
+
+    temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'profile_import_{datetime.utcnow().strftime("%Y%m%d%H%M%S")}.docx')
+    file.save(temp_path)
+
+    task_id = create_task('profile_import')
+    current_profile = profile_repo.get_profile()
+    start_background_task(
+        task_id,
+        lambda: _run_profile_import_task(task_id, temp_path, current_profile),
+    )
+    return redirect(url_for('profile_import_progress', task_id=task_id))
+
+
+@app.route('/profile/import/<task_id>')
+def profile_import_progress(task_id):
+    """Show progress while a CV import is being parsed."""
+    task = get_task(task_id)
+    if not task:
+        flash('Import task not found', 'error')
+        return redirect(url_for('user_profile'))
+
+    return render_template(
+        'profile_import_progress.html',
+        task_id=task_id,
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=url_for('profile_import_complete', task_id=task_id),
+        back_url=url_for('user_profile'),
+    )
+
+
+@app.route('/profile/import/<task_id>/status')
+def profile_import_status(task_id):
+    """Compatibility endpoint for import progress polling."""
+    return cv_task_status(task_id)
+
+
+@app.route('/profile/import/complete/<task_id>')
+def profile_import_complete(task_id):
+    """Load merged profile draft for user review and approval."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Profile import result not found', 'error')
+        return redirect(url_for('user_profile'))
+
+    result = task['result']
+    session['profile_draft'] = result.get('form', {})
+    session['profile_import_summary'] = result.get('import_summary', [])
+
+    if result.get('has_changes'):
+        flash('CV imported. Review the highlighted updates and click Save Profile to apply them.', 'success')
+    else:
+        flash('CV imported, but no new details were found beyond your current profile.', 'info')
+
+    return redirect(url_for('user_profile'))
 
 @app.route('/job_list')
 def job_list():
@@ -624,7 +819,7 @@ def download_excel():
 def make_cv(job_id):
     """Show progress UI while AI CV generation runs in the background."""
     job = job_repo.get_job(job_id)
-    cv_template = session.get('cv_template')
+    profile = profile_repo.get_profile()
     return_folder = request.args.get('folder', 'all')
     return_search = request.args.get('q', '')
     return_from_manage = 'folder' in request.args or bool(return_search)
@@ -635,9 +830,9 @@ def make_cv(job_id):
             return _manage_jobs_redirect(return_folder, return_search)
         return redirect(url_for('job_list'))
 
-    if not cv_template:
-        flash('Please upload your CV first', 'error')
-        return redirect(url_for('upload_cv'))
+    if not profile_is_ready(profile):
+        flash('Please complete your CV profile first', 'error')
+        return redirect(url_for('user_profile'))
 
     return render_template(
         'cv_progress.html',
@@ -654,15 +849,15 @@ def make_cv(job_id):
 def start_make_cv(job_id):
     """Start background AI CV generation for one job."""
     job = job_repo.get_job(job_id)
-    cv_template = session.get('cv_template')
+    profile = profile_repo.get_profile()
     return_folder = request.args.get('folder', 'all')
     return_search = request.args.get('q', '')
     return_from_manage = 'folder' in request.args or bool(return_search)
 
     if not job:
         return jsonify({'error': 'Job not found'}), 404
-    if not cv_template:
-        return jsonify({'error': 'Please upload your CV first'}), 400
+    if not profile_is_ready(profile):
+        return jsonify({'error': 'Please complete your CV profile first'}), 400
 
     if _sync_cv_generation_lock():
         return jsonify({'error': 'Another CV generation is already in progress'}), 409
@@ -673,7 +868,7 @@ def start_make_cv(job_id):
         task_id,
         lambda: _run_single_cv_task(
             task_id,
-            cv_template,
+            profile,
             job,
             job_id,
             return_folder,
@@ -720,21 +915,123 @@ def make_cv_complete(task_id):
     return_from_manage = result.get('return_from_manage', False)
     return_folder = result.get('return_folder', 'all')
     return_search = result.get('return_search', '')
-    return render_template(
-        'cv_success.html',
-        job=result.get('job'),
-        cv_filename=result.get('cv_filename'),
-        matched_categories=result.get('matched_categories', {}),
+    context = _cv_preview_context(
+        result.get('job') or {},
         tailored_content=result.get('tailored_content', {}),
+        matched_categories=result.get('matched_categories', {}),
         analysis=result.get('analysis', {}),
         generation_meta=result.get('generation_meta', {}),
         rag_chunk_count=result.get('rag_chunk_count', 0),
+        show_success_banner=True,
         return_folder=return_folder,
         return_search=return_search,
         return_from_manage=return_from_manage,
-        back_url=_cv_generation_back_url(return_from_manage, return_folder, return_search),
-        back_label='Back to Jobs' if return_from_manage else 'Back to Job List',
     )
+    return render_template('cv_success.html', **context)
+
+
+@app.route('/jobs/<int:job_id>/cv/preview')
+def preview_job_cv(job_id):
+    """Preview and chat-edit a generated CV for a job."""
+    job = job_repo.get_job(job_id)
+    return_folder = request.args.get('folder', 'all')
+    return_search = request.args.get('q', '')
+    return_from_manage = 'folder' in request.args or bool(return_search)
+
+    if not job:
+        flash('Job not found', 'error')
+        return _manage_jobs_redirect(return_folder, return_search) if return_from_manage else redirect(url_for('job_list'))
+
+    cv_filename = job.get('cv_filename', '')
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    if not cv_filename or not os.path.exists(cv_path):
+        flash('No CV has been generated for this job yet', 'error')
+        if return_from_manage:
+            return _manage_jobs_redirect(return_folder, return_search)
+        return redirect(url_for('job_list'))
+
+    store = _load_job_cv_store(cv_filename)
+    if not store or not store.get('tailored_content'):
+        flash('CV preview data not found. Regenerate the CV to enable preview and chat editing.', 'warning')
+        if return_from_manage:
+            return _manage_jobs_redirect(return_folder, return_search)
+        return redirect(url_for('job_list'))
+
+    context = _cv_preview_context(
+        job,
+        show_success_banner=False,
+        return_folder=return_folder,
+        return_search=return_search,
+        return_from_manage=return_from_manage,
+    )
+    return render_template('cv_success.html', **context)
+
+
+@app.route('/api/jobs/<int:job_id>/cv/chat', methods=['POST'])
+def cv_chat(job_id):
+    """Apply a chat instruction to refine a generated CV."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cv_filename = job.get('cv_filename', '')
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    if not cv_filename or not os.path.exists(cv_path):
+        return jsonify({'error': 'No CV file found for this job'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    user_message = str(payload.get('message', '')).strip()
+    if not user_message:
+        return jsonify({'error': 'Message is required'}), 400
+
+    store = _load_job_cv_store(cv_filename)
+    if not store or not store.get('tailored_content'):
+        return jsonify({'error': 'CV content not available for editing'}), 404
+
+    profile = profile_repo.get_profile()
+    chat_history = store.get('chat_history', [])
+    current_content = store['tailored_content']
+
+    try:
+        editor = CVChatEditor()
+        result = editor.modify(
+            current_content=current_content,
+            user_message=user_message,
+            job=job,
+            profile=profile,
+            chat_history=chat_history,
+        )
+        updated_content = result['content']
+        reply = result['reply']
+
+        editor.rebuild_document(cv_path, updated_content, profile)
+        matched_categories = CVChatEditor.content_to_matched_categories(updated_content)
+        job['matched_categories'] = matched_categories
+        job_repo.update_job(job_id, job)
+
+        chat_history = chat_history + [
+            {'role': 'user', 'content': user_message},
+            {'role': 'assistant', 'content': reply},
+        ]
+        save_cv_content(
+            app.config['CV_OUTPUT_DIR'],
+            cv_filename,
+            updated_content,
+            chat_history=chat_history,
+        )
+
+        session['current_cv'] = cv_path
+        session['current_cv_filename'] = cv_filename
+
+        return jsonify({
+            'reply': reply,
+            'content': updated_content,
+            'matched_categories': matched_categories,
+            'chat_history': chat_history,
+        })
+    except Exception as exc:
+        logger.error('CV chat edit failed for job %s: %s', job_id, exc)
+        return jsonify({'error': str(exc)}), 500
 
 @app.route('/download_cv')
 def download_cv():
@@ -770,15 +1067,15 @@ def make_all_cvs():
     """Show progress UI while batch AI CV generation runs."""
     search_run_id = session.get('search_run_id')
     processed_jobs = _get_jobs_for_view(search_run_id)
-    cv_template = session.get('cv_template')
+    profile = profile_repo.get_profile()
 
     if not processed_jobs:
         flash('No jobs found. Please search for jobs first.', 'error')
         return redirect(url_for('index'))
 
-    if not cv_template:
-        flash('Please upload your CV first', 'error')
-        return redirect(url_for('upload_cv'))
+    if not profile_is_ready(profile):
+        flash('Please complete your CV profile first', 'error')
+        return redirect(url_for('user_profile'))
 
     return render_template(
         'cv_progress.html',
@@ -797,12 +1094,12 @@ def start_make_all_cvs():
     """Start background batch AI CV generation."""
     search_run_id = session.get('search_run_id')
     processed_jobs = _get_jobs_for_view(search_run_id)
-    cv_template = session.get('cv_template')
+    profile = profile_repo.get_profile()
 
     if not processed_jobs:
         return jsonify({'error': 'No jobs found'}), 404
-    if not cv_template:
-        return jsonify({'error': 'Please upload your CV first'}), 400
+    if not profile_is_ready(profile):
+        return jsonify({'error': 'Please complete your CV profile first'}), 400
 
     if _sync_cv_generation_lock():
         return jsonify({'error': 'Another CV generation is already in progress'}), 409
@@ -811,7 +1108,7 @@ def start_make_all_cvs():
     session['cv_generation_active'] = task_id
     start_background_task(
         task_id,
-        lambda: _run_batch_cv_task(task_id, cv_template, processed_jobs),
+        lambda: _run_batch_cv_task(task_id, profile, processed_jobs),
     )
     return jsonify({'task_id': task_id})
 

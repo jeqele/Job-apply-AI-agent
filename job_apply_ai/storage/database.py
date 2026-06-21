@@ -138,6 +138,16 @@ def init_db(db_path: str | None = None) -> None:
             ON jobs(dedupe_key)
             """
         )
+
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS user_profile (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                data TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            """
+        )
         conn.commit()
 
 

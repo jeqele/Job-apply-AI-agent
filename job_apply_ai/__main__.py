@@ -57,7 +57,7 @@ def main():
     
     # CV modifier command
     cv_parser = subparsers.add_parser('tailor', help='Tailor CV for a job')
-    cv_parser.add_argument('--cv', required=True, help='Path to CV template (.docx)')
+    cv_parser.add_argument('--cv', help='Optional legacy CV document path (.docx). Profile data is used by default.')
     cv_parser.add_argument('--job', help='Path to job description file (text)')
     cv_parser.add_argument('--jobs-file', help='Path to Excel file with multiple job listings')
     cv_parser.add_argument('--output-dir', help='Directory to save the tailored CVs')
@@ -65,7 +65,7 @@ def main():
     
     # Batch processing command
     batch_parser = subparsers.add_parser('batch', help='Process multiple jobs and generate CVs')
-    batch_parser.add_argument('--cv', required=True, help='Path to CV template (.docx)')
+    batch_parser.add_argument('--cv', help='Optional legacy CV document path (.docx). Profile data is used by default.')
     batch_parser.add_argument('--jobs-file', required=True, help='Path to Excel file with job listings')
     batch_parser.add_argument('--output-dir', help='Directory to save the tailored CVs')
     
@@ -108,15 +108,18 @@ def main():
             
     elif args.command == 'tailor':
         from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator, batch_generate_cvs
+        from job_apply_ai.storage.user_profile import UserProfileRepository, get_default_cv_template_path
         import pandas as pd
 
         output_dir = args.output_dir or os.path.join(os.getcwd(), "job_apply_ai", "outputs", "cvs")
         os.makedirs(output_dir, exist_ok=True)
+        profile = UserProfileRepository().get_profile()
+        cv_template = args.cv or get_default_cv_template_path()
 
         if args.jobs_file:
             jobs_df = pd.read_excel(args.jobs_file)
             jobs = jobs_df.to_dict(orient="records")
-            generated_cvs = batch_generate_cvs(args.cv, jobs, output_dir)
+            generated_cvs = batch_generate_cvs(profile, jobs, output_dir)
             if generated_cvs:
                 logger.info(f"Generated {len(generated_cvs)} tailored CVs:")
                 for cv_path in generated_cvs:
@@ -143,7 +146,12 @@ def main():
             )
             try:
                 generator = RAGCVGenerator()
-                generator.generate_cv(args.cv, job, output_path)
+                generator.generate_cv(
+                    job,
+                    output_path,
+                    profile=profile,
+                    cv_template_path=cv_template,
+                )
                 logger.info(f"Tailored CV saved to {output_path}")
             except Exception as e:
                 logger.error(f"Error tailoring CV: {str(e)}")
@@ -154,12 +162,14 @@ def main():
 
     elif args.command == 'batch':
         from job_apply_ai.cv_modifier.cv_generator import batch_generate_cvs
+        from job_apply_ai.storage.user_profile import UserProfileRepository
         import pandas as pd
 
         output_dir = args.output_dir or os.path.join(os.getcwd(), "job_apply_ai", "outputs", "cvs")
         os.makedirs(output_dir, exist_ok=True)
         jobs_df = pd.read_excel(args.jobs_file)
-        generated_cvs = batch_generate_cvs(args.cv, jobs_df.to_dict(orient="records"), output_dir)
+        profile = UserProfileRepository().get_profile()
+        generated_cvs = batch_generate_cvs(profile, jobs_df.to_dict(orient="records"), output_dir)
         
         if generated_cvs:
             logger.info(f"Generated {len(generated_cvs)} tailored CVs:")

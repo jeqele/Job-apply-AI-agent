@@ -2,8 +2,9 @@
 
 from job_apply_ai.storage.database import get_db_path, init_db
 from job_apply_ai.storage.job_repository import JobRepository
+from job_apply_ai.storage.user_profile import UserProfileRepository
 
-__all__ = ["get_db_path", "init_db", "JobRepository", "export_jobs"]
+__all__ = ["get_db_path", "init_db", "JobRepository", "UserProfileRepository", "export_jobs"]
 
 
 def __getattr__(name: str):

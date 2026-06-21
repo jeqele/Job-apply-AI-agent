@@ -41,6 +41,7 @@ Thumbs.db
 # Project specific
 *.xlsx
 *.docx
+!job_apply_ai/assets/cv_template.docx
 *.pdf
 *.log
 *.tmp

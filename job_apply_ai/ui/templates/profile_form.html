@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Your CV Profile</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            padding-top: 30px;
+            padding-bottom: 50px;
+            color: #343a40;
+        }
+        .page-header {
+            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
+            padding: 2.5rem;
+            border-radius: 1rem;
+            margin-bottom: 2rem;
+            color: white;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+        .card {
+            border: none;
+            border-radius: 1rem;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            margin-bottom: 1.5rem;
+        }
+        .card-header {
+            background: #fff;
+            border-bottom: 1px solid #eef2f7;
+            font-weight: 600;
+        }
+        .form-label {
+            font-weight: 500;
+        }
+        .hint {
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+        textarea {
+            min-height: 120px;
+        }
+        .section-icon {
+            color: #0d6efd;
+            margin-right: 0.5rem;
+        }
+        .import-card {
+            border: 1px solid #dbeafe;
+            background: #f8fbff;
+        }
+        .review-banner {
+            border-left: 4px solid #6610f2;
+            background: #f5f0ff;
+        }
+        .change-list {
+            margin: 0;
+            padding-left: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="page-header">
+            <h1 class="display-6 fw-bold mb-2"><i class="fas fa-user-edit me-2"></i>Your CV Profile</h1>
+            <p class="lead mb-0">Enter your details once. The CV maker fills the empty template for each job application.</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show mb-4" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="alert alert-info">
+            <strong>Template sections:</strong> Personal Summary, Technical Skills, Tools &amp; Platforms, Work Experience, Personal Projects, Soft Skills, Languages.
+            Your saved profile is used to fill these sections when generating a tailored CV.
+        </div>
+
+        <div class="card import-card mb-4">
+            <div class="card-body">
+                <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+                    <div>
+                        <h5 class="mb-2"><i class="fas fa-file-import section-icon"></i>Import from CV</h5>
+                        <p class="mb-0 hint">Upload an existing CV (.docx). New details will be merged into your profile for review before saving.</p>
+                    </div>
+                    <form method="POST" action="{{ url_for('start_profile_import') }}" enctype="multipart/form-data" class="d-flex flex-column flex-sm-row gap-2 align-items-stretch">
+                        <input type="file" class="form-control" name="cv_file" accept=".docx" required>
+                        <button type="submit" class="btn btn-outline-primary">
+                            <i class="fas fa-upload me-2"></i>Import CV
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        {% if import_review %}
+        <div class="alert review-banner mb-4">
+            <h5 class="mb-2"><i class="fas fa-eye me-2"></i>Review imported changes</h5>
+            <p class="mb-2">The form below includes merged data from your uploaded CV. Edit anything you want, then click <strong>Save Profile</strong> to approve.</p>
+            {% if import_summary %}
+                <ul class="change-list mb-3">
+                    {% for line in import_summary %}
+                        <li>{{ line }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            <form method="POST" action="{{ url_for('user_profile') }}" class="d-inline">
+                <input type="hidden" name="action" value="discard_import">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Discard import</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('user_profile') }}">
+            <div class="card">
+                <div class="card-header"><i class="fas fa-id-card section-icon"></i>Personal Details</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="full_name" class="form-label">Full Name</label>
+                            <input type="text" class="form-control" id="full_name" name="full_name" value="{{ form.full_name }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="professional_title" class="form-label">Professional Title</label>
+                            <input type="text" class="form-control" id="professional_title" name="professional_title" value="{{ form.professional_title }}" placeholder="e.g. Full-Stack Developer, Backend Engineer">
+                            <div class="form-text">Separate multiple titles with commas. The AI picks the best match for each job.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="email" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="email" name="email" value="{{ form.email }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="phone" class="form-label">Phone</label>
+                            <input type="text" class="form-control" id="phone" name="phone" value="{{ form.phone }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="github" class="form-label">GitHub</label>
+                            <input type="text" class="form-control" id="github" name="github" value="{{ form.github }}" placeholder="https://github.com/username">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="linkedin" class="form-label">LinkedIn</label>
+                            <input type="text" class="form-control" id="linkedin" name="linkedin" value="{{ form.linkedin }}" placeholder="https://linkedin.com/in/username">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><i class="fas fa-align-left section-icon"></i>Personal Summary</div>
+                <div class="card-body">
+                    <textarea class="form-control" id="personal_summary" name="personal_summary" rows="4">{{ form.personal_summary }}</textarea>
+                    <div class="hint mt-2">A short overview of your background. This will be tailored per job when generating CVs.</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><i class="fas fa-code section-icon"></i>Skills &amp; Tools</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="technical_skills" class="form-label">Technical Skills</label>
+                        <textarea class="form-control" id="technical_skills" name="technical_skills">{{ form.technical_skills }}</textarea>
+                        <div class="hint mt-2">One skill per line, or comma-separated.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="tools_platforms" class="form-label">Tools &amp; Platforms</label>
+                        <textarea class="form-control" id="tools_platforms" name="tools_platforms">{{ form.tools_platforms }}</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="soft_skills" class="form-label">Soft Skills</label>
+                        <textarea class="form-control" id="soft_skills" name="soft_skills">{{ form.soft_skills }}</textarea>
+                    </div>
+                    <div>
+                        <label for="languages" class="form-label">Languages</label>
+                        <textarea class="form-control" id="languages" name="languages">{{ form.languages }}</textarea>
+                        <div class="hint mt-2">Example: English (Native), German (B2)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><i class="fas fa-briefcase section-icon"></i>Work Experience</div>
+                <div class="card-body">
+                    <textarea class="form-control" id="work_experience_text" name="work_experience_text" rows="10">{{ form.work_experience_text }}</textarea>
+                    <div class="hint mt-2">
+                        Use one role per block:<br>
+                        <code>Senior Developer | Acme Corp | 2021 - Present</code><br>
+                        <code>- Built scalable APIs</code><br>
+                        <code>- Led a team of 4 engineers</code>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><i class="fas fa-project-diagram section-icon"></i>Personal Projects</div>
+                <div class="card-body">
+                    <textarea class="form-control" id="personal_projects_text" name="personal_projects_text" rows="8">{{ form.personal_projects_text }}</textarea>
+                    <div class="hint mt-2">
+                        Example:<br>
+                        <code>Job Apply AI Agent | Automated job search and CV tailoring</code><br>
+                        <code>- Built Flask UI and RAG pipeline</code>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between">
+                <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left me-2"></i>Back
+                </a>
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-save me-2"></i>{% if import_review %}Approve &amp; Save Profile{% else %}Save Profile{% endif %}
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -241,6 +241,10 @@
                                                 </a>
                                             {% endif %}
                                             {% if job.cv_filename %}
+                                                <a href="{{ url_for('preview_job_cv', job_id=job.id, folder=current_folder, q=search_query or none) }}"
+                                                   class="btn btn-outline-info btn-sm" title="Preview and edit CV">
+                                                    <i class="fas fa-eye me-1"></i>Preview
+                                                </a>
                                                 <a href="{{ url_for('download_job_cv', job_id=job.id) }}"
                                                    class="btn btn-outline-success btn-sm" title="Download AI CV">
                                                     <i class="fas fa-file-word me-1"></i>CV
