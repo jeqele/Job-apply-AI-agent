@@ -258,11 +258,22 @@
                                                 {% if smtp_configured and job.emails %}
                                                 <form method="post"
                                                       action="{{ url_for('send_job_application', job_id=job.id) }}"
-                                                      class="d-inline"
+                                                      class="d-inline-flex align-items-center gap-1"
                                                       onsubmit="return confirm('Send application email to {{ job.emails.split(',')[0].strip() }}?');">
                                                     <input type="hidden" name="return_folder" value="{{ current_folder }}">
                                                     <input type="hidden" name="return_search" value="{{ search_query }}">
                                                     <input type="hidden" name="return_from_manage" value="1">
+                                                    {% if smtp_accounts|length > 1 %}
+                                                    <select name="smtp_account_id" class="form-select form-select-sm" style="width: 9rem;" aria-label="Send from account">
+                                                        {% for account in smtp_accounts %}
+                                                        <option value="{{ account.id }}" {% if account.is_default %}selected{% endif %}>
+                                                            {{ account.email }}
+                                                        </option>
+                                                        {% endfor %}
+                                                    </select>
+                                                    {% elif smtp_accounts|length == 1 %}
+                                                    <input type="hidden" name="smtp_account_id" value="{{ smtp_accounts[0].id }}">
+                                                    {% endif %}
                                                     <button type="submit" class="btn btn-success btn-sm" title="Email CV and cover letter">
                                                         <i class="fas fa-paper-plane"></i>
                                                     </button>

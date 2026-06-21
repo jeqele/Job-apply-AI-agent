@@ -3,6 +3,7 @@
 from job_apply_ai.storage.user_profile import (
     parse_multiline_list,
     parse_professional_titles,
+    parse_smtp_accounts_from_form,
     pick_professional_title,
     parse_projects_text,
     parse_work_experience_text,
@@ -83,3 +84,85 @@ def test_profile_to_text_includes_sections():
     assert "Jane Doe" in text
     assert "Technical Skills" in text
     assert "Work Experience" in text
+
+
+def test_parse_smtp_accounts_from_form_preserves_existing_password():
+    class FakeForm(dict):
+        def getlist(self, key):
+            values = {
+                "smtp_id": ["acc1"],
+                "smtp_provider": ["gmail"],
+                "smtp_email": ["user@gmail.com"],
+                "smtp_password": [""],
+                "smtp_label": ["Work"],
+                "smtp_host": [],
+                "smtp_port": [],
+                "smtp_use_tls": [],
+            }
+            return values.get(key, [])
+
+    existing = {
+        "smtp_accounts": [
+            {
+                "id": "acc1",
+                "provider": "gmail",
+                "email": "user@gmail.com",
+                "password": "stored-secret",
+                "label": "Work",
+                "is_default": True,
+            }
+        ]
+    }
+    accounts = parse_smtp_accounts_from_form(FakeForm({"smtp_default_id": "acc1"}), existing)
+    assert len(accounts) == 1
+    assert accounts[0]["password"] == "stored-secret"
+
+
+def test_profile_from_form_saves_multiple_smtp_accounts():
+    class FakeForm(dict):
+        def getlist(self, key):
+            values = {
+                "smtp_id": ["acc1", "acc2"],
+                "smtp_provider": ["gmail", "hotmail"],
+                "smtp_email": ["a@gmail.com", "b@hotmail.com"],
+                "smtp_password": ["pass1", "pass2"],
+                "smtp_label": ["Gmail", "Hotmail"],
+                "smtp_host": [],
+                "smtp_port": [],
+                "smtp_use_tls": [],
+            }
+            return values.get(key, [])
+
+    profile = profile_from_form(
+        FakeForm(
+            {
+                "full_name": "Jane Doe",
+                "smtp_default_id": "acc2",
+            }
+        )
+    )
+    assert len(profile["smtp_accounts"]) == 2
+    assert profile["smtp_accounts"][1]["is_default"] is True
+    assert profile["smtp_accounts"][1]["email"] == "b@hotmail.com"
+
+
+def test_parse_smtp_accounts_from_form_keeps_oauth_accounts():
+    class FakeForm(dict):
+        def getlist(self, key):
+            return []
+
+    existing = {
+        "smtp_accounts": [
+            {
+                "id": "oauth1",
+                "provider": "gmail",
+                "auth_type": "oauth",
+                "email": "oauth@gmail.com",
+                "oauth_refresh_token": "refresh",
+                "is_default": True,
+            }
+        ]
+    }
+    accounts = parse_smtp_accounts_from_form(FakeForm({}), existing)
+    assert len(accounts) == 1
+    assert accounts[0]["auth_type"] == "oauth"

@@ -165,7 +165,17 @@
                     <div class="mb-3">
                         <label for="technical_skills" class="form-label">Technical Skills</label>
                         <textarea class="form-control" id="technical_skills" name="technical_skills">{{ form.technical_skills }}</textarea>
-                        <div class="hint mt-2">One skill per line, or comma-separated.</div>
+                        <div class="hint mt-2">One skill per line, or comma-separated. Core skills you want to match against job listings.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="minor_skills" class="form-label">Minor Skills</label>
+                        <textarea class="form-control" id="minor_skills" name="minor_skills">{{ form.minor_skills }}</textarea>
+                        <div class="hint mt-2">Secondary or supporting skills that still count toward job fit.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="stacks" class="form-label">Technology Stacks</label>
+                        <textarea class="form-control" id="stacks" name="stacks">{{ form.stacks }}</textarea>
+                        <div class="hint mt-2">Example: Python/Django/PostgreSQL, MERN, Android/Kotlin.</div>
                     </div>
                     <div class="mb-3">
                         <label for="tools_platforms" class="form-label">Tools &amp; Platforms</label>
@@ -208,6 +218,134 @@
                 </div>
             </div>
 
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-envelope section-icon"></i>Sending Accounts</span>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="addSmtpAccountBtn">
+                        <i class="fas fa-plus me-1"></i>Add Account
+                    </button>
+                </div>
+                <div class="card-body">
+                    <p class="hint mb-3">
+                        Connect Gmail or Outlook with OAuth (works with 2FA), or add app-password / SMTP accounts manually below.
+                    </p>
+
+                    <div class="d-flex flex-wrap gap-2 mb-4">
+                        {% if google_oauth_configured %}
+                        <a href="{{ url_for('oauth_google_start') }}" class="btn btn-outline-danger">
+                            <i class="fab fa-google me-2"></i>Connect Gmail
+                        </a>
+                        {% else %}
+                        <button type="button" class="btn btn-outline-secondary" disabled title="Set GOOGLE_OAUTH_CLIENT_ID in .env">
+                            <i class="fab fa-google me-2"></i>Connect Gmail
+                        </button>
+                        {% endif %}
+                        {% if microsoft_oauth_configured %}
+                        <a href="{{ url_for('oauth_microsoft_start') }}" class="btn btn-outline-primary">
+                            <i class="fab fa-microsoft me-2"></i>Connect Outlook / Hotmail
+                        </a>
+                        {% else %}
+                        <button type="button" class="btn btn-outline-secondary" disabled title="Set MICROSOFT_OAUTH_CLIENT_ID in .env">
+                            <i class="fab fa-microsoft me-2"></i>Connect Outlook / Hotmail
+                        </button>
+                        {% endif %}
+                    </div>
+
+                    {% if form.oauth_smtp_accounts %}
+                    <div class="mb-4">
+                        <h6 class="fw-semibold mb-3">Connected OAuth accounts</h6>
+                        <div class="d-flex flex-column gap-2">
+                            {% for account in form.oauth_smtp_accounts %}
+                            <div class="border rounded p-3 d-flex flex-wrap justify-content-between align-items-center gap-2 bg-light">
+                                <div>
+                                    <strong>{{ account.label or account.provider|title }}</strong>
+                                    <span class="text-muted ms-2">{{ account.email }}</span>
+                                    {% if account.is_default %}
+                                    <span class="badge bg-success ms-2">Default</span>
+                                    {% endif %}
+                                    <span class="badge bg-info text-dark ms-1">OAuth</span>
+                                </div>
+                                <div class="d-flex gap-2">
+                                    {% if not account.is_default %}
+                                    <form method="post" action="{{ url_for('oauth_set_default_account', account_id=account.id) }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Set default</button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" action="{{ url_for('oauth_disconnect_account', account_id=account.id) }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Disconnect</button>
+                                    </form>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <h6 class="fw-semibold mb-3">App password / SMTP accounts</h6>
+                    <div id="smtpAccountsList" class="d-flex flex-column gap-3">
+                        {% for account in form.smtp_accounts %}
+                        <div class="border rounded p-3 smtp-account-row" data-index="{{ loop.index0 }}">
+                            <div class="d-flex justify-content-between align-items-start mb-3">
+                                <strong class="text-primary smtp-account-title">Account {{ loop.index }}</strong>
+                                <button type="button" class="btn btn-sm btn-outline-danger remove-smtp-account" title="Remove account">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                            <input type="hidden" name="smtp_id" value="{{ account.id }}">
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label class="form-label">Provider</label>
+                                    <select class="form-select smtp-provider" name="smtp_provider">
+                                        <option value="gmail" {% if account.provider == 'gmail' %}selected{% endif %}>Gmail</option>
+                                        <option value="hotmail" {% if account.provider == 'hotmail' %}selected{% endif %}>Hotmail</option>
+                                        <option value="outlook" {% if account.provider == 'outlook' %}selected{% endif %}>Outlook</option>
+                                        <option value="custom" {% if account.provider == 'custom' %}selected{% endif %}>Custom SMTP</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Label</label>
+                                    <input type="text" class="form-control" name="smtp_label" value="{{ account.label }}" placeholder="e.g. Work Gmail">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Default sender</label>
+                                    <div class="form-check mt-2">
+                                        <input class="form-check-input smtp-default" type="radio" name="smtp_default_id" value="{{ account.id }}" {% if account.is_default %}checked{% endif %}>
+                                        <label class="form-check-label">Use this account by default</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Email address</label>
+                                    <input type="email" class="form-control" name="smtp_email" value="{{ account.email }}" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">App password</label>
+                                    <input type="password" class="form-control" name="smtp_password" placeholder="{% if account.has_password %}Leave blank to keep current password{% else %}Required{% endif %}">
+                                </div>
+                                <div class="col-md-4 smtp-custom-fields {% if account.provider != 'custom' %}d-none{% endif %}">
+                                    <label class="form-label">SMTP host</label>
+                                    <input type="text" class="form-control" name="smtp_host" value="{{ account.host }}" placeholder="smtp.example.com" {% if account.provider != 'custom' %}disabled{% endif %}>
+                                </div>
+                                <div class="col-md-4 smtp-custom-fields {% if account.provider != 'custom' %}d-none{% endif %}">
+                                    <label class="form-label">SMTP port</label>
+                                    <input type="number" class="form-control" name="smtp_port" value="{{ account.port or 587 }}" {% if account.provider != 'custom' %}disabled{% endif %}>
+                                </div>
+                                <div class="col-md-4 smtp-custom-fields {% if account.provider != 'custom' %}d-none{% endif %}">
+                                    <label class="form-label">Use TLS</label>
+                                    <input type="hidden" name="smtp_use_tls" value="0" {% if account.provider != 'custom' %}disabled{% endif %}>
+                                    <div class="form-check mt-2">
+                                        <input class="form-check-input" type="checkbox" name="smtp_use_tls" value="1" {% if account.use_tls %}checked{% endif %} {% if account.provider != 'custom' %}disabled{% endif %}>
+                                        <label class="form-check-label">Enable STARTTLS</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <p class="text-muted mb-0" id="smtpEmptyHint">No sending accounts yet. Click <strong>Add Account</strong> to connect Gmail or Hotmail.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
             <div class="d-flex justify-content-between">
                 <a href="{{ url_for('index') }}" class="btn btn-secondary">
                     <i class="fas fa-arrow-left me-2"></i>Back
@@ -219,6 +357,131 @@
         </form>
     </div>
 
+    <template id="smtpAccountTemplate">
+        <div class="border rounded p-3 smtp-account-row">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <strong class="text-primary smtp-account-title">Account</strong>
+                <button type="button" class="btn btn-sm btn-outline-danger remove-smtp-account" title="Remove account">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+            <input type="hidden" name="smtp_id" value="">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Provider</label>
+                    <select class="form-select smtp-provider" name="smtp_provider">
+                        <option value="gmail" selected>Gmail</option>
+                        <option value="hotmail">Hotmail</option>
+                        <option value="outlook">Outlook</option>
+                        <option value="custom">Custom SMTP</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Label</label>
+                    <input type="text" class="form-control" name="smtp_label" placeholder="e.g. Work Gmail">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Default sender</label>
+                    <div class="form-check mt-2">
+                        <input class="form-check-input smtp-default" type="radio" name="smtp_default_id" value="">
+                        <label class="form-check-label">Use this account by default</label>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Email address</label>
+                    <input type="email" class="form-control" name="smtp_email" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">App password</label>
+                    <input type="password" class="form-control" name="smtp_password" placeholder="Required" required>
+                </div>
+                <div class="col-md-4 smtp-custom-fields d-none">
+                    <label class="form-label">SMTP host</label>
+                    <input type="text" class="form-control" name="smtp_host" placeholder="smtp.example.com">
+                </div>
+                <div class="col-md-4 smtp-custom-fields d-none">
+                    <label class="form-label">SMTP port</label>
+                    <input type="number" class="form-control" name="smtp_port" value="587">
+                </div>
+                <div class="col-md-4 smtp-custom-fields d-none">
+                    <label class="form-label">Use TLS</label>
+                    <input type="hidden" name="smtp_use_tls" value="0">
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" name="smtp_use_tls" value="1" checked>
+                        <label class="form-check-label">Enable STARTTLS</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function generateSmtpId() {
+            return 'smtp_' + Math.random().toString(36).slice(2, 12);
+        }
+
+        function toggleCustomFields(row) {
+            const provider = row.querySelector('.smtp-provider')?.value;
+            const isCustom = provider === 'custom';
+            row.querySelectorAll('.smtp-custom-fields').forEach(el => {
+                el.classList.toggle('d-none', !isCustom);
+            });
+            row.querySelectorAll('.smtp-custom-fields input, .smtp-custom-fields select').forEach(input => {
+                input.disabled = !isCustom;
+            });
+        }
+
+        function renumberSmtpRows() {
+            document.querySelectorAll('#smtpAccountsList .smtp-account-row').forEach((row, index) => {
+                const title = row.querySelector('.smtp-account-title');
+                if (title) title.textContent = 'Account ' + (index + 1);
+            });
+        }
+
+        function bindSmtpRow(row) {
+            const providerSelect = row.querySelector('.smtp-provider');
+            if (providerSelect) {
+                providerSelect.addEventListener('change', () => toggleCustomFields(row));
+            }
+            const removeBtn = row.querySelector('.remove-smtp-account');
+            if (removeBtn) {
+                removeBtn.addEventListener('click', () => {
+                    const wasDefault = row.querySelector('.smtp-default')?.checked;
+                    row.remove();
+                    document.getElementById('smtpEmptyHint')?.remove();
+                    renumberSmtpRows();
+                    if (wasDefault) {
+                        const firstDefault = document.querySelector('#smtpAccountsList .smtp-default');
+                        if (firstDefault) firstDefault.checked = true;
+                    }
+                });
+            }
+            toggleCustomFields(row);
+        }
+
+        document.querySelectorAll('#smtpAccountsList .smtp-account-row').forEach(bindSmtpRow);
+
+        document.getElementById('addSmtpAccountBtn')?.addEventListener('click', () => {
+            const template = document.getElementById('smtpAccountTemplate');
+            const list = document.getElementById('smtpAccountsList');
+            if (!template || !list) return;
+
+            document.getElementById('smtpEmptyHint')?.remove();
+            const row = template.content.firstElementChild.cloneNode(true);
+            const accountId = generateSmtpId();
+            row.querySelector('input[name="smtp_id"]').value = accountId;
+            row.querySelector('.smtp-default').value = accountId;
+
+            const existingDefaults = list.querySelectorAll('.smtp-default:checked');
+            if (!existingDefaults.length) {
+                row.querySelector('.smtp-default').checked = true;
+            }
+
+            list.appendChild(row);
+            bindSmtpRow(row);
+            renumberSmtpRows();
+        });
+    </script>
 </body>
 </html>

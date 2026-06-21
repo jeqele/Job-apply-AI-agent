@@ -5,10 +5,20 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from copy import deepcopy
 from typing import Any
 
 from job_apply_ai.storage.database import get_connection
+
+SMTP_PROVIDER_CHOICES = ("gmail", "hotmail", "outlook", "custom")
+
+SMTP_PROVIDER_LABELS = {
+    "gmail": "Gmail",
+    "hotmail": "Hotmail",
+    "outlook": "Outlook",
+    "custom": "Custom SMTP",
+}
 
 DEFAULT_PROFILE: dict[str, Any] = {
     "full_name": "",
@@ -19,11 +29,14 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "linkedin": "",
     "personal_summary": "",
     "technical_skills": [],
+    "minor_skills": [],
+    "stacks": [],
     "tools_platforms": [],
     "work_experience": [],
     "personal_projects": [],
     "soft_skills": [],
     "languages": [],
+    "smtp_accounts": [],
 }
 
 
@@ -44,6 +57,232 @@ def normalize_profile(data: dict[str, Any] | None) -> dict[str, Any]:
 
     profile["work_experience"] = _normalize_experience_entries(data.get("work_experience", []))
     profile["personal_projects"] = _normalize_project_entries(data.get("personal_projects", []))
+    profile["smtp_accounts"] = _normalize_smtp_accounts(data.get("smtp_accounts", []))
+    return profile
+
+
+def _normalize_smtp_accounts(entries: Any) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    default_set = False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        provider = str(entry.get("provider") or "gmail").strip().lower()
+        if provider not in SMTP_PROVIDER_CHOICES:
+            provider = "custom"
+        email = str(entry.get("email") or "").strip()
+        auth_type = str(entry.get("auth_type") or "password").strip().lower()
+        password = str(entry.get("password") or "").strip()
+        refresh_token = str(entry.get("oauth_refresh_token") or "").strip()
+
+        if auth_type == "oauth":
+            if not email or not refresh_token:
+                continue
+        elif not email or not password:
+            continue
+
+        account_id = str(entry.get("id") or "").strip() or uuid.uuid4().hex[:12]
+        is_default = bool(entry.get("is_default"))
+        if is_default:
+            default_set = True
+
+        normalized.append(
+            {
+                "id": account_id,
+                "provider": provider,
+                "auth_type": auth_type if auth_type == "oauth" else "password",
+                "email": email,
+                "password": password if auth_type != "oauth" else "",
+                "oauth_refresh_token": refresh_token if auth_type == "oauth" else "",
+                "oauth_access_token": str(entry.get("oauth_access_token") or "").strip(),
+                "oauth_expires_at": str(entry.get("oauth_expires_at") or "").strip(),
+                "label": str(entry.get("label") or "").strip(),
+                "host": str(entry.get("host") or "").strip(),
+                "port": int(entry.get("port") or 587),
+                "use_tls": bool(entry.get("use_tls", True)),
+                "is_default": is_default,
+            }
+        )
+
+    if normalized and not default_set:
+        normalized[0]["is_default"] = True
+    elif default_set:
+        found_default = False
+        for account in normalized:
+            if account["is_default"] and not found_default:
+                found_default = True
+            else:
+                account["is_default"] = False
+    return normalized
+
+
+def _form_getlist(form_data: Any, key: str) -> list[str]:
+    if hasattr(form_data, "getlist"):
+        return [str(value) for value in form_data.getlist(key)]
+    value = form_data.get(key)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _smtp_accounts_by_id(accounts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {account["id"]: account for account in accounts if account.get("id")}
+
+
+def parse_smtp_accounts_from_form(
+    form_data: Any,
+    existing_profile: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build SMTP account records from repeated profile form fields."""
+    existing = _smtp_accounts_by_id((existing_profile or {}).get("smtp_accounts", []))
+    ids = _form_getlist(form_data, "smtp_id")
+    providers = _form_getlist(form_data, "smtp_provider")
+    emails = _form_getlist(form_data, "smtp_email")
+    passwords = _form_getlist(form_data, "smtp_password")
+    labels = _form_getlist(form_data, "smtp_label")
+    hosts = _form_getlist(form_data, "smtp_host")
+    ports = _form_getlist(form_data, "smtp_port")
+    use_tls_values = _form_getlist(form_data, "smtp_use_tls")
+    default_id = str(form_data.get("smtp_default_id", "")).strip()
+
+    row_count = max(len(ids), len(providers), len(emails), len(passwords), len(labels), len(hosts), len(ports), 0)
+    accounts: list[dict[str, Any]] = []
+    for index in range(row_count):
+        email = emails[index].strip() if index < len(emails) else ""
+        if not email:
+            continue
+
+        account_id = ids[index].strip() if index < len(ids) else ""
+        if not account_id:
+            account_id = uuid.uuid4().hex[:12]
+
+        password = passwords[index].strip() if index < len(passwords) else ""
+        if not password and account_id in existing:
+            password = existing[account_id].get("password", "")
+
+        provider = providers[index].strip().lower() if index < len(providers) else "gmail"
+        label = labels[index].strip() if index < len(labels) else ""
+        host = hosts[index].strip() if index < len(hosts) else ""
+        port_raw = ports[index].strip() if index < len(ports) else "587"
+        use_tls = True
+        if index < len(use_tls_values):
+            use_tls = use_tls_values[index] == "1"
+
+        accounts.append(
+            {
+                "id": account_id,
+                "provider": provider,
+                "auth_type": "password",
+                "email": email,
+                "password": password,
+                "label": label,
+                "host": host,
+                "port": int(port_raw or 587),
+                "use_tls": use_tls,
+                "is_default": account_id == default_id,
+            }
+        )
+
+    oauth_accounts = [
+        deepcopy(account)
+        for account in (existing_profile or {}).get("smtp_accounts", [])
+        if account.get("auth_type") == "oauth"
+    ]
+    accounts.extend(oauth_accounts)
+    return _normalize_smtp_accounts(accounts)
+
+
+def upsert_oauth_smtp_account(
+    profile: dict[str, Any],
+    *,
+    provider: str,
+    email: str,
+    oauth_refresh_token: str,
+    oauth_access_token: str = "",
+    oauth_expires_at: str = "",
+    label: str = "",
+) -> dict[str, Any]:
+    """Add or update an OAuth-connected sending account on the profile."""
+    profile = normalize_profile(profile)
+    accounts = profile.get("smtp_accounts", [])
+    provider = provider.strip().lower()
+    email = email.strip()
+    match_index = next(
+        (
+            index
+            for index, account in enumerate(accounts)
+            if account.get("auth_type") == "oauth"
+            and account.get("provider") == provider
+            and str(account.get("email", "")).lower() == email.lower()
+        ),
+        None,
+    )
+
+    account = {
+        "id": accounts[match_index]["id"] if match_index is not None else uuid.uuid4().hex[:12],
+        "provider": provider,
+        "auth_type": "oauth",
+        "email": email,
+        "password": "",
+        "oauth_refresh_token": oauth_refresh_token,
+        "oauth_access_token": oauth_access_token,
+        "oauth_expires_at": oauth_expires_at,
+        "label": label or SMTP_PROVIDER_LABELS.get(provider, provider.title()),
+        "host": "",
+        "port": 587,
+        "use_tls": True,
+        "is_default": not accounts,
+    }
+
+    if match_index is None:
+        accounts.append(account)
+    else:
+        account["is_default"] = accounts[match_index].get("is_default", False)
+        accounts[match_index] = account
+
+    profile["smtp_accounts"] = _normalize_smtp_accounts(accounts)
+    return profile
+
+
+def remove_smtp_account(profile: dict[str, Any], account_id: str) -> dict[str, Any]:
+    """Remove a sending account from the profile."""
+    profile = normalize_profile(profile)
+    accounts = [
+        account
+        for account in profile.get("smtp_accounts", [])
+        if str(account.get("id")) != str(account_id)
+    ]
+    profile["smtp_accounts"] = _normalize_smtp_accounts(accounts)
+    return profile
+
+
+def update_smtp_account_tokens(profile: dict[str, Any], account_id: str, token_updates: dict[str, str]) -> dict[str, Any]:
+    """Persist refreshed OAuth access tokens after sending."""
+    profile = normalize_profile(profile)
+    accounts = profile.get("smtp_accounts", [])
+    for account in accounts:
+        if str(account.get("id")) != str(account_id):
+            continue
+        if token_updates.get("oauth_access_token"):
+            account["oauth_access_token"] = token_updates["oauth_access_token"]
+        if token_updates.get("oauth_expires_at"):
+            account["oauth_expires_at"] = token_updates["oauth_expires_at"]
+    profile["smtp_accounts"] = _normalize_smtp_accounts(accounts)
+    return profile
+
+
+def set_default_smtp_account(profile: dict[str, Any], account_id: str) -> dict[str, Any]:
+    """Mark one sending account as the default sender."""
+    profile = normalize_profile(profile)
+    accounts = profile.get("smtp_accounts", [])
+    for account in accounts:
+        account["is_default"] = str(account.get("id")) == str(account_id)
+    profile["smtp_accounts"] = _normalize_smtp_accounts(accounts)
     return profile
 
 
@@ -171,6 +410,12 @@ def profile_to_text(profile: dict[str, Any]) -> str:
     if profile["technical_skills"]:
         sections.append("Technical Skills:\n" + ", ".join(profile["technical_skills"]))
 
+    if profile["minor_skills"]:
+        sections.append("Minor Skills:\n" + ", ".join(profile["minor_skills"]))
+
+    if profile["stacks"]:
+        sections.append("Technology Stacks:\n" + ", ".join(profile["stacks"]))
+
     if profile["tools_platforms"]:
         sections.append("Tools & Platforms:\n" + ", ".join(profile["tools_platforms"]))
 
@@ -210,6 +455,8 @@ def profile_is_ready(profile: dict[str, Any] | None) -> bool:
     has_content = bool(
         profile["personal_summary"]
         or profile["technical_skills"]
+        or profile["minor_skills"]
+        or profile["stacks"]
         or profile["tools_platforms"]
         or profile["work_experience"]
         or profile["personal_projects"]
@@ -330,31 +577,71 @@ def profile_to_form_fields(profile: dict[str, Any]) -> dict[str, str]:
         "linkedin": profile["linkedin"],
         "personal_summary": profile["personal_summary"],
         "technical_skills": "\n".join(profile["technical_skills"]),
+        "minor_skills": "\n".join(profile["minor_skills"]),
+        "stacks": "\n".join(profile["stacks"]),
         "tools_platforms": "\n".join(profile["tools_platforms"]),
         "soft_skills": "\n".join(profile["soft_skills"]),
         "languages": "\n".join(profile["languages"]),
         "work_experience_text": "\n".join(work_lines).strip(),
         "personal_projects_text": "\n".join(project_lines).strip(),
+        "smtp_accounts": [
+            {
+                "id": account["id"],
+                "provider": account["provider"],
+                "auth_type": account.get("auth_type", "password"),
+                "email": account["email"],
+                "label": account.get("label", ""),
+                "host": account.get("host", ""),
+                "port": account.get("port", 587),
+                "use_tls": account.get("use_tls", True),
+                "is_default": account.get("is_default", False),
+                "has_password": bool(account.get("password")),
+            }
+            for account in profile.get("smtp_accounts", [])
+            if account.get("auth_type") != "oauth"
+        ],
+        "oauth_smtp_accounts": [
+            {
+                "id": account["id"],
+                "provider": account["provider"],
+                "email": account["email"],
+                "label": account.get("label", ""),
+                "is_default": account.get("is_default", False),
+            }
+            for account in profile.get("smtp_accounts", [])
+            if account.get("auth_type") == "oauth"
+        ],
     }
 
 
-def profile_from_form(form_data: dict[str, str]) -> dict[str, Any]:
+def profile_from_form(
+    form_data: dict[str, str] | Any,
+    existing_profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build a normalized profile dict from submitted form values."""
+    if hasattr(form_data, "to_dict"):
+        scalar_data = form_data.to_dict()
+    else:
+        scalar_data = dict(form_data)
+
     return normalize_profile(
         {
-            "full_name": form_data.get("full_name", ""),
-            "professional_title": form_data.get("professional_title", ""),
-            "email": form_data.get("email", ""),
-            "github": form_data.get("github", ""),
-            "phone": form_data.get("phone", ""),
-            "linkedin": form_data.get("linkedin", ""),
-            "personal_summary": form_data.get("personal_summary", ""),
-            "technical_skills": parse_multiline_list(form_data.get("technical_skills", "")),
-            "tools_platforms": parse_multiline_list(form_data.get("tools_platforms", "")),
-            "soft_skills": parse_multiline_list(form_data.get("soft_skills", "")),
-            "languages": parse_multiline_list(form_data.get("languages", "")),
-            "work_experience": parse_work_experience_text(form_data.get("work_experience_text", "")),
-            "personal_projects": parse_projects_text(form_data.get("personal_projects_text", "")),
+            "full_name": scalar_data.get("full_name", ""),
+            "professional_title": scalar_data.get("professional_title", ""),
+            "email": scalar_data.get("email", ""),
+            "github": scalar_data.get("github", ""),
+            "phone": scalar_data.get("phone", ""),
+            "linkedin": scalar_data.get("linkedin", ""),
+            "personal_summary": scalar_data.get("personal_summary", ""),
+            "technical_skills": parse_multiline_list(scalar_data.get("technical_skills", "")),
+            "minor_skills": parse_multiline_list(scalar_data.get("minor_skills", "")),
+            "stacks": parse_multiline_list(scalar_data.get("stacks", "")),
+            "tools_platforms": parse_multiline_list(scalar_data.get("tools_platforms", "")),
+            "soft_skills": parse_multiline_list(scalar_data.get("soft_skills", "")),
+            "languages": parse_multiline_list(scalar_data.get("languages", "")),
+            "work_experience": parse_work_experience_text(scalar_data.get("work_experience_text", "")),
+            "personal_projects": parse_projects_text(scalar_data.get("personal_projects_text", "")),
+            "smtp_accounts": parse_smtp_accounts_from_form(form_data, existing_profile),
         }
     )
 
@@ -499,6 +786,8 @@ def merge_profiles(
     changes: dict[str, Any] = {
         "filled_fields": [],
         "added_technical_skills": [],
+        "added_minor_skills": [],
+        "added_stacks": [],
         "added_tools_platforms": [],
         "added_soft_skills": [],
         "added_languages": [],
@@ -523,6 +812,8 @@ def merge_profiles(
 
     list_fields = [
         ("technical_skills", "added_technical_skills"),
+        ("minor_skills", "added_minor_skills"),
+        ("stacks", "added_stacks"),
         ("tools_platforms", "added_tools_platforms"),
         ("soft_skills", "added_soft_skills"),
         ("languages", "added_languages"),
@@ -571,6 +862,10 @@ def summarize_import_changes(changes: dict[str, Any]) -> list[str]:
 
     for skill in changes.get("added_technical_skills", []):
         lines.append(f"Added technical skill: {skill}")
+    for skill in changes.get("added_minor_skills", []):
+        lines.append(f"Added minor skill: {skill}")
+    for stack in changes.get("added_stacks", []):
+        lines.append(f"Added stack: {stack}")
     for tool in changes.get("added_tools_platforms", []):
         lines.append(f"Added tool/platform: {tool}")
     for skill in changes.get("added_soft_skills", []):

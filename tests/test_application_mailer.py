@@ -6,13 +6,85 @@ from job_apply_ai.email.application_mailer import (
     build_application_body,
     build_application_subject,
     cover_letter_to_plain_text,
+    get_smtp_config,
+    list_smtp_accounts,
     parse_recipient_emails,
+    resolve_smtp_account,
+    smtp_is_configured,
 )
 
 
 def test_parse_recipient_emails_splits_and_deduplicates():
     job = {"emails": "hr@acme.com, careers@acme.com, hr@acme.com"}
     assert parse_recipient_emails(job) == ["hr@acme.com", "careers@acme.com"]
+
+
+def test_resolve_smtp_account_gmail_and_hotmail():
+    gmail = resolve_smtp_account(
+        {"provider": "gmail", "email": "user@gmail.com", "password": "secret", "id": "a1"}
+    )
+    assert gmail is not None
+    assert gmail.host == "smtp.gmail.com"
+    assert gmail.from_email == "user@gmail.com"
+
+    hotmail = resolve_smtp_account(
+        {"provider": "hotmail", "email": "user@hotmail.com", "password": "secret", "id": "a2"}
+    )
+    assert hotmail is not None
+    assert hotmail.host == "smtp-mail.outlook.com"
+
+
+def test_get_smtp_config_uses_default_account():
+    profile = {
+        "smtp_accounts": [
+            {
+                "id": "one",
+                "provider": "gmail",
+                "auth_type": "password",
+                "email": "a@gmail.com",
+                "password": "x",
+                "is_default": False,
+            },
+            {
+                "id": "two",
+                "provider": "hotmail",
+                "auth_type": "password",
+                "email": "b@hotmail.com",
+                "password": "y",
+                "is_default": True,
+            },
+        ]
+    }
+    from job_apply_ai.email.application_mailer import get_smtp_config
+
+    config = get_smtp_config(profile)
+    assert config is not None
+    assert config.from_email == "b@hotmail.com"
+
+    selected = get_smtp_config(profile, "one")
+    assert selected is not None
+    assert selected.from_email == "a@gmail.com"
+
+
+def test_list_smtp_accounts_for_ui():
+    profile = {
+        "smtp_accounts": [
+            {
+                "id": "one",
+                "provider": "gmail",
+                "auth_type": "password",
+                "email": "a@gmail.com",
+                "password": "x",
+                "label": "Work",
+                "is_default": True,
+            }
+        ]
+    }
+    accounts = list_smtp_accounts(profile)
+    assert len(accounts) == 1
+    assert accounts[0]["email"] == "a@gmail.com"
+    assert accounts[0]["label"] == "Work"
+    assert smtp_is_configured(profile)
 
 
 def test_cover_letter_to_plain_text_renders_paragraphs():

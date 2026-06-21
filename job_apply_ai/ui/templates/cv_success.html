@@ -59,13 +59,24 @@
                 </button>
                 {% endif %}
                 {% if can_send_application and send_application_url %}
+                {% if smtp_accounts|length > 1 %}
+                <select class="form-select form-select-sm" id="smtpAccountSelect" style="width: auto;" aria-label="Send from account">
+                    {% for account in smtp_accounts %}
+                    <option value="{{ account.id }}" {% if account.is_default %}selected{% endif %}>
+                        {{ account.label }} ({{ account.email }})
+                    </option>
+                    {% endfor %}
+                </select>
+                {% elif smtp_accounts|length == 1 %}
+                <input type="hidden" id="smtpAccountSelect" value="{{ smtp_accounts[0].id }}">
+                {% endif %}
                 <button type="button" class="btn btn-success btn-sm" id="sendApplicationBtn"
                         title="Send CV and cover letter to {{ job_recipient_emails }}">
                     <i class="fas fa-paper-plane me-2"></i>Send Application
                 </button>
                 {% elif job_recipient_emails and not smtp_configured %}
-                <span class="badge bg-warning text-dark align-self-center" title="Configure SMTP in .env to send emails">
-                    SMTP not configured
+                <span class="badge bg-warning text-dark align-self-center" title="Add a sending account in your profile">
+                    No sending account
                 </span>
                 {% endif %}
             </div>
@@ -430,9 +441,15 @@
                 sendApplicationBtn.disabled = true;
                 sendApplicationBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Sending…';
                 try {
+                    const accountSelect = document.getElementById('smtpAccountSelect');
+                    const payload = accountSelect ? { smtp_account_id: accountSelect.value } : {};
                     const response = await fetch(sendApplicationUrl, {
                         method: 'POST',
-                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        body: JSON.stringify(payload),
                     });
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.error || 'Send failed');

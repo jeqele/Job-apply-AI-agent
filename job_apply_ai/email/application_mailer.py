@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import smtplib
 from dataclasses import dataclass
 from email import encoders
@@ -13,9 +12,20 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 logger = logging.getLogger(__name__)
+
+SMTP_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "gmail": {"host": "smtp.gmail.com", "port": 587, "use_tls": True},
+    "hotmail": {"host": "smtp-mail.outlook.com", "port": 587, "use_tls": True},
+    "outlook": {"host": "smtp-mail.outlook.com", "port": 587, "use_tls": True},
+}
+
+SMTP_PROVIDER_LABELS = {
+    "gmail": "Gmail",
+    "hotmail": "Hotmail",
+    "outlook": "Outlook",
+    "custom": "Custom SMTP",
+}
 
 
 @dataclass(frozen=True)
@@ -26,34 +36,115 @@ class SmtpConfig:
     password: str
     use_tls: bool
     from_email: str
+    account_id: str = ""
+    label: str = ""
 
 
-def load_smtp_config(profile: dict[str, Any] | None = None) -> SmtpConfig | None:
-    """Load SMTP settings from environment variables."""
-    load_dotenv()
+def account_is_sendable(account: dict[str, Any]) -> bool:
+    email = str(account.get("email") or "").strip()
+    if not email:
+        return False
+    if str(account.get("auth_type") or "password").lower() == "oauth":
+        return bool(str(account.get("oauth_refresh_token") or "").strip())
+    return bool(str(account.get("password") or "").strip())
 
-    host = os.environ.get("SMTP_HOST", "").strip()
-    username = os.environ.get("SMTP_USER", "").strip()
-    password = os.environ.get("SMTP_PASSWORD", "").strip()
-    if not host or not username or not password:
+
+def account_display_label(account: dict[str, Any]) -> str:
+    label = str(account.get("label") or "").strip()
+    if label:
+        return label
+    provider = str(account.get("provider") or "custom")
+    suffix = " (OAuth)" if account.get("auth_type") == "oauth" else ""
+    return f"{SMTP_PROVIDER_LABELS.get(provider, provider.title())}{suffix}"
+
+
+def resolve_smtp_account(account: dict[str, Any]) -> SmtpConfig | None:
+    """Convert a password-based profile account into SMTP settings."""
+    if str(account.get("auth_type") or "password").lower() == "oauth":
         return None
 
-    port = int(os.environ.get("SMTP_PORT", "587"))
-    use_tls = os.environ.get("SMTP_USE_TLS", "true").lower() in ("1", "true", "yes")
-    profile_email = str((profile or {}).get("email", "")).strip()
-    from_email = os.environ.get("SMTP_FROM", "").strip() or profile_email or username
+    email = str(account.get("email") or "").strip()
+    password = str(account.get("password") or "").strip()
+    if not email or not password:
+        return None
+
+    provider = str(account.get("provider") or "gmail").strip().lower()
+    preset = SMTP_PROVIDER_PRESETS.get(provider, {})
+    host = str(account.get("host") or preset.get("host") or "").strip()
+    if not host:
+        return None
+
+    port = int(account.get("port") or preset.get("port") or 587)
+    use_tls = bool(account.get("use_tls", preset.get("use_tls", True)))
     return SmtpConfig(
         host=host,
         port=port,
-        username=username,
+        username=email,
         password=password,
         use_tls=use_tls,
-        from_email=from_email,
+        from_email=email,
+        account_id=str(account.get("id") or ""),
+        label=account_display_label(account),
     )
 
 
+def list_smtp_accounts(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return profile sending accounts suitable for UI pickers."""
+    accounts = (profile or {}).get("smtp_accounts") or []
+    options: list[dict[str, Any]] = []
+    for account in accounts:
+        if not account_is_sendable(account):
+            continue
+        options.append(
+            {
+                "id": str(account.get("id") or ""),
+                "email": str(account.get("email") or ""),
+                "label": account_display_label(account),
+                "provider": account.get("provider", "custom"),
+                "auth_type": account.get("auth_type", "password"),
+                "is_default": bool(account.get("is_default")),
+            }
+        )
+    return options
+
+
+def get_send_account(
+    profile: dict[str, Any] | None,
+    account_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the full stored account dict selected for sending."""
+    accounts = (profile or {}).get("smtp_accounts") or []
+    if not accounts:
+        return None
+
+    if account_id:
+        for account in accounts:
+            if str(account.get("id")) == str(account_id) and account_is_sendable(account):
+                return account
+        return None
+
+    for account in accounts:
+        if account.get("is_default") and account_is_sendable(account):
+            return account
+    for account in accounts:
+        if account_is_sendable(account):
+            return account
+    return None
+
+
+def get_smtp_config(
+    profile: dict[str, Any] | None,
+    account_id: str | None = None,
+) -> SmtpConfig | None:
+    """Load SMTP settings from a password-based profile account."""
+    account = get_send_account(profile, account_id)
+    if not account:
+        return None
+    return resolve_smtp_account(account)
+
+
 def smtp_is_configured(profile: dict[str, Any] | None = None) -> bool:
-    return load_smtp_config(profile) is not None
+    return bool(list_smtp_accounts(profile))
 
 
 def parse_recipient_emails(job: dict[str, Any]) -> list[str]:
@@ -135,7 +226,7 @@ def build_application_body(
 
 
 class ApplicationMailer:
-    """Send application emails with document attachments."""
+    """Send application emails with document attachments via SMTP."""
 
     def __init__(self, config: SmtpConfig):
         self.config = config
@@ -169,7 +260,11 @@ class ApplicationMailer:
             part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
             message.attach(part)
 
-        logger.info("Sending application email to %s", ", ".join(to_emails))
+        logger.info(
+            "Sending application email from %s to %s",
+            self.config.from_email,
+            ", ".join(to_emails),
+        )
         if self.config.use_tls:
             with smtplib.SMTP(self.config.host, self.config.port, timeout=30) as server:
                 server.ehlo()
@@ -182,3 +277,57 @@ class ApplicationMailer:
         with smtplib.SMTP_SSL(self.config.host, self.config.port, timeout=30) as server:
             server.login(self.config.username, self.config.password)
             server.sendmail(self.config.from_email, to_emails, message.as_string())
+
+
+def send_application_email(
+    account: dict[str, Any],
+    *,
+    to_emails: list[str],
+    subject: str,
+    body: str,
+    attachments: list[tuple[str, str]],
+    google_settings: dict[str, str] | None = None,
+    microsoft_settings: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Send using OAuth or SMTP depending on the stored account type."""
+    auth_type = str(account.get("auth_type") or "password").lower()
+    if auth_type == "oauth":
+        provider = str(account.get("provider") or "").lower()
+        if provider == "gmail":
+            if not google_settings:
+                raise RuntimeError("Google OAuth is not configured on the server.")
+            from job_apply_ai.email.oauth_google import send_gmail_message
+
+            return send_gmail_message(
+                account,
+                google_settings,
+                to_emails=to_emails,
+                subject=subject,
+                body=body,
+                attachments=attachments,
+            )
+        if provider in {"hotmail", "outlook"}:
+            if not microsoft_settings:
+                raise RuntimeError("Microsoft OAuth is not configured on the server.")
+            from job_apply_ai.email.oauth_microsoft import send_microsoft_message
+
+            return send_microsoft_message(
+                account,
+                microsoft_settings,
+                to_emails=to_emails,
+                subject=subject,
+                body=body,
+                attachments=attachments,
+            )
+        raise RuntimeError(f"OAuth sending is not supported for provider '{provider}'.")
+
+    smtp_config = resolve_smtp_account(account)
+    if not smtp_config:
+        raise RuntimeError("Sending account is missing SMTP credentials.")
+    ApplicationMailer(smtp_config).send(
+        to_emails=to_emails,
+        subject=subject,
+        body=body,
+        attachments=attachments,
+    )
+    return {}

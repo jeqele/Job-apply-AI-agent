@@ -5,6 +5,7 @@ DEFAULT_JOB_STATUS = "new"
 # Ordered for sidebar display (pipeline flow, then terminal states).
 JOB_WORKFLOW_STATUSES = [
     "new",
+    "not_match",
     "shortlisted",
     "applying",
     "applied",
@@ -25,6 +26,7 @@ JOB_WORKFLOW_STATUSES = [
 
 JOB_STATUS_LABELS = {
     "new": "New / Discovered",
+    "not_match": "Not Match With You",
     "shortlisted": "Shortlisted",
     "applying": "Applying",
     "applied": "Applied",
@@ -45,6 +47,7 @@ JOB_STATUS_LABELS = {
 
 JOB_STATUS_ICONS = {
     "new": "fa-inbox",
+    "not_match": "fa-user-times",
     "shortlisted": "fa-star",
     "applying": "fa-pen",
     "applied": "fa-paper-plane",
@@ -65,6 +68,7 @@ JOB_STATUS_ICONS = {
 
 JOB_STATUS_BADGE_CLASSES = {
     "new": "bg-primary",
+    "not_match": "bg-secondary",
     "shortlisted": "bg-info",
     "applying": "bg-warning text-dark",
     "applied": "bg-secondary",

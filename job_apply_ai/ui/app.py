@@ -6,6 +6,7 @@ This module provides a Flask web application for the job application AI agent.
 
 import os
 import logging
+import secrets
 import tempfile
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session, jsonify
@@ -24,6 +25,7 @@ from job_apply_ai.job_status import (
     job_status_label,
 )
 from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer
+from job_apply_ai.cv_modifier.job_match_analyzer import classify_jobs_by_profile_match
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
@@ -50,16 +52,29 @@ from job_apply_ai.storage.user_profile import (
     profile_from_form,
     profile_is_ready,
     profile_to_form_fields,
+    remove_smtp_account,
+    set_default_smtp_account,
     summarize_import_changes,
+    update_smtp_account_tokens,
+    upsert_oauth_smtp_account,
 )
 from job_apply_ai.storage.exports import export_jobs
 from job_apply_ai.email.application_mailer import (
-    ApplicationMailer,
     build_application_body,
     build_application_subject,
-    load_smtp_config,
+    get_send_account,
+    list_smtp_accounts,
     parse_recipient_emails,
+    send_application_email,
     smtp_is_configured,
+)
+from job_apply_ai.email.oauth_google import exchange_google_code, google_authorization_url
+from job_apply_ai.email.oauth_microsoft import exchange_microsoft_code, microsoft_authorization_url
+from job_apply_ai.email.oauth_settings import (
+    google_oauth_configured,
+    google_oauth_settings,
+    microsoft_oauth_configured,
+    microsoft_oauth_settings,
 )
 
 # Configure logging
@@ -136,10 +151,23 @@ def _refresh_cv_generation_lock():
 @app.context_processor
 def _inject_cv_generation_lock():
     profile = profile_repo.get_profile()
+    accounts = list_smtp_accounts(profile)
     return {
         'cv_generation_active': session.get('cv_generation_active'),
-        'smtp_configured': smtp_is_configured(profile),
+        'smtp_configured': bool(accounts),
+        'smtp_accounts': accounts,
+        'google_oauth_configured': google_oauth_configured(),
+        'microsoft_oauth_configured': microsoft_oauth_configured(),
     }
+
+
+def _oauth_redirect_uri(endpoint: str) -> str:
+    provider = 'google' if 'google' in endpoint else 'microsoft'
+    env_key = f"{provider.upper()}_OAUTH_REDIRECT_URI"
+    override = os.environ.get(env_key, '').strip()
+    if override:
+        return override
+    return url_for(endpoint, _external=True)
 
 
 def _enrich_jobs_with_skills(jobs: list[dict]) -> list[dict]:
@@ -200,18 +228,21 @@ def _can_send_application(job: dict, profile: dict) -> bool:
     )
 
 
-def _send_application_for_job(job_id: int) -> tuple[dict, int]:
+def _send_application_for_job(job_id: int, account_id: str | None = None) -> tuple[dict, int]:
     """Send CV (and cover letter when available) to the job contact emails."""
     job = job_repo.get_job(job_id)
     if not job:
         return {'error': 'Job not found'}, 404
 
     profile = profile_repo.get_profile()
-    smtp_config = load_smtp_config(profile)
-    if not smtp_config:
+    account = get_send_account(profile, account_id)
+    if not account:
+        if account_id:
+            return {'error': 'Selected sending account was not found'}, 400
         return {
             'error': (
-                'SMTP is not configured. Add SMTP_HOST, SMTP_USER, and SMTP_PASSWORD to your .env file.'
+                'No sending account configured. Connect Gmail or Outlook in your profile, '
+                'or add an app-password account.'
             ),
         }, 400
 
@@ -240,21 +271,31 @@ def _send_application_for_job(job_id: int) -> tuple[dict, int]:
     body = build_application_body(job, profile, cover_letter)
 
     try:
-        ApplicationMailer(smtp_config).send(
+        token_updates = send_application_email(
+            account,
             to_emails=recipients,
             subject=subject,
             body=body,
             attachments=attachments,
+            google_settings=google_oauth_settings(_oauth_redirect_uri('oauth_google_callback')),
+            microsoft_settings=microsoft_oauth_settings(_oauth_redirect_uri('oauth_microsoft_callback')),
         )
+        if token_updates:
+            profile = update_smtp_account_tokens(profile, account['id'], token_updates)
+            profile_repo.save_profile(profile)
     except Exception as exc:
         logger.error('Application email failed for job %s: %s', job_id, exc)
         return {'error': f'Failed to send email: {exc}'}, 500
 
     job_repo.update_job_status(job_id, 'cv_sent')
+    from_email = str(account.get('email') or '')
     return {
         'ok': True,
-        'message': f'Application sent to {", ".join(recipients)}',
+        'message': (
+            f'Application sent from {from_email} to {", ".join(recipients)}'
+        ),
         'recipients': recipients,
+        'from_email': from_email,
         'workflow_status': 'cv_sent',
     }, 200
 
@@ -627,6 +668,8 @@ def search_jobs():
                 mode,
             )
             processed_jobs = _enrich_jobs_with_skills(jobs)
+            profile = profile_repo.get_profile()
+            processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
             job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
             processed_jobs = job_repo.list_jobs(search_run_id=search_run_id)
 
@@ -689,7 +732,7 @@ def user_profile():
             flash('Import review discarded.', 'info')
             return redirect(url_for('user_profile'))
 
-        profile = profile_from_form(request.form.to_dict())
+        profile = profile_from_form(request.form, profile_repo.get_profile())
         if not profile.get('full_name'):
             flash('Full name is required', 'error')
             return render_template(
@@ -714,6 +757,145 @@ def user_profile():
         import_review=bool(session.get('profile_draft')),
         import_summary=session.get('profile_import_summary'),
     )
+
+
+@app.route('/profile/oauth/google/start')
+def oauth_google_start():
+    """Begin Google OAuth for Gmail sending."""
+    if not google_oauth_configured():
+        flash('Google OAuth is not configured. Add GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET to .env.', 'error')
+        return redirect(url_for('user_profile'))
+
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+    redirect_uri = _oauth_redirect_uri('oauth_google_callback')
+    settings = google_oauth_settings(redirect_uri)
+    auth_url, code_verifier = google_authorization_url(settings, state)
+    session['oauth_google_code_verifier'] = code_verifier
+    return redirect(auth_url)
+
+
+@app.route('/profile/oauth/google/callback')
+def oauth_google_callback():
+    """Complete Google OAuth and store the connected Gmail account."""
+    expected_state = session.pop('oauth_state', None)
+    code_verifier = session.pop('oauth_google_code_verifier', '')
+    if request.args.get('state') != expected_state:
+        flash('Google sign-in failed: invalid OAuth state. Please try again.', 'error')
+        return redirect(url_for('user_profile'))
+
+    if request.args.get('error'):
+        flash(f"Google sign-in cancelled: {request.args.get('error_description') or request.args.get('error')}", 'warning')
+        return redirect(url_for('user_profile'))
+
+    code = request.args.get('code', '').strip()
+    if not code:
+        flash('Google sign-in failed: no authorization code received.', 'error')
+        return redirect(url_for('user_profile'))
+
+    try:
+        redirect_uri = _oauth_redirect_uri('oauth_google_callback')
+        settings = google_oauth_settings(redirect_uri)
+        oauth_data = exchange_google_code(
+            settings,
+            code,
+            request.args.get('state', ''),
+            code_verifier=code_verifier,
+        )
+        if not oauth_data.get('oauth_refresh_token'):
+            raise RuntimeError('Google did not return a refresh token. Remove app access and connect again.')
+
+        profile = upsert_oauth_smtp_account(
+            profile_repo.get_profile(),
+            provider='gmail',
+            email=oauth_data['email'],
+            oauth_refresh_token=oauth_data['oauth_refresh_token'],
+            oauth_access_token=oauth_data.get('oauth_access_token', ''),
+            oauth_expires_at=oauth_data.get('oauth_expires_at', ''),
+        )
+        profile_repo.save_profile(profile)
+        flash(f"Connected Gmail account {oauth_data['email']}.", 'success')
+    except Exception as exc:
+        logger.error('Google OAuth callback failed: %s', exc)
+        flash(f'Google sign-in failed: {exc}', 'error')
+    return redirect(url_for('user_profile'))
+
+
+@app.route('/profile/oauth/microsoft/start')
+def oauth_microsoft_start():
+    """Begin Microsoft OAuth for Outlook/Hotmail sending."""
+    if not microsoft_oauth_configured():
+        flash('Microsoft OAuth is not configured. Add MICROSOFT_OAUTH_CLIENT_ID and MICROSOFT_OAUTH_CLIENT_SECRET to .env.', 'error')
+        return redirect(url_for('user_profile'))
+
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+    redirect_uri = _oauth_redirect_uri('oauth_microsoft_callback')
+    settings = microsoft_oauth_settings(redirect_uri)
+    return redirect(microsoft_authorization_url(settings, state))
+
+
+@app.route('/profile/oauth/microsoft/callback')
+def oauth_microsoft_callback():
+    """Complete Microsoft OAuth and store the connected Outlook/Hotmail account."""
+    expected_state = session.pop('oauth_state', None)
+    if request.args.get('state') != expected_state:
+        flash('Microsoft sign-in failed: invalid OAuth state. Please try again.', 'error')
+        return redirect(url_for('user_profile'))
+
+    if request.args.get('error'):
+        flash(f"Microsoft sign-in cancelled: {request.args.get('error_description') or request.args.get('error')}", 'warning')
+        return redirect(url_for('user_profile'))
+
+    code = request.args.get('code', '').strip()
+    if not code:
+        flash('Microsoft sign-in failed: no authorization code received.', 'error')
+        return redirect(url_for('user_profile'))
+
+    try:
+        redirect_uri = _oauth_redirect_uri('oauth_microsoft_callback')
+        settings = microsoft_oauth_settings(redirect_uri)
+        oauth_data = exchange_microsoft_code(settings, code)
+        if not oauth_data.get('oauth_refresh_token'):
+            raise RuntimeError('Microsoft did not return a refresh token. Reconnect and accept all permissions.')
+
+        provider = 'outlook'
+        email = oauth_data['email'].lower()
+        if email.endswith('@hotmail.com') or email.endswith('@live.com'):
+            provider = 'hotmail'
+
+        profile = upsert_oauth_smtp_account(
+            profile_repo.get_profile(),
+            provider=provider,
+            email=oauth_data['email'],
+            oauth_refresh_token=oauth_data['oauth_refresh_token'],
+            oauth_access_token=oauth_data.get('oauth_access_token', ''),
+            oauth_expires_at=oauth_data.get('oauth_expires_at', ''),
+        )
+        profile_repo.save_profile(profile)
+        flash(f"Connected Microsoft account {oauth_data['email']}.", 'success')
+    except Exception as exc:
+        logger.error('Microsoft OAuth callback failed: %s', exc)
+        flash(f'Microsoft sign-in failed: {exc}', 'error')
+    return redirect(url_for('user_profile'))
+
+
+@app.route('/profile/oauth/disconnect/<account_id>', methods=['POST'])
+def oauth_disconnect_account(account_id):
+    """Remove a connected OAuth or SMTP account."""
+    profile = remove_smtp_account(profile_repo.get_profile(), account_id)
+    profile_repo.save_profile(profile)
+    flash('Sending account disconnected.', 'info')
+    return redirect(url_for('user_profile'))
+
+
+@app.route('/profile/oauth/default/<account_id>', methods=['POST'])
+def oauth_set_default_account(account_id):
+    """Set the default sending account."""
+    profile = set_default_smtp_account(profile_repo.get_profile(), account_id)
+    profile_repo.save_profile(profile)
+    flash('Default sending account updated.', 'success')
+    return redirect(url_for('user_profile'))
 
 
 @app.route('/profile/import/start', methods=['POST'])
@@ -1280,7 +1462,8 @@ def generate_job_cover_letter(job_id):
 @app.route('/api/jobs/<int:job_id>/send-application', methods=['POST'])
 def send_job_application(job_id):
     """Email the generated CV and cover letter to the job contact address."""
-    payload, status = _send_application_for_job(job_id)
+    account_id = request.form.get('smtp_account_id') or (request.get_json(silent=True) or {}).get('smtp_account_id')
+    payload, status = _send_application_for_job(job_id, account_id=account_id or None)
     wants_json = (
         request.path.startswith('/api/')
         or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
