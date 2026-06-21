@@ -988,7 +988,7 @@ def make_cv_complete(task_id):
     session['current_cv'] = result.get('output_path')
     session['current_cv_filename'] = result.get('cv_filename')
 
-    flash('Professional CV generated successfully with RAG + Ollama', 'success')
+    flash('Professional CV and cover letter generated successfully with RAG + Ollama', 'success')
     return_from_manage = result.get('return_from_manage', False)
     return_folder = result.get('return_folder', 'all')
     return_search = result.get('return_search', '')
@@ -1173,7 +1173,7 @@ def generate_job_cover_letter(job_id):
     profile = profile_repo.get_profile()
     try:
         cl_filename, _, cl_content = _generate_and_save_cover_letter(
-            job, job_id, profile, tailored_content, cv_filename
+            job, job_id, profile, tailored_content, cv_filename, reset_cover_letter_chat=True
         )
         return jsonify({
             'cover_letter_filename': cl_filename,
