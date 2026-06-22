@@ -26,6 +26,7 @@ class TotaljobsJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         return []
 
@@ -35,6 +36,7 @@ class TotaljobsJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         slug = f"{quote_plus(keyword)}/in-{quote_plus(location)}"
         url = f"{self.BASE_URL}/{slug}"

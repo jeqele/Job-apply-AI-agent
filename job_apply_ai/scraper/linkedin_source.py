@@ -20,6 +20,7 @@ class LinkedInJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         return []
 
@@ -29,12 +30,14 @@ class LinkedInJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         return self._scraper.scrape_job_listings(
             keyword,
             location,
             max_jobs=max_jobs,
             max_days_old=max_days_old,
+            search_filters=kwargs.get("search_filters"),
         )
 
     def fetch_job_details_batch(self, jobs: list[dict]) -> list[dict]:

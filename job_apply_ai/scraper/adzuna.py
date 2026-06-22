@@ -38,6 +38,7 @@ class AdzunaJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         app_id, app_key = self._credentials()
         params = {
@@ -95,6 +96,7 @@ class AdzunaJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         url = (
             f"{self.WEB_BASE}?q={quote_plus(keyword)}"

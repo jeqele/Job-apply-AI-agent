@@ -37,6 +37,7 @@ class ReedJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         params = {
             "keywords": keyword,
@@ -82,6 +83,7 @@ class ReedJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         slug = f"{keyword.strip().lower().replace(' ', '-')}-jobs-in-{location.strip().lower().replace(' ', '-')}"
         url = f"{self.WEB_URL}/{quote_plus(slug)}"

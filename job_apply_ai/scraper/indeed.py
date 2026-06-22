@@ -32,6 +32,7 @@ class IndeedJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         return []
 
@@ -41,11 +42,15 @@ class IndeedJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         search_url = (
             f"{self.BASE_URL}?q={quote_plus(keyword)}&l={quote_plus(location)}"
             f"&fromage={max_days_old}"
         )
+        search_filters = kwargs.get("search_filters")
+        if search_filters and getattr(search_filters, "remote", False):
+            search_url += "&sc=0kf%3Aattr(DSQF7)"
         driver = create_chrome_driver(headless=self.headless)
         jobs = []
 

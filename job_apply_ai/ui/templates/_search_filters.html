@@ -1,0 +1,21 @@
+<div class="col-12">
+    {% set id_prefix = id_prefix|default('') %}
+    <fieldset class="search-filter-fieldset border rounded p-3">
+        <legend class="form-label mb-2">Job preferences</legend>
+        <div class="d-flex flex-wrap gap-3">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="{{ id_prefix }}filter_remote" name="filter_remote">
+                <label class="form-check-label" for="{{ id_prefix }}filter_remote">Remote</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="{{ id_prefix }}filter_relocation" name="filter_relocation">
+                <label class="form-check-label" for="{{ id_prefix }}filter_relocation">Relocation support</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="{{ id_prefix }}filter_visa_sponsorship" name="filter_visa_sponsorship">
+                <label class="form-check-label" for="{{ id_prefix }}filter_visa_sponsorship">Visa sponsorship</label>
+            </div>
+        </div>
+        <div class="form-text">Checked preferences refine search queries and filter results after scraping.</div>
+    </fieldset>
+</div>

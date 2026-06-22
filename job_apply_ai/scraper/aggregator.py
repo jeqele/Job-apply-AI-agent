@@ -14,6 +14,7 @@ from job_apply_ai.storage.job_repository import JobRepository
 from job_apply_ai.scraper.linkedin_source import LinkedInJobSource
 from job_apply_ai.scraper.reed import ReedJobSource
 from job_apply_ai.scraper.remoteok import RemoteOKJobSource
+from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.scraper.totaljobs import TotaljobsJobSource
 
 load_dotenv()
@@ -59,10 +60,13 @@ def search_jobs(
     mode: str = "both",
     headless: bool = True,
     enrich_details: bool = True,
+    search_filters: SearchFilters | None = None,
 ) -> list[dict]:
     """Search jobs across multiple sources."""
-    selected_sources = resolve_sources(sources)
-    per_source_limit = max(1, max_jobs)
+    filters = search_filters or SearchFilters()
+    keyword, location = filters.augment_query(keyword, location)
+    selected_sources = filters.expand_sources(resolve_sources(sources))
+    per_source_limit = max(1, max_jobs * filters.fetch_multiplier())
 
     all_jobs: list[dict] = []
     for source_name in selected_sources:
@@ -75,12 +79,14 @@ def search_jobs(
             max_jobs=per_source_limit,
             max_days_old=max_days_old,
             mode=mode,
+            search_filters=filters,
         )
         if enrich_details:
             jobs = source.enrich_jobs(jobs, deep_fetch=True)
         all_jobs.extend(jobs)
 
-    return dedupe_jobs(all_jobs)[:max_jobs]
+    filtered_jobs = filters.filter_jobs(dedupe_jobs(all_jobs))
+    return filtered_jobs[:max_jobs]
 
 
 def search_and_save(

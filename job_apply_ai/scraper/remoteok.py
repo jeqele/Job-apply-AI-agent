@@ -27,6 +27,7 @@ class RemoteOKJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         response = requests.get(
             self.API_URL,
@@ -82,6 +83,7 @@ class RemoteOKJobSource(JobSource):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         response = requests.get(
             self.WEB_URL,

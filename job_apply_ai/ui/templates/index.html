@@ -539,6 +539,8 @@
                                             <label for="location" class="form-label">Location</label>
                                             <input type="text" class="form-control" id="location" name="location" placeholder="e.g. Remote, Berlin" required autocomplete="address-level2">
                                         </div>
+                                        {% set id_prefix = '' %}
+                                        {% include '_search_filters.html' %}
                                         <div class="col-sm-6 col-md-4">
                                             <label for="max_jobs" class="form-label">Number of jobs</label>
                                             <input type="number" class="form-control" id="max_jobs" name="max_jobs" value="5" min="1" max="20">
@@ -590,6 +592,8 @@
                                                 <label for="locations_text" class="form-label mt-3 small text-muted">Or paste locations here</label>
                                                 <textarea class="form-control font-monospace" id="locations_text" name="locations_text" rows="5" placeholder="Berlin&#10;Remote&#10;London"></textarea>
                                             </div>
+                                            {% set id_prefix = 'batch_' %}
+                                            {% include '_search_filters.html' %}
                                             <div class="col-sm-6 col-md-4">
                                                 <label for="batch_max_jobs" class="form-label">Jobs per search</label>
                                                 <input type="number" class="form-control" id="batch_max_jobs" name="max_jobs" value="5" min="1" max="20">

@@ -99,7 +99,14 @@ class LinkedInScraper:
         """Configure and return a Chrome WebDriver."""
         return create_chrome_driver(headless=self.headless)
     
-    def scrape_job_listings(self, keyword, location, max_jobs=10, max_days_old=14):
+    def scrape_job_listings(
+        self,
+        keyword,
+        location,
+        max_jobs=10,
+        max_days_old=14,
+        search_filters=None,
+    ):
         """
         Scrape job listings from LinkedIn based on keyword and location.
         
@@ -115,7 +122,12 @@ class LinkedInScraper:
         logger.info(f"Scraping LinkedIn jobs for '{keyword}' in '{location}'")
         
         driver = self._configure_driver()
-        search_url = f"https://www.linkedin.com/jobs/search?keywords={keyword.replace(' ', '%20')}&location={location.replace(' ', '%20')}"
+        search_url = (
+            f"https://www.linkedin.com/jobs/search?"
+            f"keywords={keyword.replace(' ', '%20')}&location={location.replace(' ', '%20')}"
+        )
+        if search_filters and getattr(search_filters, "remote", False):
+            search_url += "&f_WT=2"
         
         try:
             driver.get(search_url)

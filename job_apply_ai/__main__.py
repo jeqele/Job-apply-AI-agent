@@ -54,6 +54,9 @@ def main():
         action='store_true',
         help='Skip fetching job details and contact emails',
     )
+    scraper_parser.add_argument('--remote', action='store_true', help='Prefer remote jobs')
+    scraper_parser.add_argument('--relocation', action='store_true', help='Prefer relocation support')
+    scraper_parser.add_argument('--visa-sponsorship', action='store_true', help='Prefer visa sponsorship')
     
     # CV modifier command
     cv_parser = subparsers.add_parser('tailor', help='Tailor CV for a job')
@@ -101,6 +104,9 @@ def main():
         action='store_true',
         help='Skip fetching job details and contact emails',
     )
+    batch_search_parser.add_argument('--remote', action='store_true', help='Prefer remote jobs')
+    batch_search_parser.add_argument('--relocation', action='store_true', help='Prefer relocation support')
+    batch_search_parser.add_argument('--visa-sponsorship', action='store_true', help='Prefer visa sponsorship')
     
     # Parse arguments
     args = parser.parse_args()
@@ -112,6 +118,7 @@ def main():
         
     elif args.command == 'scrape':
         from job_apply_ai.scraper.aggregator import search_and_save
+        from job_apply_ai.scraper.search_filters import SearchFilters
 
         output_file = args.output
         if not output_file:
@@ -121,6 +128,11 @@ def main():
             output_file = os.path.join(output_dir, f"jobs_{today_date}.xlsx")
 
         sources = [source.strip() for source in args.sources.split(",") if source.strip()]
+        search_filters = SearchFilters(
+            remote=args.remote,
+            relocation=args.relocation,
+            visa_sponsorship=args.visa_sponsorship,
+        )
         jobs, filename = search_and_save(
             args.keyword,
             args.location,
@@ -130,6 +142,7 @@ def main():
             sources=sources,
             mode=args.mode,
             enrich_details=not args.no_enrich,
+            search_filters=search_filters,
         )
 
         if jobs:
@@ -219,6 +232,7 @@ def main():
         )
         from job_apply_ai.scraper.aggregator import search_jobs
         from job_apply_ai.scraper.jobs_io import save_jobs_to_excel
+        from job_apply_ai.scraper.search_filters import SearchFilters
         from job_apply_ai.storage.database import init_db
         from job_apply_ai.storage.job_repository import JobRepository
 
@@ -232,6 +246,11 @@ def main():
             sys.exit(1)
 
         sources = [source.strip() for source in args.sources.split(",") if source.strip()]
+        search_filters = SearchFilters(
+            remote=args.remote,
+            relocation=args.relocation,
+            visa_sponsorship=args.visa_sponsorship,
+        )
         repo = JobRepository()
         unique_titles = len(set(titles))
         unique_locations = len(set(locations))
@@ -260,6 +279,7 @@ def main():
                     sources=sources,
                     mode=args.mode,
                     enrich_details=not args.no_enrich,
+                    search_filters=search_filters,
                 )
                 if jobs:
                     repo.upsert_jobs(jobs, search_run_id=search_run_id)

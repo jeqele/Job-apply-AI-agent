@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 
 from job_apply_ai.scraper.email_extractor import enrich_jobs_with_emails
 from job_apply_ai.scraper.jobs_io import dedupe_jobs, enrich_job_metadata, normalize_job
+from job_apply_ai.scraper.search_filters import SearchFilters
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class JobSource(ABC):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         """Fetch jobs using an official or public API."""
 
@@ -36,6 +38,7 @@ class JobSource(ABC):
         location: str,
         max_jobs: int = 10,
         max_days_old: int = 30,
+        **kwargs,
     ) -> list[dict]:
         """Fetch jobs by scraping the website."""
 
@@ -46,13 +49,17 @@ class JobSource(ABC):
         max_jobs: int = 10,
         max_days_old: int = 30,
         mode: str = "both",
+        search_filters: SearchFilters | None = None,
     ) -> list[dict]:
         """Search jobs using API, scrape, or both."""
         jobs: list[dict] = []
+        fetch_kwargs = {"search_filters": search_filters or SearchFilters()}
 
         if mode in {"api", "both"} and self.supports_api:
             try:
-                api_jobs = self.fetch_via_api(keyword, location, max_jobs, max_days_old)
+                api_jobs = self.fetch_via_api(
+                    keyword, location, max_jobs, max_days_old, **fetch_kwargs
+                )
                 jobs.extend(
                     normalize_job(job, self.source_name, fetch_method="api")
                     for job in api_jobs
@@ -63,7 +70,9 @@ class JobSource(ABC):
 
         if mode in {"scrape", "both"} and self.supports_scrape:
             try:
-                scrape_jobs = self.fetch_via_scrape(keyword, location, max_jobs, max_days_old)
+                scrape_jobs = self.fetch_via_scrape(
+                    keyword, location, max_jobs, max_days_old, **fetch_kwargs
+                )
                 jobs.extend(
                     normalize_job(job, self.source_name, fetch_method="scrape")
                     for job in scrape_jobs

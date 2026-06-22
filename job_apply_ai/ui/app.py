@@ -14,6 +14,7 @@ import zipfile
 import io
 
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
+from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.batch_search import (
     build_search_queue,
     decode_uploaded_text,
@@ -662,6 +663,7 @@ def _run_batch_search_task(
     source_list: list[str],
     mode: str,
     profile: dict,
+    search_filters: SearchFilters | None = None,
 ) -> None:
     total = len(queue)
     unique_titles = len({keyword for keyword, _ in queue})
@@ -717,6 +719,7 @@ def _run_batch_search_task(
                 sources=source_list,
                 mode=mode,
                 enrich_details=True,
+                search_filters=search_filters,
             )
             if jobs:
                 processed_jobs = _enrich_jobs_with_skills(jobs)
@@ -982,6 +985,7 @@ def search_jobs():
         max_jobs = int(request.form.get('max_jobs', 10))
         sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
         mode = request.form.get('mode', 'both')
+        search_filters = SearchFilters.from_mapping(request.form)
         
         if not keyword or not location:
             flash('Please enter both job title and location', 'error')
@@ -996,10 +1000,11 @@ def search_jobs():
                 sources=source_list,
                 mode=mode,
                 enrich_details=True,
+                search_filters=search_filters,
             )
             
             if not jobs:
-                flash('No jobs found. Try different search terms.', 'warning')
+                flash('No jobs found. Try different search terms or adjust filters.', 'warning')
                 return redirect(url_for('index'))
 
             search_run_id = job_repo.create_search_run(
@@ -1049,6 +1054,7 @@ def batch_search_jobs():
     max_jobs = int(request.form.get('max_jobs', 5))
     sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
     mode = request.form.get('mode', 'both')
+    search_filters = SearchFilters.from_mapping(request.form)
     source_list = [source.strip() for source in sources.split(',') if source.strip()]
     profile = profile_repo.get_profile()
 
@@ -1071,6 +1077,7 @@ def batch_search_jobs():
             source_list,
             mode,
             profile,
+            search_filters,
         ),
     )
     return redirect(url_for('batch_search_progress', task_id=task_id))
