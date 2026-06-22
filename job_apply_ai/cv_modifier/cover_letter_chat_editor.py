@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any
 
+from job_apply_ai.cv_modifier.chat_context import build_job_context, build_profile_context
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
@@ -44,13 +45,16 @@ class CoverLetterChatEditor:
 
         cv_summary = CoverLetterGenerator._summarize_cv(tailored_cv_content or {})
         history_text = self._format_history(chat_history or [])
+        job_context = build_job_context(job)
+        profile_context = build_profile_context(profile)
         prompt = f"""
 The user wants to refine their cover letter for a job application.
 
 TARGET JOB:
-Title: {job.get('title', '')}
-Company: {job.get('company', '')}
-Description excerpt: {str(job.get('description', ''))[:1200]}
+{job_context}
+
+CANDIDATE PROFILE (full stored profile — only use facts from here):
+{profile_context}
 
 CV HIGHLIGHTS (facts you may reference):
 {cv_summary}

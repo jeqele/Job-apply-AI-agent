@@ -32,6 +32,8 @@
         .chat-message.assistant { background: white; border: 1px solid #dee2e6; border-bottom-left-radius: 0.25rem; }
         .chat-input-area { border-top: 1px solid #dee2e6; padding: 1rem; background: white; }
         .chat-empty { color: #6c757d; text-align: center; padding: 2rem 1rem; }
+        .chat-session-bar { background: rgba(255,255,255,0.12); padding: 0.65rem 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.15); }
+        .chat-session-bar .form-select { min-width: 0; }
         .job-sidebar .job-title { font-size: 1.2rem; font-weight: 600; }
         .job-sidebar .company-name { color: #6c757d; }
         .typing-indicator { color: #6c757d; font-size: 0.9rem; padding: 0.5rem 1rem; }
@@ -155,6 +157,16 @@
                     <div class="card-header" id="chatHeader">
                         <i class="fas fa-comments me-2"></i>Chat to Modify CV
                     </div>
+                    {% if chat_sessions_api_url %}
+                    <div class="chat-session-bar">
+                        <div class="d-flex gap-2 align-items-center">
+                            <select class="form-select form-select-sm" id="chatSessionSelect" aria-label="Chat session"></select>
+                            <button type="button" class="btn btn-light btn-sm text-nowrap" id="newChatSessionBtn" title="Start a new chat session">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                    {% endif %}
                     <div class="chat-messages" id="chatMessages"></div>
                     <div class="typing-indicator d-none" id="chatTyping">
                         <i class="fas fa-spinner fa-spin me-2"></i><span id="chatTypingText">AI is updating your CV…</span>
@@ -186,8 +198,13 @@
     <script id="coverLetterData" type="application/json">{{ cover_letter | tojson }}</script>
     <script id="chatHistoryData" type="application/json">{{ chat_history | tojson }}</script>
     <script id="coverLetterChatData" type="application/json">{{ cover_letter_chat_history | tojson }}</script>
+    <script id="cvChatSessionsData" type="application/json">{{ cv_chat_sessions | tojson }}</script>
+    <script id="coverLetterChatSessionsData" type="application/json">{{ cover_letter_chat_sessions | tojson }}</script>
+    <script id="cvChatActiveSessionData" type="application/json">{{ cv_chat_active_session_id | tojson }}</script>
+    <script id="coverLetterChatActiveSessionData" type="application/json">{{ cover_letter_chat_active_session_id | tojson }}</script>
     <script>
         const chatApiUrl = {{ chat_api_url | tojson }};
+        const chatSessionsApiUrl = {{ chat_sessions_api_url | tojson }};
         const generateCoverLetterUrl = {{ generate_cover_letter_url | tojson }};
         const sendApplicationUrl = {{ send_application_url | tojson }};
         const profileName = JSON.parse(document.getElementById('profileNameData').textContent || '""');
@@ -196,6 +213,10 @@
         let activeDocument = 'cv';
         let cvChatHistory = JSON.parse(document.getElementById('chatHistoryData').textContent || '[]');
         let coverLetterChatHistory = JSON.parse(document.getElementById('coverLetterChatData').textContent || '[]');
+        let cvChatSessions = JSON.parse(document.getElementById('cvChatSessionsData').textContent || '[]');
+        let coverLetterChatSessions = JSON.parse(document.getElementById('coverLetterChatSessionsData').textContent || '[]');
+        let cvChatActiveSessionId = JSON.parse(document.getElementById('cvChatActiveSessionData').textContent || '""');
+        let coverLetterChatActiveSessionId = JSON.parse(document.getElementById('coverLetterChatActiveSessionData').textContent || '""');
 
         const chatPlaceholders = {
             cv: 'e.g. Make the summary shorter and emphasize Python experience',
@@ -223,6 +244,70 @@
         function setActiveChatHistory(history) {
             if (activeDocument === 'cover_letter') coverLetterChatHistory = history;
             else cvChatHistory = history;
+        }
+
+        function activeChatSessions() {
+            return activeDocument === 'cover_letter' ? coverLetterChatSessions : cvChatSessions;
+        }
+
+        function activeChatSessionId() {
+            return activeDocument === 'cover_letter' ? coverLetterChatActiveSessionId : cvChatActiveSessionId;
+        }
+
+        function setActiveChatSessionId(sessionId) {
+            if (activeDocument === 'cover_letter') coverLetterChatActiveSessionId = sessionId;
+            else cvChatActiveSessionId = sessionId;
+        }
+
+        function setActiveChatSessions(sessions) {
+            if (activeDocument === 'cover_letter') coverLetterChatSessions = sessions;
+            else cvChatSessions = sessions;
+        }
+
+        function applyChatSessionPayload(data) {
+            if (!data) return;
+            cvChatHistory = data.chat_history || cvChatHistory;
+            coverLetterChatHistory = data.cover_letter_chat_history || coverLetterChatHistory;
+            cvChatSessions = data.cv_chat_sessions || cvChatSessions;
+            coverLetterChatSessions = data.cover_letter_chat_sessions || coverLetterChatSessions;
+            cvChatActiveSessionId = data.cv_chat_active_session_id || cvChatActiveSessionId;
+            coverLetterChatActiveSessionId = data.cover_letter_chat_active_session_id || coverLetterChatActiveSessionId;
+            renderSessionSelect();
+            renderChat();
+        }
+
+        function renderSessionSelect() {
+            const select = document.getElementById('chatSessionSelect');
+            if (!select) return;
+            const sessions = activeChatSessions();
+            const activeId = activeChatSessionId();
+            if (!sessions.length) {
+                select.innerHTML = '<option value="">No sessions</option>';
+                select.disabled = true;
+                return;
+            }
+            select.disabled = false;
+            select.innerHTML = sessions.map((session, index) => {
+                const label = session.title || `Session ${index + 1}`;
+                const selected = session.id === activeId ? 'selected' : '';
+                return `<option value="${escapeHtml(session.id)}" ${selected}>${escapeHtml(label)}</option>`;
+            }).join('');
+        }
+
+        async function manageChatSession(action, sessionId = '') {
+            if (!chatSessionsApiUrl) return;
+            const response = await fetch(chatSessionsApiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    document: activeDocument,
+                    action,
+                    session_id: sessionId,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Could not update chat session');
+            applyChatSessionPayload(data);
         }
 
         function renderSkillPills(items, cssClass = '') {
@@ -351,6 +436,7 @@
             document.getElementById('chatTypingText').textContent = `AI is updating your ${label}…`;
             document.getElementById('chatInput').placeholder = chatPlaceholders[activeDocument];
             document.getElementById('chatHelpText').textContent = chatHelp[activeDocument];
+            renderSessionSelect();
             renderChat();
         }
 
@@ -378,6 +464,37 @@
         renderCvPreview();
         renderCoverLetterPreview();
         updateChatChrome();
+
+        const chatSessionSelect = document.getElementById('chatSessionSelect');
+        if (chatSessionSelect && chatSessionsApiUrl) {
+            chatSessionSelect.addEventListener('change', async () => {
+                const sessionId = chatSessionSelect.value;
+                if (!sessionId || sessionId === activeChatSessionId()) return;
+                chatSessionSelect.disabled = true;
+                try {
+                    await manageChatSession('switch', sessionId);
+                } catch (error) {
+                    alert(error.message);
+                    renderSessionSelect();
+                } finally {
+                    chatSessionSelect.disabled = false;
+                }
+            });
+        }
+
+        const newChatSessionBtn = document.getElementById('newChatSessionBtn');
+        if (newChatSessionBtn && chatSessionsApiUrl) {
+            newChatSessionBtn.addEventListener('click', async () => {
+                newChatSessionBtn.disabled = true;
+                try {
+                    await manageChatSession('new');
+                } catch (error) {
+                    alert(error.message);
+                } finally {
+                    newChatSessionBtn.disabled = false;
+                }
+            });
+        }
 
         const chatForm = document.getElementById('chatForm');
         if (chatForm && chatApiUrl) {
@@ -413,14 +530,12 @@
 
                     if (data.document === 'cover_letter') {
                         coverLetter = data.cover_letter || coverLetter;
-                        setActiveChatHistory(data.cover_letter_chat_history || history);
                         renderCoverLetterPreview();
                     } else {
                         cvContent = data.content || cvContent;
-                        setActiveChatHistory(data.chat_history || history);
                         renderCvPreview();
                     }
-                    renderChat();
+                    applyChatSessionPayload(data);
                 } catch (error) {
                     history = activeChatHistory().concat([{ role: 'assistant', content: 'Sorry, I could not apply that change: ' + error.message }]);
                     setActiveChatHistory(history);

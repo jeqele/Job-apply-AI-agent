@@ -52,7 +52,17 @@ from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
-from job_apply_ai.cv_modifier.cv_content_store import load_cv_content, save_cv_content
+from job_apply_ai.cv_modifier.cv_content_store import (
+    append_active_chat_messages,
+    get_active_chat_messages,
+    get_active_chat_session_id,
+    get_chat_sessions,
+    load_cv_content,
+    normalize_store,
+    save_cv_content,
+    set_active_chat_session,
+    start_chat_session,
+)
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.profile_importer import ProfileImporter
 from job_apply_ai.ui.cv_tasks import (
@@ -300,6 +310,28 @@ def _save_job_cv_content(cv_filename: str, tailored_content: dict, **kwargs) -> 
     save_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename, tailored_content, **kwargs)
 
 
+def _document_chat_payload(
+    store: dict,
+    document_type: str,
+    *,
+    extra: dict | None = None,
+) -> dict:
+    """Build JSON payload with active session messages and session metadata."""
+    document = 'cover_letter' if document_type == 'cover_letter' else 'cv'
+    payload = {
+        'document': document,
+        'chat_history': get_active_chat_messages(store, 'cv'),
+        'cover_letter_chat_history': get_active_chat_messages(store, 'cover_letter'),
+        'cv_chat_sessions': get_chat_sessions(store, 'cv'),
+        'cover_letter_chat_sessions': get_chat_sessions(store, 'cover_letter'),
+        'cv_chat_active_session_id': get_active_chat_session_id(store, 'cv'),
+        'cover_letter_chat_active_session_id': get_active_chat_session_id(store, 'cover_letter'),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 def _load_job_cv_store(cv_filename: str) -> dict | None:
     return load_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename)
 
@@ -410,15 +442,16 @@ def _generate_and_save_cover_letter(
         job['cover_letter_filename'] = cl_filename
         job_repo.update_job(job_id, job)
 
-    store = _load_job_cv_store(cv_filename) or {}
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    if reset_cover_letter_chat:
+        start_chat_session(store, 'cover_letter')
     _save_job_cv_content(
         cv_filename,
         store.get('tailored_content', tailored_content),
         chat_history=store.get('chat_history', []),
         cover_letter=cl_content,
-        cover_letter_chat_history=(
-            [] if reset_cover_letter_chat else store.get('cover_letter_chat_history', [])
-        ),
+        cover_letter_chat_history=store.get('cover_letter_chat_history', []),
+        store=store,
     )
     return cl_filename, cl_path, cl_content
 
@@ -439,12 +472,16 @@ def _cv_preview_context(
 ) -> dict:
     """Build template context for the CV preview / success page."""
     cv_filename = job.get('cv_filename', '')
-    store = _load_job_cv_store(cv_filename) if cv_filename else None
+    store = normalize_store(_load_job_cv_store(cv_filename) if cv_filename else None)
     profile = profile_repo.get_profile()
-    content = tailored_content or (store or {}).get('tailored_content', {})
-    chat_history = (store or {}).get('chat_history', [])
-    cover_letter = (store or {}).get('cover_letter', {})
-    cover_letter_chat_history = (store or {}).get('cover_letter_chat_history', [])
+    content = tailored_content or store.get('tailored_content', {})
+    chat_history = get_active_chat_messages(store, 'cv')
+    cover_letter = store.get('cover_letter', {})
+    cover_letter_chat_history = get_active_chat_messages(store, 'cover_letter')
+    cv_chat_sessions = get_chat_sessions(store, 'cv')
+    cover_letter_chat_sessions = get_chat_sessions(store, 'cover_letter')
+    cv_chat_active_session_id = get_active_chat_session_id(store, 'cv')
+    cover_letter_chat_active_session_id = get_active_chat_session_id(store, 'cover_letter')
     categories = matched_categories or CVChatEditor.content_to_matched_categories(content)
     job_id = job.get('id')
     cover_letter_filename = job.get('cover_letter_filename', '')
@@ -463,6 +500,13 @@ def _cv_preview_context(
         'rag_chunk_count': rag_chunk_count,
         'chat_history': chat_history,
         'cover_letter_chat_history': cover_letter_chat_history,
+        'cv_chat_sessions': cv_chat_sessions,
+        'cover_letter_chat_sessions': cover_letter_chat_sessions,
+        'cv_chat_active_session_id': cv_chat_active_session_id,
+        'cover_letter_chat_active_session_id': cover_letter_chat_active_session_id,
+        'chat_sessions_api_url': (
+            url_for('document_chat_sessions', job_id=job_id) if job_id else None
+        ),
         'has_cover_letter': bool(cover_letter_filename and cover_letter.get('body_paragraphs')),
         'show_success_banner': show_success_banner,
         'return_folder': return_folder,
@@ -2035,7 +2079,7 @@ def document_chat(job_id):
     if not user_message:
         return jsonify({'error': 'Message is required'}), 400
 
-    store = _load_job_cv_store(cv_filename) or {}
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
     profile = profile_repo.get_profile()
 
     try:
@@ -2045,7 +2089,7 @@ def document_chat(job_id):
             if not cl_filename or not store.get('cover_letter'):
                 return jsonify({'error': 'Cover letter not available for editing'}), 404
 
-            chat_history = store.get('cover_letter_chat_history', [])
+            chat_history = get_active_chat_messages(store, 'cover_letter')
             editor = CoverLetterChatEditor()
             result = editor.modify(
                 current_content=store['cover_letter'],
@@ -2059,29 +2103,34 @@ def document_chat(job_id):
             reply = result['reply']
             editor.rebuild_document(cl_path, updated_content)
 
-            chat_history = chat_history + [
-                {'role': 'user', 'content': user_message},
-                {'role': 'assistant', 'content': reply},
-            ]
+            append_active_chat_messages(
+                store,
+                'cover_letter',
+                [
+                    {'role': 'user', 'content': user_message},
+                    {'role': 'assistant', 'content': reply},
+                ],
+            )
             _save_job_cv_content(
                 cv_filename,
                 store.get('tailored_content', {}),
-                chat_history=store.get('chat_history', []),
                 cover_letter=updated_content,
-                cover_letter_chat_history=chat_history,
+                store=store,
             )
 
-            return jsonify({
-                'reply': reply,
-                'document': 'cover_letter',
-                'cover_letter': updated_content,
-                'cover_letter_chat_history': chat_history,
-            })
+            return jsonify(_document_chat_payload(
+                store,
+                'cover_letter',
+                extra={
+                    'reply': reply,
+                    'cover_letter': updated_content,
+                },
+            ))
 
         if not store.get('tailored_content'):
             return jsonify({'error': 'CV content not available for editing'}), 404
 
-        chat_history = store.get('chat_history', [])
+        chat_history = get_active_chat_messages(store, 'cv')
         current_content = store['tailored_content']
         editor = CVChatEditor()
         result = editor.modify(
@@ -2099,31 +2148,73 @@ def document_chat(job_id):
         job['matched_categories'] = matched_categories
         job_repo.update_job(job_id, job)
 
-        chat_history = chat_history + [
-            {'role': 'user', 'content': user_message},
-            {'role': 'assistant', 'content': reply},
-        ]
+        append_active_chat_messages(
+            store,
+            'cv',
+            [
+                {'role': 'user', 'content': user_message},
+                {'role': 'assistant', 'content': reply},
+            ],
+        )
         _save_job_cv_content(
             cv_filename,
             updated_content,
-            chat_history=chat_history,
             cover_letter=store.get('cover_letter', {}),
-            cover_letter_chat_history=store.get('cover_letter_chat_history', []),
+            store=store,
         )
 
         session['current_cv'] = cv_path
         session['current_cv_filename'] = cv_filename
 
-        return jsonify({
-            'reply': reply,
-            'document': 'cv',
-            'content': updated_content,
-            'matched_categories': matched_categories,
-            'chat_history': chat_history,
-        })
+        return jsonify(_document_chat_payload(
+            store,
+            'cv',
+            extra={
+                'reply': reply,
+                'content': updated_content,
+                'matched_categories': matched_categories,
+            },
+        ))
     except Exception as exc:
         logger.error('Document chat edit failed for job %s: %s', job_id, exc)
         return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/jobs/<int:job_id>/documents/chat/sessions', methods=['POST'])
+def document_chat_sessions(job_id):
+    """Create or switch persisted chat sessions for CV or cover letter editing."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return jsonify({'error': 'No CV file found for this job'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    document_type = str(payload.get('document', 'cv')).strip().lower()
+    action = str(payload.get('action', 'new')).strip().lower()
+    session_id = str(payload.get('session_id', '')).strip()
+
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    document = 'cover_letter' if document_type == 'cover_letter' else 'cv'
+
+    if action == 'switch':
+        if not session_id:
+            return jsonify({'error': 'session_id is required to switch sessions'}), 400
+        if not set_active_chat_session(store, document, session_id):
+            return jsonify({'error': 'Chat session not found'}), 404
+    else:
+        start_chat_session(store, document)
+
+    _save_job_cv_content(
+        cv_filename,
+        store.get('tailored_content', {}),
+        cover_letter=store.get('cover_letter', {}),
+        store=store,
+    )
+
+    return jsonify(_document_chat_payload(store, document))
 
 
 @app.route('/api/jobs/<int:job_id>/cover-letter/generate', methods=['POST'])
