@@ -4,6 +4,7 @@
     <title>Job Listings</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% include '_job_card_styles.html' %}
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -19,46 +20,6 @@
             margin-bottom: 2rem;
             color: white;
             box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-        }
-        .job-card {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            margin-bottom: 1.5rem;
-            overflow: hidden;
-        }
-        .job-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-        }
-        .card-header {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            color: white;
-            font-weight: 600;
-            padding: 1.25rem;
-            border-bottom: none;
-        }
-        .card-body {
-            padding: 1.5rem;
-        }
-        .skills-badge {
-            display: inline-block;
-            background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
-            padding: 0.4rem 0.8rem;
-            border-radius: 2rem;
-            margin-right: 0.5rem;
-            margin-bottom: 0.5rem;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: #495057;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-            transition: all 0.3s ease;
-        }
-        .skills-badge:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            background: linear-gradient(135deg, #dee2e6 0%, #ced4da 100%);
         }
         .action-buttons {
             display: flex;
@@ -124,24 +85,6 @@
             border-radius: 0.5rem;
             border: none;
             box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
-        }
-        .company-badge {
-            display: inline-block;
-            background-color: #f8f9fa;
-            padding: 0.3rem 0.6rem;
-            border-radius: 0.5rem;
-            font-size: 0.8rem;
-            color: #6c757d;
-            margin-bottom: 1rem;
-            border: 1px solid #dee2e6;
-        }
-        .job-actions {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 1.5rem;
-            padding-top: 1rem;
-            border-top: 1px solid #f1f1f1;
         }
         .stats-card {
             background: linear-gradient(135deg, #0099ff 0%, #0d6efd 100%);
@@ -256,138 +199,7 @@
         </div>
         
         {% for job in jobs %}
-        <div class="card job-card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">{{ job.title }}</h5>
-                <div>
-                    {% if job.source %}
-                        <span class="badge bg-dark me-1">{{ job.source }}</span>
-                    {% endif %}
-                    {% set match_score = job|profile_match_score %}
-                    {% if match_score is not none %}
-                        <span class="badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %} me-1"
-                              title="AI profile match rating">
-                            <i class="fas fa-user-check me-1"></i>{{ match_score|round(0)|int }}% match
-                        </span>
-                    {% endif %}
-                    <span class="badge bg-light text-dark">{{ job.posted_days_ago }} days ago</span>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="company-badge">
-                    <i class="fas fa-building me-1"></i> {{ job.company }}
-                    {% if job.location %}
-                        <span class="ms-2"><i class="fas fa-location-dot me-1"></i>{{ job.location }}</span>
-                    {% endif %}
-                </div>
-
-                <div class="d-flex flex-wrap gap-2 mb-3">
-                    {% if job.work_type %}
-                        <span class="badge bg-primary">{{ job.work_type }}</span>
-                    {% endif %}
-                    {% if job.salary %}
-                        <span class="badge bg-success">{{ job.salary }}</span>
-                    {% endif %}
-                    {% if job.employment_type %}
-                        <span class="badge bg-secondary">{{ job.employment_type }}</span>
-                    {% endif %}
-                    {% if job.seniority_level %}
-                        <span class="badge bg-info text-dark">{{ job.seniority_level }}</span>
-                    {% endif %}
-                    {% if job.visa_sponsorship %}
-                        <span class="badge {% if job.visa_sponsorship == 'Yes' %}bg-success{% elif job.visa_sponsorship == 'No' %}bg-danger{% else %}bg-light text-dark{% endif %}">
-                            Visa: {{ job.visa_sponsorship }}
-                        </span>
-                    {% endif %}
-                    {% if job.relocation_support %}
-                        <span class="badge {% if job.relocation_support in ['Yes', 'Mentioned'] %}bg-success{% elif job.relocation_support == 'No' %}bg-danger{% else %}bg-light text-dark{% endif %}">
-                            Relocation: {{ job.relocation_support }}
-                        </span>
-                    {% endif %}
-                    {% if job.listing_benefit %}
-                        <span class="badge bg-warning text-dark">{{ job.listing_benefit }}</span>
-                    {% endif %}
-                </div>
-
-                {% if job.relocation_info %}
-                    <p class="text-muted small mb-3"><strong>Relocation note:</strong> {{ job.relocation_info }}</p>
-                {% endif %}
-
-                {% if job.emails %}
-                    <div class="mb-3">
-                        <h6><i class="fas fa-envelope me-2"></i>Contact emails</h6>
-                        <p class="mb-0"><a href="mailto:{{ job.emails.split(',')[0].strip() }}">{{ job.emails }}</a></p>
-                    </div>
-                {% else %}
-                    <p class="text-muted small mb-3">
-                        <i class="fas fa-envelope-open-text me-1"></i>No direct email found. Apply via the job link.
-                    </p>
-                {% endif %}
-                
-                {% if job.matched_skills %}
-                    <div class="mt-3">
-                        <h6><i class="fas fa-tools me-2"></i>Matched Skills:</h6>
-                        <div>
-                            {% for skill in job.matched_skills %}
-                                <span class="skills-badge">{{ skill }}</span>
-                            {% endfor %}
-                        </div>
-                    </div>
-                {% endif %}
-                
-                <div class="job-actions">
-                    <div class="d-flex gap-2 flex-wrap">
-                        <a href="{{ job.link }}" target="_blank" class="btn btn-outline-primary">
-                            <i class="fas fa-external-link-alt me-2"></i>View Job
-                        </a>
-                        {% if job.cv_filename %}
-                            <a href="{{ url_for('preview_job_cv', job_id=job.id) }}" class="btn btn-outline-info">
-                                <i class="fas fa-eye me-2"></i>Preview & Edit
-                            </a>
-                            <a href="{{ url_for('download_job_cv', job_id=job.id) }}" class="btn btn-outline-success">
-                                <i class="fas fa-file-word me-2"></i>Download CV
-                            </a>
-                            {% if job.cover_letter_filename %}
-                            <a href="{{ url_for('download_job_cover_letter', job_id=job.id) }}" class="btn btn-outline-primary">
-                                <i class="fas fa-envelope me-2"></i>Cover Letter
-                            </a>
-                            {% endif %}
-                            {% if smtp_configured and job.emails and job.cv_filename %}
-                            <form method="post" action="{{ url_for('send_job_application', job_id=job.id) }}" class="d-inline-flex align-items-center gap-2"
-                                  onsubmit="return confirm('Send your CV{% if job.cover_letter_filename %} and cover letter{% endif %} to {{ job.emails.split(',')[0].strip() }}?');">
-                                {% if smtp_accounts|length > 1 %}
-                                <select name="smtp_account_id" class="form-select form-select-sm" style="width: auto;" aria-label="Send from account">
-                                    {% for account in smtp_accounts %}
-                                    <option value="{{ account.id }}" {% if account.is_default %}selected{% endif %}>
-                                        From: {{ account.email }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                                {% elif smtp_accounts|length == 1 %}
-                                <input type="hidden" name="smtp_account_id" value="{{ smtp_accounts[0].id }}">
-                                {% endif %}
-                                <button type="submit" class="btn btn-success">
-                                    <i class="fas fa-paper-plane me-2"></i>Send Application
-                                </button>
-                            </form>
-                            {% endif %}
-                        {% endif %}
-                        <a href="{{ url_for('edit_job', job_id=job.id) }}" class="btn btn-outline-secondary btn-sm">
-                            <i class="fas fa-edit"></i>
-                        </a>
-                    </div>
-                    {% if cv_generation_active %}
-                        <button type="button" class="btn btn-success" disabled>
-                            <i class="fas fa-wand-magic-sparkles me-2"></i>Make AI CV
-                        </button>
-                    {% else %}
-                        <a href="{{ url_for('make_cv', job_id=job.id) }}" class="btn btn-success">
-                            <i class="fas fa-wand-magic-sparkles me-2"></i>Make AI CV
-                        </a>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
+            {% include '_job_card.html' %}
         {% endfor %}
         
         <div class="text-center mt-4">

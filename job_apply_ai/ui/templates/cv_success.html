@@ -11,6 +11,18 @@
         .card { border: none; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 1.5rem; overflow: hidden; }
         .card-header { background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%); color: white; font-weight: 600; padding: 1rem 1.25rem; border-bottom: none; }
         .preview-pane { background: white; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); min-height: 520px; max-height: 72vh; overflow-y: auto; }
+        .preview-numbered { padding: 0.75rem 0; }
+        .preview-line { display: flex; gap: 0.75rem; padding: 0.2rem 1rem; line-height: 1.45; }
+        .preview-line:hover { background: #f8fbff; }
+        .line-number { flex: 0 0 2.25rem; text-align: right; color: #adb5bd; font-size: 0.78rem; font-variant-numeric: tabular-nums; user-select: none; padding-top: 0.05rem; }
+        .line-content { flex: 1; min-width: 0; }
+        .line-content.kind-name { font-size: 1.75rem; font-weight: 700; color: #212529; padding-top: 0.5rem; }
+        .line-content.kind-title { font-size: 1.1rem; color: #0d6efd; font-weight: 600; margin-bottom: 0.35rem; }
+        .line-content.kind-section { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.78rem; color: #6c757d; font-weight: 700; margin-top: 0.65rem; padding-top: 0.5rem; border-top: 1px solid #eef2f7; }
+        .line-content.kind-role { font-weight: 600; color: #212529; }
+        .line-content.kind-meta { color: #6c757d; font-size: 0.9rem; }
+        .line-content.kind-muted { color: #6c757d; font-size: 0.9rem; }
+        .line-content.kind-skills .skill-pill { margin-bottom: 0.35rem; }
         .preview-header { border-bottom: 2px solid #0d6efd; padding: 1.5rem; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
         .preview-name { font-size: 1.75rem; font-weight: 700; color: #212529; }
         .preview-title { font-size: 1.1rem; color: #0d6efd; font-weight: 600; }
@@ -193,6 +205,7 @@
         </div>
     </div>
 
+    <script id="cvPreviewLinesData" type="application/json">{{ cv_preview_lines | tojson }}</script>
     <script id="profileNameData" type="application/json">{{ profile_name | tojson }}</script>
     <script id="cvContentData" type="application/json">{{ tailored_content | tojson }}</script>
     <script id="coverLetterData" type="application/json">{{ cover_letter | tojson }}</script>
@@ -207,6 +220,7 @@
         const chatSessionsApiUrl = {{ chat_sessions_api_url | tojson }};
         const generateCoverLetterUrl = {{ generate_cover_letter_url | tojson }};
         const sendApplicationUrl = {{ send_application_url | tojson }};
+        let cvPreviewLines = JSON.parse(document.getElementById('cvPreviewLinesData').textContent || '[]');
         const profileName = JSON.parse(document.getElementById('profileNameData').textContent || '""');
         let cvContent = JSON.parse(document.getElementById('cvContentData').textContent || '{}');
         let coverLetter = JSON.parse(document.getElementById('coverLetterData').textContent || '{}');
@@ -219,15 +233,15 @@
         let coverLetterChatActiveSessionId = JSON.parse(document.getElementById('coverLetterChatActiveSessionData').textContent || '""');
 
         const chatPlaceholders = {
-            cv: 'e.g. Make the summary shorter and emphasize Python experience',
+            cv: 'e.g. Shorten line 4 and emphasize Python on line 12',
             cover_letter: 'e.g. Make the opening paragraph more enthusiastic and mention the company mission',
         };
         const chatHelp = {
-            cv: 'Ask for changes to summary, skills, experience bullets, or professional title.',
-            cover_letter: 'Ask for changes to tone, opening hook, paragraph length, or closing call to action.',
+            cv: 'Reference line numbers from the CV preview (e.g. "Rewrite line 4"). Ask for changes to summary, skills, experience bullets, or title. Press Enter to send, Ctrl+Enter for a new line.',
+            cover_letter: 'Ask for changes to tone, opening hook, paragraph length, or closing call to action. Press Enter to send, Ctrl+Enter for a new line.',
         };
         const chatEmptyHints = {
-            cv: '"Shorten the summary to 2 sentences"<br>"Reorder skills to put cloud tools first"',
+            cv: '"Shorten line 4 to 2 sentences"<br>"Make line 12 emphasize Python more"',
             cover_letter: '"Make the tone more confident"<br>"Shorten to 3 paragraphs and mention remote work interest"',
         };
 
@@ -315,50 +329,32 @@
             return items.map(item => `<span class="skill-pill ${cssClass}">${escapeHtml(String(item))}</span>`).join('');
         }
 
-        function renderBullets(items) {
-            if (!items || !items.length) return '';
-            return '<ul class="mb-0 ps-3">' + items.map(b => `<li>${escapeHtml(String(b))}</li>`).join('') + '</ul>';
-        }
-
-        function renderExperience(entries) {
-            if (!entries || !entries.length) return '<p class="text-muted small mb-0">No experience highlights.</p>';
-            return entries.map(entry => `
-                <div class="experience-block">
-                    <div class="experience-role">${escapeHtml(entry.role || '')}</div>
-                    <div class="experience-meta">${escapeHtml(entry.company || '')}${entry.period ? ' · ' + escapeHtml(entry.period) : ''}</div>
-                    ${renderBullets(entry.bullets)}
-                </div>
-            `).join('');
-        }
-
-        function renderProjects(entries) {
-            if (!entries || !entries.length) return '<p class="text-muted small mb-0">No projects listed.</p>';
-            return entries.map(entry => `
-                <div class="experience-block">
-                    <div class="experience-role">${escapeHtml(entry.name || '')}</div>
-                    ${entry.description ? `<div class="experience-meta">${escapeHtml(entry.description)}</div>` : ''}
-                    ${renderBullets(entry.bullets)}
-                </div>
-            `).join('');
+        function renderLineContent(line) {
+            const text = line.text || '';
+            const kind = line.kind || 'text';
+            if (kind === 'skills') {
+                const items = text === 'None' ? [] : text.split(' • ').map(item => item.replace(/^•\s*/, '').trim()).filter(Boolean);
+                const cssClass = line.variant ? ` ${line.variant}` : '';
+                return `<span class="line-content kind-skills">${renderSkillPills(items, cssClass.trim())}</span>`;
+            }
+            return `<span class="line-content kind-${escapeHtml(kind)}">${escapeHtml(text)}</span>`;
         }
 
         function renderCvPreview() {
             const preview = document.getElementById('cvPreview');
-            const title = cvContent.professional_title || '';
+            if (!cvPreviewLines.length) {
+                preview.innerHTML = '<div class="p-4 text-muted">No CV content to preview.</div>';
+                return;
+            }
             preview.innerHTML = `
-                <div class="preview-header">
-                    <div class="preview-name">${escapeHtml(profileName || 'Your Name')}</div>
-                    ${title ? `<div class="preview-title">${escapeHtml(title)}</div>` : ''}
+                <div class="preview-numbered">
+                    ${cvPreviewLines.map((line, index) => `
+                        <div class="preview-line" data-line="${index + 1}">
+                            <span class="line-number" aria-hidden="true">${index + 1}</span>
+                            ${renderLineContent(line)}
+                        </div>
+                    `).join('')}
                 </div>
-                <div class="preview-section"><h6>Professional Summary</h6><p class="mb-0">${escapeHtml(cvContent.professional_summary || 'No summary yet.')}</p></div>
-                <div class="preview-section"><h6>Skills Matching Job</h6>${renderSkillPills(cvContent.job_matched_skills, 'matched')}</div>
-                <div class="preview-section"><h6>Job Skills Not In CV</h6>${renderSkillPills(cvContent.job_skills_not_in_cv, 'missing')}</div>
-                <div class="preview-section"><h6>Technical Skills</h6>${renderSkillPills(cvContent.technical_skills || cvContent.key_skills)}</div>
-                <div class="preview-section"><h6>Tools & Platforms</h6>${renderSkillPills(cvContent.tools_platforms)}</div>
-                <div class="preview-section"><h6>Experience Highlights</h6>${renderExperience(cvContent.experience_highlights)}</div>
-                <div class="preview-section"><h6>Personal Projects</h6>${renderProjects(cvContent.personal_projects)}</div>
-                <div class="preview-section"><h6>Soft Skills</h6>${renderSkillPills(cvContent.soft_skills)}</div>
-                <div class="preview-section"><h6>Languages</h6>${renderSkillPills(cvContent.languages)}</div>
             `;
         }
 
@@ -497,6 +493,20 @@
         }
 
         const chatForm = document.getElementById('chatForm');
+        const chatInput = document.getElementById('chatInput');
+        if (chatInput && chatForm) {
+            chatInput.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+                    return;
+                }
+                event.preventDefault();
+                if (chatForm.requestSubmit) {
+                    chatForm.requestSubmit();
+                } else {
+                    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+                }
+            });
+        }
         if (chatForm && chatApiUrl) {
             chatForm.addEventListener('submit', async (event) => {
                 event.preventDefault();
@@ -533,6 +543,7 @@
                         renderCoverLetterPreview();
                     } else {
                         cvContent = data.content || cvContent;
+                        cvPreviewLines = data.cv_preview_lines || cvPreviewLines;
                         renderCvPreview();
                     }
                     applyChatSessionPayload(data);

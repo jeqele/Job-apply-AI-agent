@@ -4,6 +4,7 @@
     <title>Manage Jobs{% if current_folder != 'all' %} — {{ status_labels[current_folder] }}{% endif %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% include '_job_card_styles.html' %}
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -73,10 +74,6 @@
             color: #868e96;
             padding: 1rem 1rem 0.35rem;
             font-weight: 700;
-        }
-        .status-select {
-            min-width: 150px;
-            max-width: 180px;
         }
     </style>
 </head>
@@ -289,153 +286,27 @@
                         </div>
                     </div>
 
-                    <div class="table-responsive">
-                        <table class="table table-hover mb-0 align-middle">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Title</th>
-                                    <th>Company</th>
-                                    <th>Location</th>
-                                    <th>Match</th>
-                                    <th>Status</th>
-                                    <th>Updated</th>
-                                    <th class="text-end">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for job in jobs %}
-                                <tr>
-                                    <td>{{ job.id }}</td>
-                                    <td>{{ job.title }}</td>
-                                    <td>{{ job.company }}</td>
-                                    <td>{{ job.location }}</td>
-                                    <td>
-                                        {% set match_analysis = job|profile_match_analysis %}
-                                        {% set match_score = job|profile_match_score %}
-                                        {% if match_score is not none %}
-                                            <span class="badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}"
-                                                  title="{{ match_analysis.reason if match_analysis else '' }}">
-                                                {{ match_score|round(0)|int }}%
-                                            </span>
-                                            {% if match_analysis and match_analysis.method == 'ai' %}
-                                                <span class="text-muted small" title="AI analyzed">AI</span>
-                                            {% elif match_analysis and match_analysis.method == 'heuristic' %}
-                                                <span class="text-muted small" title="Keyword match">KW</span>
-                                            {% endif %}
-                                        {% else %}
-                                            <span class="text-muted small">—</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        {% set status = job.workflow_status or 'new' %}
-                                        <span class="badge {{ status_badges.get(status, 'bg-secondary') }}">
-                                            {{ status_labels.get(status, status|job_status_label) }}
-                                        </span>
-                                    </td>
-                                    <td class="text-muted small">{{ job.updated_at }}</td>
-                                    <td class="text-end">
-                                        <div class="d-flex flex-wrap justify-content-end align-items-center gap-2">
-                                            {% if job.link %}
-                                                <a href="{{ job.link }}" target="_blank" class="btn btn-outline-primary btn-sm" title="Open link">
-                                                    <i class="fas fa-external-link-alt"></i>
-                                                </a>
-                                            {% endif %}
-                                            {% if job.cv_filename %}
-                                                <a href="{{ url_for('preview_job_cv', job_id=job.id, folder=current_folder, q=search_query or none, sort=sort_query) }}"
-                                                   class="btn btn-outline-info btn-sm" title="Preview and edit CV">
-                                                    <i class="fas fa-eye me-1"></i>Preview
-                                                </a>
-                                                <a href="{{ url_for('download_job_cv', job_id=job.id) }}"
-                                                   class="btn btn-outline-success btn-sm" title="Download AI CV">
-                                                    <i class="fas fa-file-word me-1"></i>CV
-                                                </a>
-                                                {% if job.cover_letter_filename %}
-                                                <a href="{{ url_for('download_job_cover_letter', job_id=job.id) }}"
-                                                   class="btn btn-outline-primary btn-sm" title="Download cover letter">
-                                                    <i class="fas fa-envelope me-1"></i>Letter
-                                                </a>
-                                                {% endif %}
-                                                {% if smtp_configured and job.emails %}
-                                                <form method="post"
-                                                      action="{{ url_for('send_job_application', job_id=job.id) }}"
-                                                      class="d-inline-flex align-items-center gap-1"
-                                                      onsubmit="return confirm('Send application email to {{ job.emails.split(',')[0].strip() }}?');">
-                                                    <input type="hidden" name="return_folder" value="{{ current_folder }}">
-                                                    <input type="hidden" name="return_search" value="{{ search_query }}">
-                                                    {% if sort_query %}
-                                                    <input type="hidden" name="return_sort" value="{{ sort_query }}">
-                                                    {% endif %}
-                                                    <input type="hidden" name="return_from_manage" value="1">
-                                                    {% if smtp_accounts|length > 1 %}
-                                                    <select name="smtp_account_id" class="form-select form-select-sm" style="width: 9rem;" aria-label="Send from account">
-                                                        {% for account in smtp_accounts %}
-                                                        <option value="{{ account.id }}" {% if account.is_default %}selected{% endif %}>
-                                                            {{ account.email }}
-                                                        </option>
-                                                        {% endfor %}
-                                                    </select>
-                                                    {% elif smtp_accounts|length == 1 %}
-                                                    <input type="hidden" name="smtp_account_id" value="{{ smtp_accounts[0].id }}">
-                                                    {% endif %}
-                                                    <button type="submit" class="btn btn-success btn-sm" title="Email CV and cover letter">
-                                                        <i class="fas fa-paper-plane"></i>
-                                                    </button>
-                                                </form>
-                                                {% endif %}
-                                            {% endif %}
-                                            {% if cv_generation_active %}
-                                                <button type="button" class="btn btn-success btn-sm" disabled title="AI CV generation in progress">
-                                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Make AI CV
-                                                </button>
-                                            {% else %}
-                                                <a href="{{ url_for('make_cv', job_id=job.id, folder=current_folder, q=search_query or none, sort=sort_query) }}"
-                                                   class="btn btn-success btn-sm" title="Make AI CV">
-                                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Make AI CV
-                                                </a>
-                                            {% endif %}
-                                            <a href="{{ url_for('edit_job', job_id=job.id, folder=current_folder, q=search_query or none, sort=sort_query) }}"
-                                               class="btn btn-outline-secondary btn-sm" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <form method="post"
-                                                  action="{{ url_for('update_job_status', job_id=job.id) }}"
-                                                  class="d-inline-flex align-items-center gap-1">
-                                                <input type="hidden" name="return_folder" value="{{ current_folder }}">
-                                                <input type="hidden" name="return_search" value="{{ search_query }}">
-                                                {% if sort_query %}
-                                                <input type="hidden" name="return_sort" value="{{ sort_query }}">
-                                                {% endif %}
-                                                <select name="workflow_status"
-                                                        class="form-select form-select-sm status-select"
-                                                        aria-label="Move job to folder"
-                                                        onchange="this.form.submit()">
-                                                    {% for status in job_statuses %}
-                                                        <option value="{{ status }}"
-                                                                {% if (job.workflow_status or 'new') == status %}selected{% endif %}>
-                                                            {{ status_labels[status] }}
-                                                        </option>
-                                                    {% endfor %}
-                                                </select>
-                                            </form>
-                                        </div>
-                                    </td>
-                                </tr>
-                                {% else %}
-                                <tr>
-                                    <td colspan="8" class="text-center text-muted py-5">
-                                        {% if search_query %}
-                                            No jobs match your search in this folder.
-                                        {% elif current_folder == 'all' %}
-                                            No jobs stored yet. Search for jobs or add one manually.
-                                        {% else %}
-                                            No jobs in {{ status_labels[current_folder] }} yet.
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
+                    <div class="job-list-area">
+                        {% if jobs %}
+                            {% for job in jobs %}
+                                {% with manage_mode=true, current_folder=current_folder, search_query=search_query, sort_query=sort_query %}
+                                    {% include '_job_card.html' %}
+                                {% endwith %}
+                            {% endfor %}
+                        {% else %}
+                            <div class="job-empty-state">
+                                <i class="fas fa-inbox fa-3x mb-3 opacity-50"></i>
+                                <p class="mb-0">
+                                    {% if search_query %}
+                                        No jobs match your search in this folder.
+                                    {% elif current_folder == 'all' %}
+                                        No jobs stored yet. Search for jobs or add one manually.
+                                    {% else %}
+                                        No jobs in {{ status_labels[current_folder] }} yet.
+                                    {% endif %}
+                                </p>
+                            </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>

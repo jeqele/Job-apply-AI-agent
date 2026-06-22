@@ -1,0 +1,79 @@
+<style>
+    .job-card {
+        border: none;
+        border-radius: 1rem;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        margin-bottom: 1.5rem;
+        overflow: hidden;
+    }
+    .job-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    }
+    .job-card .card-header {
+        background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
+        color: white;
+        font-weight: 600;
+        padding: 1.25rem;
+        border-bottom: none;
+    }
+    .job-card .card-body {
+        padding: 1.5rem;
+    }
+    .skills-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+        padding: 0.4rem 0.8rem;
+        border-radius: 2rem;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #495057;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+    }
+    .company-badge {
+        display: inline-block;
+        background-color: #f8f9fa;
+        padding: 0.3rem 0.6rem;
+        border-radius: 0.5rem;
+        font-size: 0.8rem;
+        color: #6c757d;
+        margin-bottom: 1rem;
+        border: 1px solid #dee2e6;
+    }
+    .job-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid #f1f1f1;
+    }
+    .job-meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-bottom: 0.75rem;
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
+    .status-select {
+        min-width: 150px;
+        max-width: 180px;
+    }
+    .job-list-area {
+        padding: 1.25rem;
+        background: #f8f9fa;
+        min-height: 520px;
+    }
+    .job-empty-state {
+        text-align: center;
+        color: #6c757d;
+        padding: 3rem 1.5rem;
+    }
+</style>

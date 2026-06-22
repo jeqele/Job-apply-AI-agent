@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_FAST_MODEL = os.environ.get("OLLAMA_CV_FAST_MODEL", "gemma4:e4b")
 DEFAULT_MAIN_MODEL = os.environ.get("OLLAMA_CV_MODEL", "gemma4:e4b") # gemma4:12b
+DEFAULT_NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "8192"))
 
 
 class OllamaClient:
@@ -74,6 +75,8 @@ class OllamaClient:
         system: str | None = None,
         temperature: float = 0.3,
         json_format: bool = False,
+        json_schema: dict[str, Any] | None = None,
+        num_predict: int | None = None,
     ) -> str:
         resolved_model = self._resolve_model(
             model or self.main_model,
@@ -84,11 +87,16 @@ class OllamaClient:
             "model": resolved_model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": temperature},
+            "options": {
+                "temperature": temperature,
+                "num_predict": num_predict if num_predict is not None else DEFAULT_NUM_PREDICT,
+            },
         }
         if system:
             payload["system"] = system
-        if json_format:
+        if json_schema is not None:
+            payload["format"] = json_schema
+        elif json_format:
             payload["format"] = "json"
 
         response = requests.post(
@@ -112,9 +120,12 @@ class OllamaClient:
         system: str | None = None,
         temperature: float = 0.2,
         max_attempts: int = 2,
+        schema: dict[str, Any] | None = None,
+        num_predict: int | None = None,
     ) -> dict[str, Any]:
         json_system = (system or "") + " Return only a single valid JSON object."
         last_error: Exception | None = None
+        last_raw = ""
 
         for attempt in range(max_attempts):
             attempt_prompt = prompt
@@ -124,7 +135,7 @@ class OllamaClient:
                     "Your previous answer was not valid JSON. "
                     "Reply again with ONLY one JSON object. "
                     "Use double quotes for all keys and strings. "
-                    "Do not include markdown fences, comments, or trailing commas."
+                    "Do not include markdown fences, comments, trailing commas, or prose."
                 )
 
             raw = self.generate(
@@ -132,19 +143,25 @@ class OllamaClient:
                 model=model,
                 system=json_system.strip(),
                 temperature=max(temperature - (attempt * 0.05), 0.05),
-                json_format=True,
+                json_format=schema is None,
+                json_schema=schema,
+                num_predict=num_predict,
             )
+            last_raw = raw
             try:
                 return self._parse_json_response(raw)
             except ValueError as exc:
                 last_error = exc
                 logger.warning(
-                    "Failed to parse Ollama JSON on attempt %s/%s: %s",
+                    "Failed to parse Ollama JSON on attempt %s/%s: %s. Raw response preview: %r",
                     attempt + 1,
                     max_attempts,
                     exc,
+                    raw[:500],
                 )
 
+        if last_raw:
+            logger.error("Ollama JSON parse failed after %s attempts. Last raw preview: %r", max_attempts, last_raw[:1000])
         raise ValueError(str(last_error) if last_error else "Model response was not valid JSON")
 
     def _resolve_model(self, model: str, available: list[str], role: str) -> str:
@@ -265,4 +282,5 @@ class OllamaClient:
         repaired = repaired.replace("\u2018", "'").replace("\u2019", "'")
         repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
         repaired = re.sub(r"\}\s*\{", "},{", repaired)
+        repaired = re.sub(r"(?<![\\])\\(?![\"\\/bfnrtu])", r"\\\\", repaired)
         return repaired

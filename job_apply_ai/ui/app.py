@@ -51,6 +51,7 @@ from job_apply_ai.cv_modifier.job_match_analyzer import (
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
+from job_apply_ai.cv_modifier.chat_context import cv_content_to_preview_lines
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
 from job_apply_ai.cv_modifier.cv_content_store import (
     append_active_chat_messages,
@@ -475,6 +476,8 @@ def _cv_preview_context(
     store = normalize_store(_load_job_cv_store(cv_filename) if cv_filename else None)
     profile = profile_repo.get_profile()
     content = tailored_content or store.get('tailored_content', {})
+    profile_name = profile.get('full_name', '')
+    cv_preview_lines = cv_content_to_preview_lines(content, profile_name)
     chat_history = get_active_chat_messages(store, 'cv')
     cover_letter = store.get('cover_letter', {})
     cover_letter_chat_history = get_active_chat_messages(store, 'cover_letter')
@@ -489,7 +492,8 @@ def _cv_preview_context(
     return {
         'job': job,
         'job_id': job_id,
-        'profile_name': profile.get('full_name', ''),
+        'profile_name': profile_name,
+        'cv_preview_lines': cv_preview_lines,
         'cv_filename': cv_filename,
         'cover_letter_filename': cover_letter_filename,
         'tailored_content': content,
@@ -2172,6 +2176,10 @@ def document_chat(job_id):
             extra={
                 'reply': reply,
                 'content': updated_content,
+                'cv_preview_lines': cv_content_to_preview_lines(
+                    updated_content,
+                    profile.get('full_name', ''),
+                ),
                 'matched_categories': matched_categories,
             },
         ))
