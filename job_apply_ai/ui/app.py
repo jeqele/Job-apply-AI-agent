@@ -52,7 +52,12 @@ from job_apply_ai.ui.cv_tasks import (
     create_task,
     fail_task,
     get_task,
+    pause_task,
+    request_task_stop,
+    resume_task,
     start_background_task,
+    task_control_checkpoint,
+    TaskStopped,
     update_task,
 )
 from job_apply_ai.utils.helpers import ensure_directory_exists, sanitize_filename
@@ -143,19 +148,20 @@ def _sync_session_background_task(session_key: str) -> str | None:
         session.pop(session_key, None)
         return None
 
-    if status in ('pending', 'running'):
-        updated_at = task.get('updated_at')
-        if updated_at:
-            try:
-                last_update = datetime.fromisoformat(updated_at)
-                age_seconds = (datetime.utcnow() - last_update).total_seconds()
-                if age_seconds > BACKGROUND_TASK_STALE_SECONDS:
-                    fail_task(task_id, 'Background task timed out or was interrupted.')
-                    session.pop(session_key, None)
-                    logger.warning('Cleared stale background task %s (%s)', task_id, session_key)
-                    return None
-            except ValueError:
-                pass
+    if status in ('pending', 'running', 'paused'):
+        if status != 'paused':
+            updated_at = task.get('updated_at')
+            if updated_at:
+                try:
+                    last_update = datetime.fromisoformat(updated_at)
+                    age_seconds = (datetime.utcnow() - last_update).total_seconds()
+                    if age_seconds > BACKGROUND_TASK_STALE_SECONDS:
+                        fail_task(task_id, 'Background task timed out or was interrupted.')
+                        session.pop(session_key, None)
+                        logger.warning('Cleared stale background task %s (%s)', task_id, session_key)
+                        return None
+                except ValueError:
+                    pass
         return task_id
 
     session.pop(session_key, None)
@@ -200,7 +206,7 @@ def _active_background_tasks() -> list[dict]:
         if not task_id:
             continue
         task = get_task(task_id)
-        if not task or task.get('status') not in ('pending', 'running'):
+        if not task or task.get('status') not in ('pending', 'running', 'paused'):
             continue
         progress_url = _background_task_progress_url(task_id, task)
         if not progress_url:
@@ -573,6 +579,9 @@ def _run_single_cv_task(
     )
 
 
+CONTROLLABLE_TASK_TYPES = frozenset({'batch_search', 'job_match_analyze'})
+
+
 def _run_batch_search_task(
     task_id: str,
     queue: list[tuple[str, str]],
@@ -594,6 +603,8 @@ def _run_batch_search_task(
 
     total_jobs_saved = 0
     failed_searches: list[dict] = []
+    stopped = False
+    searches_completed = 0
 
     update_task(
         task_id,
@@ -605,6 +616,12 @@ def _run_batch_search_task(
     )
 
     for index, (keyword, location) in enumerate(queue, start=1):
+        try:
+            task_control_checkpoint(task_id)
+        except TaskStopped:
+            stopped = True
+            break
+
         percent = max(1, min(99, int(((index - 1) / total) * 100)))
         update_task(
             task_id,
@@ -634,6 +651,7 @@ def _run_batch_search_task(
                 processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
                 job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
                 total_jobs_saved += len(processed_jobs)
+            searches_completed += 1
         except Exception as exc:
             logger.error(
                 'Batch search failed for %r in %r: %s',
@@ -648,6 +666,31 @@ def _run_batch_search_task(
                     'error': str(exc),
                 }
             )
+            searches_completed += 1
+
+    if stopped:
+        if total_jobs_saved == 0:
+            fail_task(task_id, 'Batch search stopped before saving any jobs.')
+            return
+
+        message = (
+            f'Batch search stopped — saved {total_jobs_saved} jobs '
+            f'after {searches_completed} of {total} searches'
+        )
+        if failed_searches:
+            message += f' ({len(failed_searches)} searches failed)'
+        complete_task(
+            task_id,
+            {
+                'search_run_id': search_run_id,
+                'total_jobs': total_jobs_saved,
+                'searches_run': searches_completed,
+                'failed_searches': failed_searches,
+                'stopped': True,
+            },
+            message=message,
+        )
+        return
 
     if total_jobs_saved == 0:
         detail = (
@@ -940,6 +983,7 @@ def batch_search_progress(task_id):
         total_searches=total_searches,
         status_url=url_for('cv_task_status', task_id=task_id),
         complete_url=url_for('batch_search_complete', task_id=task_id),
+        control_url=url_for('control_background_task', task_id=task_id),
         back_url=f"{url_for('index')}#batch-search-jobs",
         back_label='Back to home',
     )
@@ -959,7 +1003,9 @@ def batch_search_complete(task_id):
     session['search_run_id'] = search_run_id
 
     failed_searches = result.get('failed_searches') or []
-    if failed_searches:
+    if result.get('stopped'):
+        flash(task.get('message', 'Batch search stopped.'), 'warning')
+    elif failed_searches:
         flash(
             f'Batch search finished with {len(failed_searches)} failed combination(s).',
             'warning',
@@ -1356,6 +1402,13 @@ def _run_job_match_analyze_task(
             },
         )
 
+    def should_continue() -> bool:
+        try:
+            task_control_checkpoint(task_id)
+            return True
+        except TaskStopped:
+            return False
+
     try:
         update_task(
             task_id,
@@ -1370,6 +1423,7 @@ def _run_job_match_analyze_task(
             profile,
             min_match_score,
             on_progress=on_progress,
+            should_continue=should_continue,
         )
 
         for job, updated in zip(jobs, result['jobs']):
@@ -1389,6 +1443,25 @@ def _run_job_match_analyze_task(
                 job_repo.update_job_status(job_id, new_status)
 
         stats = result['stats']
+        current_task = get_task(task_id)
+        stopped = bool(current_task and current_task.get('control') == 'stop')
+        if stopped:
+            analyzed = stats.get('analyzed', 0)
+            if analyzed == 0:
+                fail_task(task_id, 'Profile match analysis stopped before any jobs were analyzed.')
+                return
+            complete_task(
+                task_id,
+                {
+                    'stats': stats,
+                    'return_folder': return_folder,
+                    'return_search': return_search,
+                    'stopped': True,
+                },
+                message=f'Profile match analysis stopped — analyzed {analyzed} of {total} jobs',
+            )
+            return
+
         complete_task(
             task_id,
             {
@@ -1471,6 +1544,7 @@ def job_match_analyze_progress(task_id):
         task_id=task_id,
         status_url=url_for('cv_task_status', task_id=task_id),
         complete_url=url_for('job_match_analyze_complete', task_id=task_id),
+        control_url=url_for('control_background_task', task_id=task_id),
         back_url=url_for('manage_jobs', **back_kwargs),
         back_label='Back to Manage Jobs',
         min_match_score=meta.get('min_match_score', 50),
@@ -1495,12 +1569,18 @@ def job_match_analyze_complete(task_id):
 
     session.pop('job_match_analyze_active', None)
 
-    flash(
-        f'Analyzed {analyzed} job(s) with a minimum match score of {threshold:g}%. '
-        f'Moved {moved} to Not Match With You'
-        + (f' and restored {restored} to New / Discovered.' if restored else '.'),
-        'success',
-    )
+    if result.get('stopped'):
+        flash(
+            task.get('message', f'Analysis stopped after {analyzed} job(s).'),
+            'warning',
+        )
+    else:
+        flash(
+            f'Analyzed {analyzed} job(s) with a minimum match score of {threshold:g}%. '
+            f'Moved {moved} to Not Match With You'
+            + (f' and restored {restored} to New / Discovered.' if restored else '.'),
+            'success',
+        )
 
     return _manage_jobs_redirect(
         result.get('return_folder', 'all'),
@@ -1731,6 +1811,30 @@ def cv_task_status(task_id):
     if not task:
         return jsonify({'error': 'Task not found'}), 404
     return jsonify(task)
+
+
+@app.route('/api/cv_tasks/<task_id>/control', methods=['POST'])
+def control_background_task(task_id):
+    """Pause, resume, or stop a controllable background task."""
+    task = get_task(task_id)
+    if not task or task.get('task_type') not in CONTROLLABLE_TASK_TYPES:
+        return jsonify({'error': 'Task not found'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    action = (payload.get('action') or request.form.get('action', '')).strip().lower()
+    handlers = {
+        'pause': pause_task,
+        'resume': resume_task,
+        'stop': request_task_stop,
+    }
+    handler = handlers.get(action)
+    if not handler:
+        return jsonify({'error': 'Invalid action'}), 400
+    if not handler(task_id):
+        return jsonify({'error': f'Cannot {action} task in its current state'}), 409
+
+    updated = get_task(task_id)
+    return jsonify(updated)
 
 
 @app.route('/make_cv/complete/<task_id>')

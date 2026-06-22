@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from copy import deepcopy
 from datetime import datetime
@@ -10,6 +11,10 @@ from typing import Any, Callable
 
 _tasks: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
+
+
+class TaskStopped(Exception):
+    """Raised when a background task should exit early."""
 
 
 def create_task(
@@ -27,6 +32,7 @@ def create_task(
         "message": "Waiting to start…",
         "percent": 0,
         "job_id": job_id,
+        "control": None,
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
         "result": None,
@@ -98,6 +104,53 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     with _lock:
         task = _tasks.get(task_id)
         return deepcopy(task) if task else None
+
+
+def pause_task(task_id: str) -> bool:
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task or task.get("status") != "running":
+            return False
+        task["status"] = "paused"
+        task["message"] = "Paused"
+        task["updated_at"] = datetime.utcnow().isoformat(timespec="seconds")
+    return True
+
+
+def resume_task(task_id: str) -> bool:
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task or task.get("status") != "paused":
+            return False
+        task["status"] = "running"
+        task["message"] = "Resumed"
+        task["updated_at"] = datetime.utcnow().isoformat(timespec="seconds")
+    return True
+
+
+def request_task_stop(task_id: str) -> bool:
+    with _lock:
+        task = _tasks.get(task_id)
+        if not task or task.get("status") not in ("pending", "running", "paused"):
+            return False
+        task["control"] = "stop"
+        task["updated_at"] = datetime.utcnow().isoformat(timespec="seconds")
+    return True
+
+
+def task_control_checkpoint(task_id: str) -> None:
+    """Block while paused; raise TaskStopped if stop was requested."""
+    while True:
+        with _lock:
+            task = _tasks.get(task_id)
+            if not task:
+                raise TaskStopped("Task not found")
+            if task.get("control") == "stop":
+                raise TaskStopped("Stopped by user")
+            paused = task.get("status") == "paused"
+        if not paused:
+            return
+        time.sleep(0.25)
 
 
 def start_background_task(task_id: str, worker: Callable[[], None]) -> None:

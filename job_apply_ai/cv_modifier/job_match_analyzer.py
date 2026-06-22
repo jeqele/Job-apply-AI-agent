@@ -265,6 +265,7 @@ def analyze_jobs_with_threshold(
     *,
     ollama: OllamaClient | None = None,
     on_progress: Callable[[int, int, dict[str, Any]], None] | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Analyze jobs and summarize how many were moved or restored."""
     threshold = normalize_min_match_score(min_match_score)
@@ -279,6 +280,9 @@ def analyze_jobs_with_threshold(
 
     total = len(jobs)
     for index, job in enumerate(jobs):
+        if should_continue is not None and not should_continue():
+            break
+
         if on_progress:
             on_progress(index, total, job)
 

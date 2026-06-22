@@ -1,0 +1,87 @@
+<div class="d-flex flex-wrap gap-2 mt-3" id="control-buttons">
+    <button type="button" id="btn-pause" class="btn btn-outline-warning btn-sm">
+        <i class="fas fa-pause me-1"></i>Pause
+    </button>
+    <button type="button" id="btn-resume" class="btn btn-outline-success btn-sm d-none">
+        <i class="fas fa-play me-1"></i>Resume
+    </button>
+    <button type="button" id="btn-stop" class="btn btn-outline-danger btn-sm">
+        <i class="fas fa-stop me-1"></i>Stop
+    </button>
+</div>
+
+<script>
+    (function () {
+        const controlUrl = {{ control_url|tojson }};
+
+        function updateControls(data) {
+            const paused = data.status === 'paused';
+            const finished = data.status === 'complete' || data.status === 'error';
+            const pauseBtn = document.getElementById('btn-pause');
+            const resumeBtn = document.getElementById('btn-resume');
+            const stopBtn = document.getElementById('btn-stop');
+            if (!pauseBtn || !resumeBtn || !stopBtn) {
+                return;
+            }
+            pauseBtn.classList.toggle('d-none', paused || finished);
+            resumeBtn.classList.toggle('d-none', !paused || finished);
+            [pauseBtn, resumeBtn, stopBtn].forEach((button) => {
+                button.disabled = finished;
+            });
+        }
+
+        async function sendControl(action) {
+            const response = await fetch(controlUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.error || `Could not ${action} task.`);
+            }
+            return response.json();
+        }
+
+        document.getElementById('btn-pause')?.addEventListener('click', async () => {
+            try {
+                const data = await sendControl('pause');
+                if (window.updateBatchFlowUi) {
+                    window.updateBatchFlowUi(data);
+                }
+                updateControls(data);
+            } catch (error) {
+                showError?.(error.message);
+            }
+        });
+
+        document.getElementById('btn-resume')?.addEventListener('click', async () => {
+            try {
+                const data = await sendControl('resume');
+                if (window.updateBatchFlowUi) {
+                    window.updateBatchFlowUi(data);
+                }
+                updateControls(data);
+            } catch (error) {
+                showError?.(error.message);
+            }
+        });
+
+        document.getElementById('btn-stop')?.addEventListener('click', async () => {
+            if (!window.confirm('Stop this task? Progress so far will be kept where possible.')) {
+                return;
+            }
+            try {
+                const data = await sendControl('stop');
+                if (window.updateBatchFlowUi) {
+                    window.updateBatchFlowUi(data);
+                }
+                updateControls(data);
+            } catch (error) {
+                showError?.(error.message);
+            }
+        });
+
+        window.updateBatchFlowControls = updateControls;
+    })();
+</script>

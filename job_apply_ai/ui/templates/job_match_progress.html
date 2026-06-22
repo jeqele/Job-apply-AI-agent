@@ -69,6 +69,7 @@
                 </div>
                 <p id="progress-message" class="text-muted mb-0">Comparing jobs with your profile skills…</p>
                 <div id="error-panel" class="alert alert-danger mt-4 d-none" role="alert"></div>
+                {% include '_batch_flow_controls.html' %}
                 <div class="mt-4">
                     <a href="{{ back_url }}" class="btn btn-outline-secondary">{{ back_label }}</a>
                 </div>
@@ -87,7 +88,12 @@
             document.getElementById('progress-message').textContent = data.message || '';
             document.getElementById('progress-percent').textContent = `${data.percent || 0}%`;
             document.getElementById('progress-bar').style.width = `${data.percent || 0}%`;
+
+            if (window.updateBatchFlowControls) {
+                window.updateBatchFlowControls(data);
+            }
         }
+        window.updateBatchFlowUi = updateUi;
 
         async function pollStatus() {
             const response = await fetch(statusUrl);
