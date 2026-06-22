@@ -126,6 +126,66 @@
                 <a href="{{ url_for('export_jobs_route', fmt='pdf') }}" class="btn btn-danger">
                     <i class="fas fa-file-pdf me-2"></i>Export PDF
                 </a>
+                {% if profile_has_matchable_skills %}
+                <button type="button"
+                        class="btn btn-outline-info"
+                        data-bs-toggle="modal"
+                        data-bs-target="#analyzeMatchModal">
+                    <i class="fas fa-user-check me-2"></i>AI Analyze Match
+                </button>
+                {% else %}
+                <button type="button"
+                        class="btn btn-outline-secondary"
+                        title="Add technical skills, minor skills, or stacks on your profile first"
+                        disabled>
+                    <i class="fas fa-user-check me-2"></i>AI Analyze Match
+                </button>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="modal fade" id="analyzeMatchModal" tabindex="-1" aria-labelledby="analyzeMatchModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form method="post" action="{{ url_for('analyze_jobs_match') }}">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="analyzeMatchModalLabel">
+                                <i class="fas fa-user-check me-2"></i>AI Profile Match Analysis
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="text-muted">
+                                Compare jobs in the current folder against your profile skills, minor skills, and stacks.
+                                Jobs scoring below your minimum match percentage will move to
+                                <strong>{{ status_labels.not_match }}</strong>.
+                            </p>
+                            <div class="mb-3">
+                                <label for="min_match_score" class="form-label">Minimum match score (%)</label>
+                                <input type="number"
+                                       class="form-control"
+                                       id="min_match_score"
+                                       name="min_match_score"
+                                       min="0"
+                                       max="100"
+                                       step="1"
+                                       value="50"
+                                       required>
+                                <div class="form-text">
+                                    Example: at 50%, a job scored 42% moves to Not Match With You; a job scored 68% stays in its folder.
+                                </div>
+                            </div>
+                            <input type="hidden" name="return_folder" value="{{ current_folder }}">
+                            <input type="hidden" name="return_search" value="{{ search_query }}">
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-info text-white">
+                                <i class="fas fa-play me-2"></i>Start Analysis
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
 

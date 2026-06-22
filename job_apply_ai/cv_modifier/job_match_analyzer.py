@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 from job_apply_ai.storage.user_profile import normalize_profile
@@ -17,6 +17,16 @@ MATCH_SYSTEM_PROMPT = (
 )
 
 NOT_MATCH_STATUS = "not_match"
+DEFAULT_MIN_MATCH_SCORE = 50.0
+
+
+def normalize_min_match_score(value: Any) -> float:
+    """Clamp a user-provided threshold to 0-100."""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_MATCH_SCORE
+    return max(0.0, min(100.0, score))
 
 
 def profile_has_matchable_skills(profile: dict[str, Any] | None) -> bool:
@@ -190,28 +200,104 @@ def _normalize_result_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def job_meets_threshold(analysis: dict[str, Any], min_match_score: float) -> bool:
+    """Return True when a job's match score meets the configured minimum."""
+    if analysis.get("method") == "skipped":
+        return True
+    return float(analysis.get("match_score") or 0) >= min_match_score
+
+
+def apply_profile_match_to_job(
+    job: dict[str, Any],
+    profile: dict[str, Any] | None,
+    *,
+    min_match_score: float = DEFAULT_MIN_MATCH_SCORE,
+    ollama: OllamaClient | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Analyze one job, store fit metadata, and set workflow status from the threshold."""
+    updated = dict(job)
+    analysis = analyze_job_match(updated, profile, ollama=ollama)
+    analysis["min_match_score"] = min_match_score
+    meets = job_meets_threshold(analysis, min_match_score)
+    analysis["is_match"] = meets
+
+    categories = dict(updated.get("matched_categories") or {})
+    categories["Profile Fit"] = analysis
+    updated["matched_categories"] = categories
+
+    previous_status = updated.get("workflow_status") or "new"
+    if not meets:
+        updated["workflow_status"] = NOT_MATCH_STATUS
+    elif previous_status == NOT_MATCH_STATUS:
+        updated["workflow_status"] = "new"
+
+    return updated, analysis
+
+
 def classify_jobs_by_profile_match(
     jobs: list[dict[str, Any]],
     profile: dict[str, Any] | None,
     *,
+    min_match_score: float = DEFAULT_MIN_MATCH_SCORE,
     ollama: OllamaClient | None = None,
 ) -> list[dict[str, Any]]:
     """Annotate jobs with fit analysis and route non-matches to the not_match folder."""
     if not jobs or not profile_has_matchable_skills(profile):
         return jobs
 
+    threshold = normalize_min_match_score(min_match_score)
     classified: list[dict[str, Any]] = []
     for job in jobs:
-        updated = dict(job)
-        analysis = analyze_job_match(updated, profile, ollama=ollama)
-        categories = dict(updated.get("matched_categories") or {})
-        categories["Profile Fit"] = analysis
-        updated["matched_categories"] = categories
-
-        if not analysis.get("is_match"):
-            updated["workflow_status"] = NOT_MATCH_STATUS
-        elif not updated.get("workflow_status") or updated.get("workflow_status") == NOT_MATCH_STATUS:
-            updated["workflow_status"] = "new"
-
+        updated, _analysis = apply_profile_match_to_job(
+            job,
+            profile,
+            min_match_score=threshold,
+            ollama=ollama,
+        )
         classified.append(updated)
     return classified
+
+
+def analyze_jobs_with_threshold(
+    jobs: list[dict[str, Any]],
+    profile: dict[str, Any] | None,
+    min_match_score: float,
+    *,
+    ollama: OllamaClient | None = None,
+    on_progress: Callable[[int, int, dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Analyze jobs and summarize how many were moved or restored."""
+    threshold = normalize_min_match_score(min_match_score)
+    stats = {
+        "analyzed": 0,
+        "moved_to_not_match": 0,
+        "restored_to_new": 0,
+        "unchanged": 0,
+        "min_match_score": threshold,
+    }
+    updated_jobs: list[dict[str, Any]] = []
+
+    total = len(jobs)
+    for index, job in enumerate(jobs):
+        if on_progress:
+            on_progress(index, total, job)
+
+        previous_status = job.get("workflow_status") or "new"
+        updated, _analysis = apply_profile_match_to_job(
+            job,
+            profile,
+            min_match_score=threshold,
+            ollama=ollama,
+        )
+        updated_jobs.append(updated)
+        stats["analyzed"] += 1
+
+        new_status = updated.get("workflow_status") or previous_status
+        if new_status == NOT_MATCH_STATUS and previous_status != NOT_MATCH_STATUS:
+            stats["moved_to_not_match"] += 1
+        elif new_status == "new" and previous_status == NOT_MATCH_STATUS:
+            stats["restored_to_new"] += 1
+        else:
+            stats["unchanged"] += 1
+
+    return {"jobs": updated_jobs, "stats": stats}

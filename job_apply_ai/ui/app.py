@@ -25,7 +25,15 @@ from job_apply_ai.job_status import (
     job_status_label,
 )
 from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer
-from job_apply_ai.cv_modifier.job_match_analyzer import classify_jobs_by_profile_match
+from job_apply_ai.cv_modifier.job_match_analyzer import (
+    NOT_MATCH_STATUS,
+    classify_jobs_by_profile_match,
+    analyze_jobs_with_threshold,
+    heuristic_job_match,
+    job_meets_threshold,
+    normalize_min_match_score,
+    profile_has_matchable_skills,
+)
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
@@ -745,18 +753,25 @@ def user_profile():
         profile_repo.save_profile(profile)
         _clear_profile_import_session()
         flash('Profile saved successfully. You can now generate tailored CVs.', 'success')
+        return redirect(url_for('user_profile'))
 
-        if session.get('search_run_id') or job_repo.count_jobs():
-            return redirect(url_for('job_list'))
-        return redirect(url_for('index'))
-
-    form = session.get('profile_draft') or profile_to_form_fields(profile_repo.get_profile())
+    form = _profile_form_data()
     return render_template(
         'profile_form.html',
         form=form,
         import_review=bool(session.get('profile_draft')),
         import_summary=session.get('profile_import_summary'),
     )
+
+
+def _profile_form_data() -> dict:
+    """Build form field dict, merging any import draft with stored profile defaults."""
+    stored = profile_repo.get_profile()
+    defaults = profile_to_form_fields(stored)
+    draft = session.get('profile_draft')
+    if draft:
+        defaults.update(draft)
+    return defaults
 
 
 @app.route('/profile/oauth/google/start')
@@ -1020,6 +1035,190 @@ def manage_jobs(folder='all'):
         status_labels=JOB_STATUS_LABELS,
         status_icons=JOB_STATUS_ICONS,
         status_badges=JOB_STATUS_BADGE_CLASSES,
+        profile_has_matchable_skills=profile_has_matchable_skills(profile_repo.get_profile()),
+    )
+
+
+def _jobs_for_manage_folder(folder: str, search: str) -> list[dict]:
+    workflow_status = None if folder == 'all' else folder
+    exclude_statuses = ['archived'] if folder == 'all' else None
+    return job_repo.list_jobs(
+        workflow_status=workflow_status,
+        search=search or None,
+        exclude_workflow_statuses=exclude_statuses,
+    )
+
+
+def _run_job_match_analyze_task(
+    task_id: str,
+    jobs: list[dict],
+    profile: dict,
+    min_match_score: float,
+    return_folder: str,
+    return_search: str,
+) -> None:
+    total = len(jobs)
+
+    def on_progress(index: int, _total: int, job: dict) -> None:
+        percent = 5 + int(((index + 1) / max(total, 1)) * 90)
+        update_task(
+            task_id,
+            status='running',
+            step='analyzing',
+            message=f"Analyzing job {index + 1} of {total}: {job.get('title', 'Untitled')}",
+            percent=percent,
+            meta={
+                'current_index': index + 1,
+                'total_jobs': total,
+                'current_job_title': job.get('title', ''),
+            },
+        )
+
+    try:
+        update_task(
+            task_id,
+            status='running',
+            step='starting',
+            message='Starting AI profile match analysis…',
+            percent=5,
+            meta={'total_jobs': total, 'min_match_score': min_match_score},
+        )
+        result = analyze_jobs_with_threshold(
+            jobs,
+            profile,
+            min_match_score,
+            on_progress=on_progress,
+        )
+
+        for job, updated in zip(jobs, result['jobs']):
+            job_id = job.get('id')
+            if not job_id:
+                continue
+            job_repo.update_job(
+                job_id,
+                {
+                    'matched_categories': updated.get('matched_categories', {}),
+                    'matched_skills': updated.get('matched_skills', job.get('matched_skills', [])),
+                },
+            )
+            previous_status = job.get('workflow_status') or DEFAULT_JOB_STATUS
+            new_status = updated.get('workflow_status') or previous_status
+            if new_status != previous_status:
+                job_repo.update_job_status(job_id, new_status)
+
+        stats = result['stats']
+        complete_task(
+            task_id,
+            {
+                'stats': stats,
+                'return_folder': return_folder,
+                'return_search': return_search,
+            },
+        )
+        update_task(
+            task_id,
+            step='complete',
+            message='Profile match analysis complete',
+            percent=100,
+        )
+    except Exception as exc:
+        logger.error('Job match analysis failed: %s', exc)
+        fail_task(task_id, str(exc))
+
+
+@app.route('/jobs/manage/analyze-match', methods=['POST'])
+def analyze_jobs_match():
+    """Analyze jobs in the current folder against the profile and route low matches."""
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '').strip()
+    min_match_score = normalize_min_match_score(request.form.get('min_match_score'))
+
+    profile = profile_repo.get_profile()
+    if not profile_has_matchable_skills(profile):
+        flash('Add technical skills, minor skills, or stacks on your profile before running match analysis.', 'warning')
+        return _manage_jobs_redirect(return_folder, return_search)
+
+    jobs = _jobs_for_manage_folder(return_folder, return_search)
+    if not jobs:
+        flash('No jobs to analyze in this folder.', 'warning')
+        return _manage_jobs_redirect(return_folder, return_search)
+
+    task_id = create_task(
+        'job_match_analyze',
+        meta={
+            'total_jobs': len(jobs),
+            'min_match_score': min_match_score,
+            'return_folder': return_folder,
+            'return_search': return_search,
+        },
+    )
+    start_background_task(
+        task_id,
+        lambda: _run_job_match_analyze_task(
+            task_id,
+            jobs,
+            profile,
+            min_match_score,
+            return_folder,
+            return_search,
+        ),
+    )
+    return redirect(url_for('job_match_analyze_progress', task_id=task_id))
+
+
+@app.route('/jobs/manage/analyze-match/<task_id>')
+def job_match_analyze_progress(task_id):
+    """Show progress while jobs are analyzed against the profile."""
+    task = get_task(task_id)
+    if not task or task.get('task_type') != 'job_match_analyze':
+        flash('Match analysis task not found', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    meta = task.get('meta', {})
+    return_folder = meta.get('return_folder') or 'all'
+    return_search = meta.get('return_search') or ''
+    back_kwargs = {}
+    if return_search:
+        back_kwargs['q'] = return_search
+    if return_folder != 'all':
+        back_kwargs['folder'] = return_folder
+
+    return render_template(
+        'job_match_progress.html',
+        task_id=task_id,
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=url_for('job_match_analyze_complete', task_id=task_id),
+        back_url=url_for('manage_jobs', **back_kwargs),
+        min_match_score=meta.get('min_match_score', 50),
+        job_count=meta.get('total_jobs', 0),
+    )
+
+
+@app.route('/jobs/manage/analyze-match/complete/<task_id>')
+def job_match_analyze_complete(task_id):
+    """Finish match analysis and return to manage jobs."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Match analysis result not found', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    result = task['result']
+    stats = result.get('stats', {})
+    threshold = stats.get('min_match_score', 50)
+    analyzed = stats.get('analyzed', 0)
+    moved = stats.get('moved_to_not_match', 0)
+    restored = stats.get('restored_to_new', 0)
+
+    flash(
+        f'Analyzed {analyzed} job(s) with a minimum match score of {threshold:g}%. '
+        f'Moved {moved} to Not Match With You'
+        + (f' and restored {restored} to New / Discovered.' if restored else '.'),
+        'success',
+    )
+
+    return _manage_jobs_redirect(
+        result.get('return_folder', 'all'),
+        result.get('return_search', ''),
     )
 
 

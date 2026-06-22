@@ -9,7 +9,7 @@ from job_apply_ai.storage.user_profile import get_default_cv_template_path
 
 
 class DocxBuilderJobSkillsTests(unittest.TestCase):
-    def test_builds_job_skill_sections(self):
+    def test_export_omits_preview_only_job_skill_sections(self):
         template_path = get_default_cv_template_path()
         self.assertTrue(os.path.exists(template_path))
 
@@ -31,16 +31,25 @@ class DocxBuilderJobSkillsTests(unittest.TestCase):
             doc = Document(output_path)
             paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
 
-            summary_idx = paragraphs.index("Personal Summary")
-            matched_idx = paragraphs.index("Skills Matching Job Description")
-            missing_idx = paragraphs.index("Job Skills Not In CV")
-            technical_idx = paragraphs.index("Technical Skills")
+            self.assertNotIn("Skills Matching Job Description", paragraphs)
+            self.assertNotIn("Job Skills Not In CV", paragraphs)
 
-            self.assertLess(summary_idx, matched_idx)
-            self.assertLess(matched_idx, missing_idx)
-            self.assertLess(missing_idx, technical_idx)
-            self.assertIn("Python", paragraphs[matched_idx + 1])
-            self.assertIn("Kotlin", paragraphs[missing_idx + 1])
+            technical_idx = paragraphs.index("Technical Skills")
+            technical_line = paragraphs[technical_idx + 1]
+            self.assertIn("Python", technical_line)
+            self.assertIn("REST APIs", technical_line)
+            self.assertIn("Flask", technical_line)
+            self.assertNotIn("Kotlin", technical_line)
+            self.assertNotIn("GraphQL", technical_line)
+
+    def test_export_technical_skills_merges_job_matched_skills(self):
+        merged = CVDocumentBuilder._export_technical_skills(
+            {
+                "job_matched_skills": ["REST APIs", "Python"],
+                "technical_skills": ["Java", "Python", "Flask"],
+            }
+        )
+        self.assertEqual(merged, ["REST APIs", "Python", "Java", "Flask"])
 
 
 if __name__ == "__main__":

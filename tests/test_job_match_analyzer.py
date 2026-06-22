@@ -4,6 +4,8 @@ from job_apply_ai.cv_modifier.job_match_analyzer import (
     NOT_MATCH_STATUS,
     classify_jobs_by_profile_match,
     heuristic_job_match,
+    job_meets_threshold,
+    normalize_min_match_score,
     profile_has_matchable_skills,
 )
 from job_apply_ai.storage.user_profile import profile_from_form, profile_to_form_fields
@@ -74,8 +76,20 @@ def test_classify_jobs_routes_non_matches_to_folder():
         },
     ]
 
-    classified = classify_jobs_by_profile_match(jobs, profile)
+    classified = classify_jobs_by_profile_match(jobs, profile, min_match_score=50)
 
     assert classified[0]["workflow_status"] == "new"
     assert classified[1]["workflow_status"] == NOT_MATCH_STATUS
     assert classified[1]["matched_categories"]["Profile Fit"]["is_match"] is False
+
+
+def test_job_meets_threshold_uses_match_score():
+    assert job_meets_threshold({"match_score": 72, "method": "ai"}, 50) is True
+    assert job_meets_threshold({"match_score": 42, "method": "ai"}, 50) is False
+    assert job_meets_threshold({"match_score": 0, "method": "skipped"}, 50) is True
+
+
+def test_normalize_min_match_score():
+    assert normalize_min_match_score("75") == 75.0
+    assert normalize_min_match_score("150") == 100.0
+    assert normalize_min_match_score("bad") == 50.0

@@ -267,13 +267,21 @@
                                 </div>
                                 <div class="d-flex gap-2">
                                     {% if not account.is_default %}
-                                    <form method="post" action="{{ url_for('oauth_set_default_account', account_id=account.id) }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Set default</button>
-                                    </form>
+                                    <button type="submit"
+                                            class="btn btn-sm btn-outline-secondary"
+                                            formaction="{{ url_for('oauth_set_default_account', account_id=account.id) }}"
+                                            formmethod="post"
+                                            formnovalidate>
+                                        Set default
+                                    </button>
                                     {% endif %}
-                                    <form method="post" action="{{ url_for('oauth_disconnect_account', account_id=account.id) }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Disconnect</button>
-                                    </form>
+                                    <button type="submit"
+                                            class="btn btn-sm btn-outline-danger"
+                                            formaction="{{ url_for('oauth_disconnect_account', account_id=account.id) }}"
+                                            formmethod="post"
+                                            formnovalidate>
+                                        Disconnect
+                                    </button>
                                 </div>
                             </div>
                             {% endfor %}
@@ -315,7 +323,7 @@
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label">Email address</label>
-                                    <input type="email" class="form-control" name="smtp_email" value="{{ account.email }}" required>
+                                    <input type="email" class="form-control" name="smtp_email" value="{{ account.email }}">
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label">App password</label>
@@ -389,11 +397,11 @@
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">Email address</label>
-                    <input type="email" class="form-control" name="smtp_email" required>
+                    <input type="email" class="form-control" name="smtp_email" placeholder="name@example.com">
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">App password</label>
-                    <input type="password" class="form-control" name="smtp_password" placeholder="Required" required>
+                    <input type="password" class="form-control" name="smtp_password" placeholder="Required for new accounts">
                 </div>
                 <div class="col-md-4 smtp-custom-fields d-none">
                     <label class="form-label">SMTP host</label>

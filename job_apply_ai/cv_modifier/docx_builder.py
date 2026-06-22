@@ -33,18 +33,6 @@ SECTION_KEYWORDS = {
         "expertise",
         "qualifications",
     ],
-    "job_matched_skills": [
-        "skills matching job description",
-        "job-matched skills",
-        "matched job skills",
-        "skills in job and cv",
-    ],
-    "job_missing_skills": [
-        "job skills not in cv",
-        "skills not in cv",
-        "job requirements not in cv",
-        "missing job skills",
-    ],
     "tools": [
         "tool & platforms",
         "tools & platforms",
@@ -83,6 +71,19 @@ SECTION_KEYWORDS = {
 }
 
 
+PREVIEW_ONLY_SECTION_KEYWORDS = [
+    "skills matching job description",
+    "skills matching job",
+    "job-matched skills",
+    "matched job skills",
+    "skills in job and cv",
+    "job skills not in cv",
+    "skills not in cv",
+    "job requirements not in cv",
+    "missing job skills",
+]
+
+
 class CVDocumentBuilder:
     """Apply structured CV content onto a Word template."""
 
@@ -101,6 +102,8 @@ class CVDocumentBuilder:
         if profile:
             self._fill_header(doc, profile, content)
 
+        self._remove_preview_only_sections(doc)
+
         updated = False
         if content.get("professional_summary"):
             updated |= self._replace_section(
@@ -109,25 +112,7 @@ class CVDocumentBuilder:
                 [content["professional_summary"]],
             )
 
-        job_matched_skills = content.get("job_matched_skills") or []
-        if job_matched_skills:
-            updated |= self._replace_section(
-                doc,
-                SECTION_KEYWORDS["job_matched_skills"],
-                [self._format_inline_bullets(job_matched_skills)],
-                bullet_style="inline",
-            )
-
-        job_missing_skills = content.get("job_skills_not_in_cv") or []
-        if job_missing_skills:
-            updated |= self._replace_section(
-                doc,
-                SECTION_KEYWORDS["job_missing_skills"],
-                [self._format_inline_bullets(job_missing_skills)],
-                bullet_style="inline",
-            )
-
-        skills = content.get("technical_skills") or content.get("key_skills") or []
+        skills = self._export_technical_skills(content)
         if skills:
             updated |= self._replace_section(
                 doc,
@@ -195,6 +180,15 @@ class CVDocumentBuilder:
         doc.save(output_path)
         return True
 
+    def _remove_preview_only_sections(self, doc: Document) -> None:
+        """Drop preview-only job skill sections from the exported document."""
+        while True:
+            start_idx = self._find_section_start(doc, PREVIEW_ONLY_SECTION_KEYWORDS)
+            if start_idx is None:
+                break
+            end_idx = self._find_section_end(doc, start_idx)
+            self._remove_paragraph_range(doc, start_idx, end_idx)
+
     def _fill_header(
         self,
         doc: Document,
@@ -226,6 +220,24 @@ class CVDocumentBuilder:
 
         if contact_parts:
             doc.paragraphs[1].text = " | ".join(contact_parts)
+
+    @staticmethod
+    def _export_technical_skills(content: dict[str, Any]) -> list[str]:
+        """Merge job-matched skills into technical skills for exported documents."""
+        matched = content.get("job_matched_skills") or []
+        technical = content.get("technical_skills") or content.get("key_skills") or []
+        merged: list[str] = []
+        seen: set[str] = set()
+        for skill in [*matched, *technical]:
+            text = str(skill).strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(text)
+        return merged
 
     @staticmethod
     def _format_inline_bullets(items: list[Any]) -> str:
@@ -348,19 +360,7 @@ class CVDocumentBuilder:
             title.style = "Heading 2"
             doc.add_paragraph(content["professional_summary"])
 
-        job_matched_skills = content.get("job_matched_skills") or []
-        if job_matched_skills:
-            title = doc.add_paragraph("Skills Matching Job Description")
-            title.style = "Heading 2"
-            doc.add_paragraph(self._format_inline_bullets(job_matched_skills))
-
-        job_missing_skills = content.get("job_skills_not_in_cv") or []
-        if job_missing_skills:
-            title = doc.add_paragraph("Job Skills Not In CV")
-            title.style = "Heading 2"
-            doc.add_paragraph(self._format_inline_bullets(job_missing_skills))
-
-        skills = content.get("technical_skills") or content.get("key_skills") or []
+        skills = self._export_technical_skills(content)
         if skills:
             title = doc.add_paragraph("Technical Skills")
             title.style = "Heading 2"
