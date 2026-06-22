@@ -62,9 +62,62 @@ job-apply-ai web
 
 3. Upload your base CV template
 
-4. Search for jobs by entering a job title and location
+4. Search for jobs by entering a job title and location, or use **Batch search** (Step 2 → **Batch search** tab) to upload title and location files.
 
 5. Generate tailored CVs for all jobs or for specific jobs
+
+### Batch job search
+
+Search every job title in every location by uploading two plain-text files (one entry per line). HermesHire builds a queue of all combinations, runs each search, deduplicates results, and saves them to the database (web) or Excel (CLI).
+
+**Web:** Home → Step 2 — Search for jobs → **Batch search** tab (or use the **Batch search** quick link). Upload `titles.txt` and `locations.txt`, or paste lines into the text areas. You can use a file or pasted text for each side — at least one source per column is required.
+
+**Example files:** see `examples/batch_search/titles.txt` and `examples/batch_search/locations.txt`.
+
+**titles.txt**
+```
+Software Engineer
+Data Scientist
+# lines starting with # are ignored
+Product Manager
+```
+
+**locations.txt**
+```
+Berlin
+Remote
+London
+```
+
+With 3 titles and 3 locations, HermesHire queues **9 searches** (every title × every location). Default maximum is **100 combinations** per batch; set `MAX_BATCH_SEARCH_COMBINATIONS` in `.env` to raise it (see `.env.example`).
+
+**CLI:**
+
+```bash
+python -m job_apply_ai batch-search \
+  --titles-file examples/batch_search/titles.txt \
+  --locations-file examples/batch_search/locations.txt \
+  --max-jobs 10
+```
+
+Windows (PowerShell):
+
+```powershell
+python -m job_apply_ai batch-search `
+  --titles-file examples/batch_search/titles.txt `
+  --locations-file examples/batch_search/locations.txt `
+  --max-jobs 10
+```
+
+Optional flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--max-jobs` | `10` | Max jobs fetched per title/location pair |
+| `--sources` | `all` | Comma-separated sources (`linkedin,adzuna,reed,indeed`, or `all`) |
+| `--mode` | `both` | `api`, `scrape`, or `both` |
+| `--output` | auto | Excel output path (defaults to `job_apply_ai/outputs/jobs/batch_jobs_YYYY-MM-DD.xlsx`) |
+| `--no-enrich` | off | Skip fetching full job details and contact emails |
 
 ### Command Line
 
@@ -73,6 +126,12 @@ The application also provides a command-line interface:
 ```bash
 # Scrape job listings
 job-apply-ai scrape --keyword "Software Engineer" --location "Berlin" --max-jobs 5
+
+# Batch search: every title in every location (see Batch job search above)
+python -m job_apply_ai batch-search \
+  --titles-file examples/batch_search/titles.txt \
+  --locations-file examples/batch_search/locations.txt \
+  --max-jobs 10
 
 # Generate tailored CVs for all jobs in an Excel file
 job-apply-ai batch --cv path/to/cv_template.docx --jobs-file path/to/jobs.xlsx

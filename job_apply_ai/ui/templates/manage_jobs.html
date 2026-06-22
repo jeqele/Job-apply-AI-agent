@@ -103,14 +103,7 @@
             {% endif %}
         {% endwith %}
 
-        {% if cv_generation_active %}
-            <div class="alert alert-warning mb-4 d-flex flex-wrap justify-content-between align-items-center gap-2" role="alert">
-                <span><i class="fas fa-lock me-2"></i>AI CV generation is in progress. Other CV actions are temporarily locked.</span>
-                <a href="{{ url_for('release_cv_generation_lock') }}" class="btn btn-sm btn-outline-dark">
-                    <i class="fas fa-unlock me-1"></i>Unlock
-                </a>
-            </div>
-        {% endif %}
+        {% include '_active_tasks_banner.html' %}
 
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div class="d-flex flex-wrap gap-2">

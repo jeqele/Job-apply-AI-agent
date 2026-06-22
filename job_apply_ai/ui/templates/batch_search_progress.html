@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Analyzing Job Profile Match</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Batch Job Search</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -18,14 +20,14 @@
             padding: 2rem;
         }
         .progress-card {
-            width: min(640px, 100%);
+            width: min(720px, 100%);
             background: #fff;
             border-radius: 1.25rem;
             box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35);
             overflow: hidden;
         }
         .progress-header {
-            background: linear-gradient(135deg, #20c997 0%, #0d6efd 100%);
+            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
             color: white;
             padding: 1.75rem 2rem;
         }
@@ -39,7 +41,7 @@
         .progress-bar-fill {
             height: 100%;
             width: 0%;
-            background: linear-gradient(90deg, #20c997, #0d6efd);
+            background: linear-gradient(90deg, #0d6efd, #20c997);
             transition: width 0.45s ease;
         }
     </style>
@@ -49,13 +51,10 @@
         <div class="progress-card">
             <div class="progress-header">
                 <div class="d-flex align-items-center gap-3">
-                    <div class="fs-2"><i class="fas fa-user-check"></i></div>
+                    <div class="fs-2"><i class="fas fa-layer-group"></i></div>
                     <div>
-                        <h1 class="h3 mb-1">Analyzing Profile Match</h1>
-                        <p class="mb-0 opacity-75">
-                            {{ job_count }} job{% if job_count != 1 %}s{% endif %}
-                            · minimum score {{ min_match_score|int }}%
-                        </p>
+                        <h1 class="h3 mb-1">Batch job search</h1>
+                        <p class="mb-0 opacity-75">{{ total_searches }} searches queued (every title × every location)</p>
                     </div>
                 </div>
             </div>
@@ -67,7 +66,7 @@
                 <div class="progress-bar-wrap mb-3">
                     <div id="progress-bar" class="progress-bar-fill"></div>
                 </div>
-                <p id="progress-message" class="text-muted mb-0">Comparing jobs with your profile skills…</p>
+                <p id="progress-message" class="text-muted mb-0">Building search queue…</p>
                 <div id="error-panel" class="alert alert-danger mt-4 d-none" role="alert"></div>
                 <div class="mt-4">
                     <a href="{{ back_url }}" class="btn btn-outline-secondary">{{ back_label }}</a>
@@ -87,13 +86,18 @@
             document.getElementById('progress-message').textContent = data.message || '';
             document.getElementById('progress-percent').textContent = `${data.percent || 0}%`;
             document.getElementById('progress-bar').style.width = `${data.percent || 0}%`;
+
+            if (data.meta && data.meta.keyword && data.meta.location) {
+                document.getElementById('progress-message').textContent =
+                    `${data.message} — ${data.meta.keyword} in ${data.meta.location}`;
+            }
         }
 
         async function pollStatus() {
             const response = await fetch(statusUrl);
             if (response.status === 404) {
                 clearInterval(pollTimer);
-                showError('Analysis session was lost. Please try again.');
+                showError('Batch search session was lost. Please try again.');
                 return;
             }
 
@@ -108,7 +112,7 @@
 
             if (data.status === 'error') {
                 clearInterval(pollTimer);
-                showError(data.error || data.message || 'Profile match analysis failed.');
+                showError(data.error || data.message || 'Batch search failed.');
             }
         }
 

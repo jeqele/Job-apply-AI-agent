@@ -64,12 +64,17 @@ def update_task(
         task["updated_at"] = datetime.utcnow().isoformat(timespec="seconds")
 
 
-def complete_task(task_id: str, result: dict[str, Any]) -> None:
+def complete_task(
+    task_id: str,
+    result: dict[str, Any],
+    *,
+    message: str = "CV generated successfully",
+) -> None:
     update_task(
         task_id,
         status="complete",
         step="complete",
-        message="CV generated successfully",
+        message=message,
         percent=100,
     )
     with _lock:

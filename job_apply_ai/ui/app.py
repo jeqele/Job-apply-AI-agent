@@ -14,6 +14,12 @@ import zipfile
 import io
 
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
+from job_apply_ai.batch_search import (
+    build_search_queue,
+    decode_uploaded_text,
+    parse_lines,
+    validate_batch_queue,
+)
 from job_apply_ai.job_schema import JOB_COLUMNS
 from job_apply_ai.job_status import (
     DEFAULT_JOB_STATUS,
@@ -109,27 +115,32 @@ init_db()
 job_repo = JobRepository()
 profile_repo = UserProfileRepository()
 
-# Clear abandoned CV generation locks after this many seconds without progress
-CV_GENERATION_STALE_SECONDS = 900
+# Clear abandoned background tasks after this many seconds without progress
+BACKGROUND_TASK_STALE_SECONDS = 900
+BACKGROUND_TASK_SESSION_KEYS = (
+    'cv_generation_active',
+    'batch_search_active',
+    'job_match_analyze_active',
+)
 
 # Ensure session data is saved
 app.config['SESSION_TYPE'] = 'filesystem'
 
 
-def _sync_cv_generation_lock() -> str | None:
-    """Drop stale session locks and return the task id only if generation is active."""
-    task_id = session.get('cv_generation_active')
+def _sync_session_background_task(session_key: str) -> str | None:
+    """Drop stale session task pointers and return the task id only if still active."""
+    task_id = session.get(session_key)
     if not task_id:
         return None
 
     task = get_task(task_id)
     if not task:
-        session.pop('cv_generation_active', None)
+        session.pop(session_key, None)
         return None
 
     status = task.get('status')
     if status in ('complete', 'error'):
-        session.pop('cv_generation_active', None)
+        session.pop(session_key, None)
         return None
 
     if status in ('pending', 'running'):
@@ -138,22 +149,77 @@ def _sync_cv_generation_lock() -> str | None:
             try:
                 last_update = datetime.fromisoformat(updated_at)
                 age_seconds = (datetime.utcnow() - last_update).total_seconds()
-                if age_seconds > CV_GENERATION_STALE_SECONDS:
-                    fail_task(task_id, 'CV generation timed out or was interrupted.')
-                    session.pop('cv_generation_active', None)
-                    logger.warning('Cleared stale CV generation lock for task %s', task_id)
+                if age_seconds > BACKGROUND_TASK_STALE_SECONDS:
+                    fail_task(task_id, 'Background task timed out or was interrupted.')
+                    session.pop(session_key, None)
+                    logger.warning('Cleared stale background task %s (%s)', task_id, session_key)
                     return None
             except ValueError:
                 pass
         return task_id
 
-    session.pop('cv_generation_active', None)
+    session.pop(session_key, None)
     return None
 
 
+def _sync_cv_generation_lock() -> str | None:
+    """Drop stale CV generation locks and return the task id only if generation is active."""
+    return _sync_session_background_task('cv_generation_active')
+
+
+def _background_task_progress_label(task: dict) -> str:
+    labels = {
+        'batch_search': 'Batch job search',
+        'job_match_analyze': 'Analyzing Profile Match',
+        'single_cv': 'Generating AI CV',
+        'batch_cv': 'Generating AI CVs',
+    }
+    return labels.get(task.get('task_type', ''), 'Background task')
+
+
+def _background_task_progress_url(task_id: str, task: dict) -> str | None:
+    task_type = task.get('task_type')
+    if task_type == 'batch_search':
+        return url_for('batch_search_progress', task_id=task_id)
+    if task_type == 'job_match_analyze':
+        return url_for('job_match_analyze_progress', task_id=task_id)
+    if task_type == 'single_cv':
+        job_id = task.get('job_id')
+        if job_id:
+            return url_for('make_cv', job_id=job_id)
+    if task_type == 'batch_cv':
+        return url_for('make_all_cvs')
+    return None
+
+
+def _active_background_tasks() -> list[dict]:
+    """Build UI entries for in-progress background tasks the user can return to."""
+    active_tasks: list[dict] = []
+    for session_key in BACKGROUND_TASK_SESSION_KEYS:
+        task_id = session.get(session_key)
+        if not task_id:
+            continue
+        task = get_task(task_id)
+        if not task or task.get('status') not in ('pending', 'running'):
+            continue
+        progress_url = _background_task_progress_url(task_id, task)
+        if not progress_url:
+            continue
+        entry = {
+            'label': _background_task_progress_label(task),
+            'progress_url': progress_url,
+            'message': task.get('message', ''),
+        }
+        if session_key == 'cv_generation_active':
+            entry['release_url'] = url_for('release_cv_generation_lock')
+        active_tasks.append(entry)
+    return active_tasks
+
+
 @app.before_request
-def _refresh_cv_generation_lock():
-    _sync_cv_generation_lock()
+def _refresh_background_task_sessions():
+    for session_key in BACKGROUND_TASK_SESSION_KEYS:
+        _sync_session_background_task(session_key)
 
 
 @app.context_processor
@@ -162,6 +228,7 @@ def _inject_cv_generation_lock():
     accounts = list_smtp_accounts(profile)
     return {
         'cv_generation_active': session.get('cv_generation_active'),
+        'active_background_tasks': _active_background_tasks(),
         'smtp_configured': bool(accounts),
         'smtp_accounts': accounts,
         'google_oauth_configured': google_oauth_configured(),
@@ -506,6 +573,119 @@ def _run_single_cv_task(
     )
 
 
+def _run_batch_search_task(
+    task_id: str,
+    queue: list[tuple[str, str]],
+    max_jobs: int,
+    sources: str,
+    source_list: list[str],
+    mode: str,
+    profile: dict,
+) -> None:
+    total = len(queue)
+    unique_titles = len({keyword for keyword, _ in queue})
+    unique_locations = len({location for _, location in queue})
+    search_run_id = job_repo.create_search_run(
+        f'batch: {unique_titles} title(s)',
+        f'batch: {unique_locations} location(s)',
+        sources,
+        mode,
+    )
+
+    total_jobs_saved = 0
+    failed_searches: list[dict] = []
+
+    update_task(
+        task_id,
+        status='running',
+        step='searching',
+        message=f'Starting batch search ({total} combinations)…',
+        percent=1,
+        meta={'total_searches': total},
+    )
+
+    for index, (keyword, location) in enumerate(queue, start=1):
+        percent = max(1, min(99, int(((index - 1) / total) * 100)))
+        update_task(
+            task_id,
+            status='running',
+            step='searching',
+            message=f'Searching {index} of {total}',
+            percent=percent,
+            meta={
+                'current_index': index,
+                'total_searches': total,
+                'keyword': keyword,
+                'location': location,
+            },
+        )
+
+        try:
+            jobs = aggregate_search_jobs(
+                keyword,
+                location,
+                max_jobs=max_jobs,
+                sources=source_list,
+                mode=mode,
+                enrich_details=True,
+            )
+            if jobs:
+                processed_jobs = _enrich_jobs_with_skills(jobs)
+                processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
+                job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
+                total_jobs_saved += len(processed_jobs)
+        except Exception as exc:
+            logger.error(
+                'Batch search failed for %r in %r: %s',
+                keyword,
+                location,
+                exc,
+            )
+            failed_searches.append(
+                {
+                    'keyword': keyword,
+                    'location': location,
+                    'error': str(exc),
+                }
+            )
+
+    if total_jobs_saved == 0:
+        detail = (
+            f'{len(failed_searches)} of {total} searches failed.'
+            if failed_searches
+            else 'No jobs matched any title/location combination.'
+        )
+        fail_task(task_id, f'Batch search found no jobs. {detail}')
+        return
+
+    message = f'Batch search complete — saved {total_jobs_saved} jobs'
+    if failed_searches:
+        message += f' ({len(failed_searches)} searches failed)'
+
+    complete_task(
+        task_id,
+        {
+            'search_run_id': search_run_id,
+            'total_jobs': total_jobs_saved,
+            'searches_run': total,
+            'failed_searches': failed_searches,
+        },
+        message=message,
+    )
+
+
+def _read_batch_lines_from_request(field_name: str, text_field_name: str) -> list[str]:
+    """Read newline-separated values from an uploaded file or text area."""
+    upload = request.files.get(field_name)
+    if upload and upload.filename:
+        return parse_lines(decode_uploaded_text(upload.read()))
+
+    text = (request.form.get(text_field_name) or '').strip()
+    if text:
+        return parse_lines(text)
+    return []
+
+
 def _run_batch_cv_task(task_id: str, profile: dict, jobs: list[dict]) -> None:
     generator = RAGCVGenerator()
 
@@ -702,6 +882,101 @@ def search_jobs():
             return redirect(url_for('index'))
     
     return redirect(url_for('index'))
+
+@app.route('/search/batch', methods=['POST'])
+def batch_search_jobs():
+    """Queue a batch search: every job title × every location."""
+    titles = _read_batch_lines_from_request('titles_file', 'titles_text')
+    locations = _read_batch_lines_from_request('locations_file', 'locations_text')
+    queue = build_search_queue(titles, locations)
+    queue_error = validate_batch_queue(queue)
+
+    if queue_error:
+        flash(queue_error, 'error')
+        return redirect(url_for('index'))
+
+    max_jobs = int(request.form.get('max_jobs', 5))
+    sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
+    mode = request.form.get('mode', 'both')
+    source_list = [source.strip() for source in sources.split(',') if source.strip()]
+    profile = profile_repo.get_profile()
+
+    task_id = create_task(
+        'batch_search',
+        meta={
+            'total_searches': len(queue),
+            'titles': len(titles),
+            'locations': len(locations),
+        },
+    )
+    session['batch_search_active'] = task_id
+    start_background_task(
+        task_id,
+        lambda: _run_batch_search_task(
+            task_id,
+            queue,
+            max_jobs,
+            sources,
+            source_list,
+            mode,
+            profile,
+        ),
+    )
+    return redirect(url_for('batch_search_progress', task_id=task_id))
+
+
+@app.route('/search/batch/<task_id>')
+def batch_search_progress(task_id):
+    """Show progress while batch job search runs."""
+    task = get_task(task_id)
+    if not task:
+        flash('Batch search task not found', 'error')
+        return redirect(url_for('index'))
+
+    total_searches = task.get('meta', {}).get('total_searches', 0)
+    return render_template(
+        'batch_search_progress.html',
+        task_id=task_id,
+        total_searches=total_searches,
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=url_for('batch_search_complete', task_id=task_id),
+        back_url=f"{url_for('index')}#batch-search-jobs",
+        back_label='Back to home',
+    )
+
+
+@app.route('/search/batch/complete/<task_id>')
+def batch_search_complete(task_id):
+    """Show jobs found by a completed batch search."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Batch search result not found', 'error')
+        return redirect(url_for('index'))
+
+    result = task['result']
+    search_run_id = result.get('search_run_id')
+    processed_jobs = job_repo.list_jobs(search_run_id=search_run_id)
+    session['search_run_id'] = search_run_id
+
+    failed_searches = result.get('failed_searches') or []
+    if failed_searches:
+        flash(
+            f'Batch search finished with {len(failed_searches)} failed combination(s).',
+            'warning',
+        )
+
+    session.pop('batch_search_active', None)
+
+    if not processed_jobs:
+        flash('Batch search completed but no jobs were saved.', 'warning')
+        return redirect(url_for('index'))
+
+    return render_template(
+        'job_list.html',
+        jobs=processed_jobs,
+        search_run_id=search_run_id,
+    )
+
 
 def _clear_profile_import_session() -> None:
     session.pop('profile_draft', None)
@@ -1159,6 +1434,7 @@ def analyze_jobs_match():
             'return_search': return_search,
         },
     )
+    session['job_match_analyze_active'] = task_id
     start_background_task(
         task_id,
         lambda: _run_job_match_analyze_task(
@@ -1196,6 +1472,7 @@ def job_match_analyze_progress(task_id):
         status_url=url_for('cv_task_status', task_id=task_id),
         complete_url=url_for('job_match_analyze_complete', task_id=task_id),
         back_url=url_for('manage_jobs', **back_kwargs),
+        back_label='Back to Manage Jobs',
         min_match_score=meta.get('min_match_score', 50),
         job_count=meta.get('total_jobs', 0),
     )
@@ -1215,6 +1492,8 @@ def job_match_analyze_complete(task_id):
     analyzed = stats.get('analyzed', 0)
     moved = stats.get('moved_to_not_match', 0)
     restored = stats.get('restored_to_new', 0)
+
+    session.pop('job_match_analyze_active', None)
 
     flash(
         f'Analyzed {analyzed} job(s) with a minimum match score of {threshold:g}%. '

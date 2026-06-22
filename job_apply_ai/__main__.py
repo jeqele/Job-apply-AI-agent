@@ -68,6 +68,39 @@ def main():
     batch_parser.add_argument('--cv', help='Optional legacy CV document path (.docx). Profile data is used by default.')
     batch_parser.add_argument('--jobs-file', required=True, help='Path to Excel file with job listings')
     batch_parser.add_argument('--output-dir', help='Directory to save the tailored CVs')
+
+    batch_search_parser = subparsers.add_parser(
+        'batch-search',
+        help='Search every job title in every location from text files',
+    )
+    batch_search_parser.add_argument(
+        '--titles-file',
+        required=True,
+        help='Path to newline-separated job titles (.txt)',
+    )
+    batch_search_parser.add_argument(
+        '--locations-file',
+        required=True,
+        help='Path to newline-separated locations (.txt)',
+    )
+    batch_search_parser.add_argument('--output', help='Output Excel file path')
+    batch_search_parser.add_argument('--max-jobs', type=int, default=10, help='Maximum jobs per search')
+    batch_search_parser.add_argument(
+        '--sources',
+        default='all',
+        help='Comma-separated sources: linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
+    )
+    batch_search_parser.add_argument(
+        '--mode',
+        choices=['api', 'scrape', 'both'],
+        default='both',
+        help='Use API, scrape, or both where available',
+    )
+    batch_search_parser.add_argument(
+        '--no-enrich',
+        action='store_true',
+        help='Skip fetching job details and contact emails',
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -177,6 +210,84 @@ def main():
                 logger.info(f"  - {cv_path}")
         else:
             logger.warning("Failed to generate any CVs")
+
+    elif args.command == 'batch-search':
+        from job_apply_ai.batch_search import (
+            build_search_queue,
+            parse_lines_from_path,
+            validate_batch_queue,
+        )
+        from job_apply_ai.scraper.aggregator import search_jobs
+        from job_apply_ai.scraper.jobs_io import save_jobs_to_excel
+        from job_apply_ai.storage.database import init_db
+        from job_apply_ai.storage.job_repository import JobRepository
+
+        init_db()
+        titles = parse_lines_from_path(args.titles_file)
+        locations = parse_lines_from_path(args.locations_file)
+        queue = build_search_queue(titles, locations)
+        queue_error = validate_batch_queue(queue)
+        if queue_error:
+            logger.error(queue_error)
+            sys.exit(1)
+
+        sources = [source.strip() for source in args.sources.split(",") if source.strip()]
+        repo = JobRepository()
+        unique_titles = len(set(titles))
+        unique_locations = len(set(locations))
+        search_run_id = repo.create_search_run(
+            f"batch: {unique_titles} title(s)",
+            f"batch: {unique_locations} location(s)",
+            args.sources,
+            args.mode,
+        )
+
+        all_jobs = []
+        failed = 0
+        for index, (keyword, location) in enumerate(queue, start=1):
+            logger.info(
+                "Batch search %s/%s: %r in %r",
+                index,
+                len(queue),
+                keyword,
+                location,
+            )
+            try:
+                jobs = search_jobs(
+                    keyword,
+                    location,
+                    max_jobs=args.max_jobs,
+                    sources=sources,
+                    mode=args.mode,
+                    enrich_details=not args.no_enrich,
+                )
+                if jobs:
+                    repo.upsert_jobs(jobs, search_run_id=search_run_id)
+                    all_jobs.extend(jobs)
+            except Exception as exc:
+                failed += 1
+                logger.error("Search failed for %r in %r: %s", keyword, location, exc)
+
+        saved_jobs = repo.list_jobs(search_run_id=search_run_id)
+        if not saved_jobs:
+            logger.warning("Batch search found no jobs (%s failures)", failed)
+            sys.exit(1)
+
+        output_file = args.output
+        if not output_file:
+            output_dir = os.path.join(os.getcwd(), "job_apply_ai", "outputs", "jobs")
+            os.makedirs(output_dir, exist_ok=True)
+            today_date = datetime.today().strftime("%Y-%m-%d")
+            output_file = os.path.join(output_dir, f"batch_jobs_{today_date}.xlsx")
+
+        save_jobs_to_excel(saved_jobs, output_file)
+        logger.info(
+            "Batch search saved %s unique jobs to %s (%s combinations, %s failures)",
+            len(saved_jobs),
+            output_file,
+            len(queue),
+            failed,
+        )
     
     else:
         parser.print_help()
