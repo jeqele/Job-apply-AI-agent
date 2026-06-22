@@ -21,6 +21,14 @@ from job_apply_ai.batch_search import (
     validate_batch_queue,
 )
 from job_apply_ai.job_schema import JOB_COLUMNS
+from job_apply_ai.job_sort import (
+    DEFAULT_JOB_SORT,
+    JOB_SORT_OPTIONS,
+    get_profile_match_analysis,
+    get_profile_match_score,
+    sort_jobs,
+    validate_job_sort,
+)
 from job_apply_ai.job_status import (
     DEFAULT_JOB_STATUS,
     JOB_STATUS_BADGE_CLASSES,
@@ -239,6 +247,8 @@ def _inject_cv_generation_lock():
         'smtp_accounts': accounts,
         'google_oauth_configured': google_oauth_configured(),
         'microsoft_oauth_configured': microsoft_oauth_configured(),
+        'job_sort_options': JOB_SORT_OPTIONS,
+        'default_job_sort': DEFAULT_JOB_SORT,
     }
 
 
@@ -424,6 +434,7 @@ def _cv_preview_context(
     show_success_banner: bool = True,
     return_folder: str = 'all',
     return_search: str = '',
+    return_sort: str = '',
     return_from_manage: bool = False,
 ) -> dict:
     """Build template context for the CV preview / success page."""
@@ -456,8 +467,14 @@ def _cv_preview_context(
         'show_success_banner': show_success_banner,
         'return_folder': return_folder,
         'return_search': return_search,
+        'return_sort': return_sort,
         'return_from_manage': return_from_manage,
-        'back_url': _cv_generation_back_url(return_from_manage, return_folder, return_search),
+        'back_url': _cv_generation_back_url(
+            return_from_manage,
+            return_folder,
+            return_search,
+            return_sort,
+        ),
         'back_label': 'Back to Jobs' if return_from_manage else 'Back to Job List',
         'download_url': (
             url_for('download_job_cv', job_id=job_id)
@@ -514,14 +531,19 @@ def _generate_rag_cv(
     return result
 
 
-def _cv_generation_back_url(return_from_manage: bool, return_folder: str, return_search: str):
+def _cv_generation_back_url(
+    return_from_manage: bool,
+    return_folder: str,
+    return_search: str,
+    return_sort: str = '',
+):
     if return_from_manage:
-        kwargs = {}
-        if return_search:
-            kwargs['q'] = return_search
-        if return_folder and return_folder != 'all':
-            kwargs['folder'] = return_folder
-        return url_for('manage_jobs', **kwargs)
+        return url_for(
+            'manage_jobs',
+            **_manage_jobs_url_kwargs(return_folder, return_search, return_sort),
+        )
+    if return_sort and return_sort != DEFAULT_JOB_SORT:
+        return url_for('job_list', sort=return_sort)
     return url_for('job_list')
 
 
@@ -533,6 +555,7 @@ def _run_single_cv_task(
     return_folder: str,
     return_search: str,
     return_from_manage: bool,
+    return_sort: str = '',
 ) -> None:
     result = _generate_rag_cv(job, profile, task_id=task_id)
     output_path = result['output_path']
@@ -574,6 +597,7 @@ def _run_single_cv_task(
             'rag_chunk_count': result.get('chunk_count', 0),
             'return_folder': return_folder,
             'return_search': return_search,
+            'return_sort': return_sort,
             'return_from_manage': return_from_manage,
         },
     )
@@ -820,13 +844,16 @@ def _run_batch_cv_task(task_id: str, profile: dict, jobs: list[dict]) -> None:
     )
 
 
-def _get_jobs_for_view(search_run_id: int | None = None) -> list[dict]:
+def _get_jobs_for_view(
+    search_run_id: int | None = None,
+    sort_by: str | None = None,
+) -> list[dict]:
     """Load jobs from SQLite for the current view."""
     if search_run_id is not None:
         jobs = job_repo.list_jobs(search_run_id=search_run_id)
         if jobs:
-            return jobs
-    return job_repo.list_jobs()
+            return sort_jobs(jobs, sort_by)
+    return sort_jobs(job_repo.list_jobs(), sort_by)
 
 
 def _job_form_data() -> dict:
@@ -839,19 +866,47 @@ def _job_form_data() -> dict:
     return data
 
 
-def _manage_jobs_redirect(folder: str = 'all', search: str = ''):
+def _manage_jobs_redirect(folder: str = 'all', search: str = '', sort: str = ''):
     """Redirect back to the manage jobs view preserving folder context."""
     kwargs = {}
     if search:
         kwargs['q'] = search
+    if sort and sort != DEFAULT_JOB_SORT:
+        kwargs['sort'] = sort
     if folder and folder != 'all':
         kwargs['folder'] = folder
     return redirect(url_for('manage_jobs', **kwargs))
 
 
+def _manage_jobs_url_kwargs(
+    folder: str = 'all',
+    search: str = '',
+    sort: str = '',
+) -> dict:
+    """Build query kwargs for manage jobs links."""
+    kwargs: dict = {}
+    if search:
+        kwargs['q'] = search
+    if sort and sort != DEFAULT_JOB_SORT:
+        kwargs['sort'] = sort
+    if folder and folder != 'all':
+        kwargs['folder'] = folder
+    return kwargs
+
+
 @app.template_filter('job_status_label')
 def _job_status_label_filter(status):
     return job_status_label(status)
+
+
+@app.template_filter('profile_match_score')
+def _profile_match_score_filter(job):
+    return get_profile_match_score(job)
+
+
+@app.template_filter('profile_match_analysis')
+def _profile_match_analysis_filter(job):
+    return get_profile_match_analysis(job)
 
 
 @app.route('/')
@@ -909,7 +964,10 @@ def search_jobs():
             profile = profile_repo.get_profile()
             processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
             job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
-            processed_jobs = job_repo.list_jobs(search_run_id=search_run_id)
+            processed_jobs = sort_jobs(
+                job_repo.list_jobs(search_run_id=search_run_id),
+                'match_desc',
+            )
 
             session['search_run_id'] = search_run_id
 
@@ -917,6 +975,8 @@ def search_jobs():
                 'job_list.html',
                 jobs=processed_jobs,
                 search_run_id=search_run_id,
+                current_sort='match_desc',
+                job_sort_options=JOB_SORT_OPTIONS,
             )
             
         except Exception as e:
@@ -999,7 +1059,10 @@ def batch_search_complete(task_id):
 
     result = task['result']
     search_run_id = result.get('search_run_id')
-    processed_jobs = job_repo.list_jobs(search_run_id=search_run_id)
+    processed_jobs = sort_jobs(
+        job_repo.list_jobs(search_run_id=search_run_id),
+        'match_desc',
+    )
     session['search_run_id'] = search_run_id
 
     failed_searches = result.get('failed_searches') or []
@@ -1021,6 +1084,8 @@ def batch_search_complete(task_id):
         'job_list.html',
         jobs=processed_jobs,
         search_run_id=search_run_id,
+        current_sort='match_desc',
+        job_sort_options=JOB_SORT_OPTIONS,
     )
 
 
@@ -1314,16 +1379,22 @@ def profile_import_complete(task_id):
 def job_list():
     """Display the list of jobs with Make CV buttons."""
     search_run_id = session.get('search_run_id')
-    jobs = _get_jobs_for_view(search_run_id)
+    sort_by = validate_job_sort(request.args.get('sort'))
+    jobs = _get_jobs_for_view(search_run_id, sort_by=sort_by)
 
     if not jobs:
         flash('No jobs found. Please search for jobs first.', 'warning')
         return redirect(url_for('index'))
 
+    sort_query = sort_by if sort_by != DEFAULT_JOB_SORT else None
+
     return render_template(
         'job_list.html',
         jobs=jobs,
         search_run_id=search_run_id,
+        current_sort=sort_by,
+        sort_query=sort_query,
+        job_sort_options=JOB_SORT_OPTIONS,
     )
 
 
@@ -1332,6 +1403,7 @@ def job_list():
 def manage_jobs(folder='all'):
     """Display jobs grouped by workflow status with folder navigation."""
     search = request.args.get('q', '').strip()
+    sort_by = validate_job_sort(request.args.get('sort'))
 
     if folder != 'all' and not is_valid_job_status(folder):
         flash('Unknown job folder', 'warning')
@@ -1339,10 +1411,13 @@ def manage_jobs(folder='all'):
 
     workflow_status = None if folder == 'all' else folder
     exclude_statuses = ['archived'] if folder == 'all' else None
-    jobs = job_repo.list_jobs(
-        workflow_status=workflow_status,
-        search=search or None,
-        exclude_workflow_statuses=exclude_statuses,
+    jobs = sort_jobs(
+        job_repo.list_jobs(
+            workflow_status=workflow_status,
+            search=search or None,
+            exclude_workflow_statuses=exclude_statuses,
+        ),
+        sort_by,
     )
     status_counts = job_repo.count_jobs_by_status()
     total_count = sum(status_counts.values())
@@ -1353,11 +1428,16 @@ def manage_jobs(folder='all'):
     for status in JOB_WORKFLOW_STATUSES:
         folder_counts[status] = status_counts.get(status, 0)
 
+    sort_query = sort_by if sort_by != DEFAULT_JOB_SORT else None
+
     return render_template(
         'manage_jobs.html',
         jobs=jobs,
         current_folder=folder,
         search_query=search,
+        current_sort=sort_by,
+        sort_query=sort_query,
+        job_sort_options=JOB_SORT_OPTIONS,
         folder_counts=folder_counts,
         job_statuses=JOB_WORKFLOW_STATUSES,
         status_labels=JOB_STATUS_LABELS,
@@ -1384,6 +1464,7 @@ def _run_job_match_analyze_task(
     min_match_score: float,
     return_folder: str,
     return_search: str,
+    return_sort: str = '',
 ) -> None:
     total = len(jobs)
 
@@ -1456,6 +1537,7 @@ def _run_job_match_analyze_task(
                     'stats': stats,
                     'return_folder': return_folder,
                     'return_search': return_search,
+                    'return_sort': return_sort,
                     'stopped': True,
                 },
                 message=f'Profile match analysis stopped — analyzed {analyzed} of {total} jobs',
@@ -1468,6 +1550,7 @@ def _run_job_match_analyze_task(
                 'stats': stats,
                 'return_folder': return_folder,
                 'return_search': return_search,
+                'return_sort': return_sort,
             },
         )
         update_task(
@@ -1486,17 +1569,18 @@ def analyze_jobs_match():
     """Analyze jobs in the current folder against the profile and route low matches."""
     return_folder = request.form.get('return_folder', 'all')
     return_search = request.form.get('return_search', '').strip()
+    return_sort = request.form.get('return_sort', '').strip()
     min_match_score = normalize_min_match_score(request.form.get('min_match_score'))
 
     profile = profile_repo.get_profile()
     if not profile_has_matchable_skills(profile):
         flash('Add technical skills, minor skills, or stacks on your profile before running match analysis.', 'warning')
-        return _manage_jobs_redirect(return_folder, return_search)
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
     jobs = _jobs_for_manage_folder(return_folder, return_search)
     if not jobs:
         flash('No jobs to analyze in this folder.', 'warning')
-        return _manage_jobs_redirect(return_folder, return_search)
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
     task_id = create_task(
         'job_match_analyze',
@@ -1505,6 +1589,7 @@ def analyze_jobs_match():
             'min_match_score': min_match_score,
             'return_folder': return_folder,
             'return_search': return_search,
+            'return_sort': return_sort,
         },
     )
     session['job_match_analyze_active'] = task_id
@@ -1517,6 +1602,7 @@ def analyze_jobs_match():
             min_match_score,
             return_folder,
             return_search,
+            return_sort,
         ),
     )
     return redirect(url_for('job_match_analyze_progress', task_id=task_id))
@@ -1533,11 +1619,7 @@ def job_match_analyze_progress(task_id):
     meta = task.get('meta', {})
     return_folder = meta.get('return_folder') or 'all'
     return_search = meta.get('return_search') or ''
-    back_kwargs = {}
-    if return_search:
-        back_kwargs['q'] = return_search
-    if return_folder != 'all':
-        back_kwargs['folder'] = return_folder
+    return_sort = meta.get('return_sort') or ''
 
     return render_template(
         'job_match_progress.html',
@@ -1545,7 +1627,10 @@ def job_match_analyze_progress(task_id):
         status_url=url_for('cv_task_status', task_id=task_id),
         complete_url=url_for('job_match_analyze_complete', task_id=task_id),
         control_url=url_for('control_background_task', task_id=task_id),
-        back_url=url_for('manage_jobs', **back_kwargs),
+        back_url=url_for(
+            'manage_jobs',
+            **_manage_jobs_url_kwargs(return_folder, return_search, return_sort),
+        ),
         back_label='Back to Manage Jobs',
         min_match_score=meta.get('min_match_score', 50),
         job_count=meta.get('total_jobs', 0),
@@ -1585,6 +1670,7 @@ def job_match_analyze_complete(task_id):
     return _manage_jobs_redirect(
         result.get('return_folder', 'all'),
         result.get('return_search', ''),
+        result.get('return_sort') or 'match_desc',
     )
 
 
@@ -1631,6 +1717,7 @@ def edit_job(job_id):
 
     return_folder = request.args.get('folder') or request.form.get('return_folder', 'all')
     return_search = request.args.get('q') or request.form.get('return_search', '')
+    return_sort = request.args.get('sort') or request.form.get('return_sort', '')
 
     if request.method == 'POST':
         job_data = _job_form_data()
@@ -1643,6 +1730,7 @@ def edit_job(job_id):
                 status_labels=JOB_STATUS_LABELS,
                 return_folder=return_folder,
                 return_search=return_search,
+                return_sort=return_sort,
             )
 
         workflow_status = job_data.pop('workflow_status', DEFAULT_JOB_STATUS)
@@ -1650,7 +1738,7 @@ def edit_job(job_id):
         if workflow_status != job.get('workflow_status', DEFAULT_JOB_STATUS):
             job_repo.update_job_status(job_id, workflow_status)
         flash('Job updated successfully', 'success')
-        return _manage_jobs_redirect(return_folder, return_search)
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
     return render_template(
         'job_form.html',
@@ -1659,6 +1747,7 @@ def edit_job(job_id):
         status_labels=JOB_STATUS_LABELS,
         return_folder=return_folder,
         return_search=return_search,
+        return_sort=return_sort,
     )
 
 
@@ -1668,16 +1757,17 @@ def update_job_status(job_id):
     workflow_status = request.form.get('workflow_status', '')
     return_folder = request.form.get('return_folder', 'all')
     return_search = request.form.get('return_search', '')
+    return_sort = request.form.get('return_sort', '')
 
     if not is_valid_job_status(workflow_status):
         flash('Invalid job status', 'error')
-        return _manage_jobs_redirect(return_folder, return_search)
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
     if job_repo.update_job_status(job_id, workflow_status):
         flash(f'Job moved to {job_status_label(workflow_status)}', 'success')
     else:
         flash('Job not found', 'error')
-    return _manage_jobs_redirect(return_folder, return_search)
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
 
 @app.route('/export/<fmt>')
@@ -1737,13 +1827,14 @@ def make_cv(job_id):
     profile = profile_repo.get_profile()
     return_folder = request.args.get('folder', 'all')
     return_search = request.args.get('q', '')
+    return_sort = request.args.get('sort', '')
     return_from_manage = 'folder' in request.args or bool(return_search)
 
     if not job:
         flash('Job not found', 'error')
         if return_from_manage:
-            return _manage_jobs_redirect(return_folder, return_search)
-        return redirect(url_for('job_list'))
+            return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return redirect(url_for('job_list', sort=return_sort or None))
 
     if not profile_is_ready(profile):
         flash('Please complete your CV profile first', 'error')
@@ -1753,10 +1844,21 @@ def make_cv(job_id):
         'cv_progress.html',
         job=job,
         batch=False,
-        start_url=url_for('start_make_cv', job_id=job_id, folder=return_folder, q=return_search or None),
+        start_url=url_for(
+            'start_make_cv',
+            job_id=job_id,
+            folder=return_folder,
+            q=return_search or None,
+            sort=return_sort or None,
+        ),
         status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
         complete_url_template=url_for('make_cv_complete', task_id='TASK_ID'),
-        back_url=_cv_generation_back_url(return_from_manage, return_folder, return_search),
+        back_url=_cv_generation_back_url(
+            return_from_manage,
+            return_folder,
+            return_search,
+            return_sort,
+        ),
     )
 
 
@@ -1767,6 +1869,7 @@ def start_make_cv(job_id):
     profile = profile_repo.get_profile()
     return_folder = request.args.get('folder', 'all')
     return_search = request.args.get('q', '')
+    return_sort = request.args.get('sort', '')
     return_from_manage = 'folder' in request.args or bool(return_search)
 
     if not job:
@@ -1789,6 +1892,7 @@ def start_make_cv(job_id):
             return_folder,
             return_search,
             return_from_manage,
+            return_sort,
         ),
     )
     return jsonify({'task_id': task_id})
@@ -1854,6 +1958,7 @@ def make_cv_complete(task_id):
     return_from_manage = result.get('return_from_manage', False)
     return_folder = result.get('return_folder', 'all')
     return_search = result.get('return_search', '')
+    return_sort = result.get('return_sort', '')
     context = _cv_preview_context(
         result.get('job') or {},
         tailored_content=result.get('tailored_content', {}),
@@ -1864,6 +1969,7 @@ def make_cv_complete(task_id):
         show_success_banner=True,
         return_folder=return_folder,
         return_search=return_search,
+        return_sort=return_sort,
         return_from_manage=return_from_manage,
     )
     return render_template('cv_success.html', **context)
@@ -1875,32 +1981,36 @@ def preview_job_cv(job_id):
     job = job_repo.get_job(job_id)
     return_folder = request.args.get('folder', 'all')
     return_search = request.args.get('q', '')
+    return_sort = request.args.get('sort', '')
     return_from_manage = 'folder' in request.args or bool(return_search)
 
     if not job:
         flash('Job not found', 'error')
-        return _manage_jobs_redirect(return_folder, return_search) if return_from_manage else redirect(url_for('job_list'))
+        if return_from_manage:
+            return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return redirect(url_for('job_list', sort=return_sort or None))
 
     cv_filename = job.get('cv_filename', '')
     cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
     if not cv_filename or not os.path.exists(cv_path):
         flash('No CV has been generated for this job yet', 'error')
         if return_from_manage:
-            return _manage_jobs_redirect(return_folder, return_search)
-        return redirect(url_for('job_list'))
+            return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return redirect(url_for('job_list', sort=return_sort or None))
 
     store = _load_job_cv_store(cv_filename)
     if not store or not store.get('tailored_content'):
         flash('CV preview data not found. Regenerate the CV to enable preview and chat editing.', 'warning')
         if return_from_manage:
-            return _manage_jobs_redirect(return_folder, return_search)
-        return redirect(url_for('job_list'))
+            return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return redirect(url_for('job_list', sort=return_sort or None))
 
     context = _cv_preview_context(
         job,
         show_success_banner=False,
         return_folder=return_folder,
         return_search=return_search,
+        return_sort=return_sort,
         return_from_manage=return_from_manage,
     )
     return render_template('cv_success.html', **context)

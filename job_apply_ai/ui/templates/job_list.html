@@ -194,7 +194,24 @@
             </div>
             <div class="col-md-8">
                 <div class="action-buttons mb-0">
-                    <div class="d-flex flex-wrap gap-2">
+                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                        <form method="get" action="{{ url_for('job_list') }}" class="d-flex gap-2 align-items-center">
+                            <label for="job_sort" class="form-label mb-0 text-muted small text-nowrap">
+                                <i class="fas fa-sort me-1"></i>Sort by
+                            </label>
+                            <select id="job_sort"
+                                    name="sort"
+                                    class="form-select form-select-sm"
+                                    style="min-width: 220px;"
+                                    aria-label="Sort jobs"
+                                    onchange="this.form.submit()">
+                                {% for sort_key, sort_label in job_sort_options.items() %}
+                                    <option value="{{ sort_key }}" {% if (current_sort|default(default_job_sort)) == sort_key %}selected{% endif %}>
+                                        {{ sort_label }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </form>
                         <a href="{{ url_for('manage_jobs') }}" class="btn btn-secondary">
                             <i class="fas fa-database me-2"></i>Manage Jobs
                         </a>
@@ -245,6 +262,13 @@
                 <div>
                     {% if job.source %}
                         <span class="badge bg-dark me-1">{{ job.source }}</span>
+                    {% endif %}
+                    {% set match_score = job|profile_match_score %}
+                    {% if match_score is not none %}
+                        <span class="badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %} me-1"
+                              title="AI profile match rating">
+                            <i class="fas fa-user-check me-1"></i>{{ match_score|round(0)|int }}% match
+                        </span>
                     {% endif %}
                     <span class="badge bg-light text-dark">{{ job.posted_days_ago }} days ago</span>
                 </div>

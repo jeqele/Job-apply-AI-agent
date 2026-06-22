@@ -170,6 +170,9 @@
                             </div>
                             <input type="hidden" name="return_folder" value="{{ current_folder }}">
                             <input type="hidden" name="return_search" value="{{ search_query }}">
+                            {% if sort_query %}
+                            <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                            {% endif %}
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -236,26 +239,53 @@
                                     {% if search_query %} matching "{{ search_query }}"{% endif %}
                                 </span>
                             </div>
-                            <form method="get"
-                                  action="{% if current_folder == 'all' %}{{ url_for('manage_jobs') }}{% else %}{{ url_for('manage_jobs', folder=current_folder) }}{% endif %}"
-                                  class="d-flex gap-2 flex-grow-1 justify-content-end"
-                                  style="max-width: 420px;">
-                                <input type="search"
-                                       class="form-control"
-                                       name="q"
-                                       value="{{ search_query }}"
-                                       placeholder="Search in this folder…"
-                                       aria-label="Search jobs in current folder">
-                                <button type="submit" class="btn btn-outline-primary">
-                                    <i class="fas fa-search"></i>
-                                </button>
-                                {% if search_query %}
-                                    <a href="{% if current_folder == 'all' %}{{ url_for('manage_jobs') }}{% else %}{{ url_for('manage_jobs', folder=current_folder) }}{% endif %}"
-                                       class="btn btn-outline-secondary" title="Clear search">
-                                        <i class="fas fa-times"></i>
-                                    </a>
-                                {% endif %}
-                            </form>
+                            <div class="d-flex flex-wrap gap-2 flex-grow-1 justify-content-end align-items-center">
+                                <form method="get"
+                                      action="{% if current_folder == 'all' %}{{ url_for('manage_jobs') }}{% else %}{{ url_for('manage_jobs', folder=current_folder) }}{% endif %}"
+                                      class="d-flex gap-2 align-items-center">
+                                    <label for="job_sort" class="form-label mb-0 text-muted small text-nowrap">
+                                        <i class="fas fa-sort me-1"></i>Sort by
+                                    </label>
+                                    <select id="job_sort"
+                                            name="sort"
+                                            class="form-select form-select-sm"
+                                            style="min-width: 220px;"
+                                            aria-label="Sort jobs"
+                                            onchange="this.form.submit()">
+                                        {% for sort_key, sort_label in job_sort_options.items() %}
+                                            <option value="{{ sort_key }}" {% if current_sort == sort_key %}selected{% endif %}>
+                                                {{ sort_label }}
+                                            </option>
+                                        {% endfor %}
+                                    </select>
+                                    {% if search_query %}
+                                        <input type="hidden" name="q" value="{{ search_query }}">
+                                    {% endif %}
+                                </form>
+                                <form method="get"
+                                      action="{% if current_folder == 'all' %}{{ url_for('manage_jobs') }}{% else %}{{ url_for('manage_jobs', folder=current_folder) }}{% endif %}"
+                                      class="d-flex gap-2 flex-grow-1 justify-content-end"
+                                      style="max-width: 420px;">
+                                    {% if sort_query %}
+                                        <input type="hidden" name="sort" value="{{ sort_query }}">
+                                    {% endif %}
+                                    <input type="search"
+                                           class="form-control"
+                                           name="q"
+                                           value="{{ search_query }}"
+                                           placeholder="Search in this folder…"
+                                           aria-label="Search jobs in current folder">
+                                    <button type="submit" class="btn btn-outline-primary">
+                                        <i class="fas fa-search"></i>
+                                    </button>
+                                    {% if search_query %}
+                                        <a href="{% if current_folder == 'all' %}{{ url_for('manage_jobs', sort=sort_query) }}{% else %}{{ url_for('manage_jobs', folder=current_folder, sort=sort_query) }}{% endif %}"
+                                           class="btn btn-outline-secondary" title="Clear search">
+                                            <i class="fas fa-times"></i>
+                                        </a>
+                                    {% endif %}
+                                </form>
+                            </div>
                         </div>
                     </div>
 
@@ -267,6 +297,7 @@
                                     <th>Title</th>
                                     <th>Company</th>
                                     <th>Location</th>
+                                    <th>Match</th>
                                     <th>Status</th>
                                     <th>Updated</th>
                                     <th class="text-end">Actions</th>
@@ -279,6 +310,23 @@
                                     <td>{{ job.title }}</td>
                                     <td>{{ job.company }}</td>
                                     <td>{{ job.location }}</td>
+                                    <td>
+                                        {% set match_analysis = job|profile_match_analysis %}
+                                        {% set match_score = job|profile_match_score %}
+                                        {% if match_score is not none %}
+                                            <span class="badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}"
+                                                  title="{{ match_analysis.reason if match_analysis else '' }}">
+                                                {{ match_score|round(0)|int }}%
+                                            </span>
+                                            {% if match_analysis and match_analysis.method == 'ai' %}
+                                                <span class="text-muted small" title="AI analyzed">AI</span>
+                                            {% elif match_analysis and match_analysis.method == 'heuristic' %}
+                                                <span class="text-muted small" title="Keyword match">KW</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted small">—</span>
+                                        {% endif %}
+                                    </td>
                                     <td>
                                         {% set status = job.workflow_status or 'new' %}
                                         <span class="badge {{ status_badges.get(status, 'bg-secondary') }}">
@@ -294,7 +342,7 @@
                                                 </a>
                                             {% endif %}
                                             {% if job.cv_filename %}
-                                                <a href="{{ url_for('preview_job_cv', job_id=job.id, folder=current_folder, q=search_query or none) }}"
+                                                <a href="{{ url_for('preview_job_cv', job_id=job.id, folder=current_folder, q=search_query or none, sort=sort_query) }}"
                                                    class="btn btn-outline-info btn-sm" title="Preview and edit CV">
                                                     <i class="fas fa-eye me-1"></i>Preview
                                                 </a>
@@ -315,6 +363,9 @@
                                                       onsubmit="return confirm('Send application email to {{ job.emails.split(',')[0].strip() }}?');">
                                                     <input type="hidden" name="return_folder" value="{{ current_folder }}">
                                                     <input type="hidden" name="return_search" value="{{ search_query }}">
+                                                    {% if sort_query %}
+                                                    <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                                                    {% endif %}
                                                     <input type="hidden" name="return_from_manage" value="1">
                                                     {% if smtp_accounts|length > 1 %}
                                                     <select name="smtp_account_id" class="form-select form-select-sm" style="width: 9rem;" aria-label="Send from account">
@@ -338,12 +389,12 @@
                                                     <i class="fas fa-wand-magic-sparkles me-1"></i>Make AI CV
                                                 </button>
                                             {% else %}
-                                                <a href="{{ url_for('make_cv', job_id=job.id, folder=current_folder, q=search_query or none) }}"
+                                                <a href="{{ url_for('make_cv', job_id=job.id, folder=current_folder, q=search_query or none, sort=sort_query) }}"
                                                    class="btn btn-success btn-sm" title="Make AI CV">
                                                     <i class="fas fa-wand-magic-sparkles me-1"></i>Make AI CV
                                                 </a>
                                             {% endif %}
-                                            <a href="{{ url_for('edit_job', job_id=job.id, folder=current_folder, q=search_query or none) }}"
+                                            <a href="{{ url_for('edit_job', job_id=job.id, folder=current_folder, q=search_query or none, sort=sort_query) }}"
                                                class="btn btn-outline-secondary btn-sm" title="Edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
@@ -352,6 +403,9 @@
                                                   class="d-inline-flex align-items-center gap-1">
                                                 <input type="hidden" name="return_folder" value="{{ current_folder }}">
                                                 <input type="hidden" name="return_search" value="{{ search_query }}">
+                                                {% if sort_query %}
+                                                <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                                                {% endif %}
                                                 <select name="workflow_status"
                                                         class="form-select form-select-sm status-select"
                                                         aria-label="Move job to folder"
@@ -369,7 +423,7 @@
                                 </tr>
                                 {% else %}
                                 <tr>
-                                    <td colspan="7" class="text-center text-muted py-5">
+                                    <td colspan="8" class="text-center text-muted py-5">
                                         {% if search_query %}
                                             No jobs match your search in this folder.
                                         {% elif current_folder == 'all' %}
