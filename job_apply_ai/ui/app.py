@@ -635,9 +635,16 @@ def _job_status_label_filter(status):
 def index():
     """Render the home page."""
     profile = profile_repo.get_profile()
+    status_counts = job_repo.count_jobs_by_status()
     return render_template(
         'index.html',
         profile_ready=profile_is_ready(profile),
+        profile_name=(profile.get('full_name') or '').strip(),
+        profile_has_skills=profile_has_matchable_skills(profile),
+        email_configured=smtp_is_configured(profile),
+        total_jobs=sum(status_counts.values()),
+        status_counts=status_counts,
+        status_labels=JOB_STATUS_LABELS,
     )
 
 @app.route('/search', methods=['GET', 'POST'])
