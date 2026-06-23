@@ -1,0 +1,54 @@
+0: [Title] Amin Khalili		Full-Stack Developer
+1: [Normal] Email: amin.khalily@hotmail.com | GitHub: github.com/tunnel-market | (+98) 9154515031
+2: [Normal] LinkedIn: linkedin.com/in/amin-khalili-dev 
+3: [Normal] -------------------------------------------------------------------------------------------------------------------------------------------
+4: [Heading 1] Personal Summary
+5: [Normal] Full-Stack Developer with over 10 years of experience in Java, PHP, Python, Kotlin, JavaScript and Flutter. Skilled in building scalable, secure systems and Android apps with strong expertise in reverse engineering and privacy-focused, self-hosted infrastructures.
+6: [Heading 1] Technical Skills
+7: [Normal] • Languages: Java (Spring Boot, Android), JavaScript(DOM), PHP(CPhalcon, CodeIgniter, Swoole), Dart (Flutter), Kotlin(Android), Python (Asyncio, Flask)
+• Databases: PostgreSQL, MySQL, MongoDB, Redis, SQLite
+• Architecture: Microservices, Event-Driven Systems, WebSocket ,RESTful APIs ,OOP, Design Patterns
+• Tools: Docker, Git, Firebase, AdMob, Linux Administration
+• Mobile: Flutter, Android (Java, Kotlin)
+• Security: Reverse engineering (Frida, Objection, JADX, MobSF, Apktolls, baksmali, ghidra)
+8: [Heading 1] Work Experience
+9: [Normal] Full-Stack Developer — Tunnel Market VPN → A self-hosted VPN and tunneling ecosystem empowering users to access free internet securely.
+10: [Normal] Feb 2022 – Present | Iran
+11: [Normal] • Designed and managed a VPN ecosystem with 100K+ users.
+• Built scalable backend with Python (Flask, Asyncio) and Java (Spring Boot).
+• Designed real-time VPN management with Kafka and Micro Services.
+• Integrated Branch.io deep linking, improving retention by 15%.
+• Participated in making VOIP for call under Iran blackout (seloly.com)
+12: [Normal] • Developed mobile/windows clients using Android (Java, Kotlin) and Flutter.
+14: [Normal] Freelancing and Self-Improvement — Blockchain research
+15: [Normal] Jan 2020 – Oct 2022
+16: [Normal] • Studied Bitcoin, Ether and Trone blockchains. 
+17: [Normal] • Made a trx wallet for Android (Java)
+18: [Normal] • Had research on decentralized identity frameworks to improve trustless authentication.
+20: [Normal] Full-Stack Developer — Paniar.ir → A SaaS company delivering mobile insurance platforms and CRM solutions for enterprises. 
+21: [Normal] Jan 2016 – Oct 2020 | on-site / Mashahd
+22: [Normal] • Led a team of 5 building SaaS insurance solutions for 20K+ users.
+• Created CRM modules improving claims processing by 20%.
+23: [Normal] • Created diagnose, sale and support Android applications as parts of the framework.
+• Built RESTful APIs with PHP/MySQL/Redis, improving speed and scalability.
+25: [Normal] Developer — answercenter.ir → A developer community hub supporting Android and cross-platform programming education.
+26: [Normal] Feb 2013 – Nov 2015 | Remote / Tehran
+27: [Normal] • https://answercenter.ir/profile/136-jeqele
+28: [Normal] • Built and maintained PHP/WordPress backend for a 5K+ developer community.
+• Increased engagement by 35% and traffic by 50%.
+• Published 10+ B4A (Basic 4 Android) libraries and guides for regional Android developers.
+29: [Normal] • https://answercenter.ir/profile/136-jeqele
+30: [Heading 1] Personal Projects
+31: [Normal] Afghan National Calendar — Android App (Google Play) →  https://play.google.com/store/apps/details?id=org.public_static.asc.afghanistan.calendar&hl=en
+32: [Normal] • Published app with 100K+ downloads and 4.7 rating.
+• Scaled user base via targeted marketing and feature optimization.
+33: [Normal] • Integrated AdMob, Firebase (Crashlytics, Analytics).
+35: [Normal] Soft Skills
+36: [Normal] • Problem-solving
+• Adaptability
+37: [Normal] • Independent & team collaboration
+38: [Normal] • Product-focused mindset
+39: [Heading 1] Languages
+40: [Normal] • English — Fluent
+• Persian — Native
+• Azerbaijani — Conversational
