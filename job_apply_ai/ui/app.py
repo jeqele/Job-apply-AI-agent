@@ -1959,7 +1959,7 @@ def analyze_jobs_match():
 
     profile = profile_repo.get_profile()
     if not profile_has_matchable_skills(profile):
-        flash('Add technical skills, minor skills, or stacks on your profile before running match analysis.', 'warning')
+        flash('Add technical skills or stacks on your profile before running match analysis.', 'warning')
         return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
     jobs = _jobs_for_manage_folder(return_folder, return_search)

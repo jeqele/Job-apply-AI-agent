@@ -1,6 +1,7 @@
 """Tests for user profile parsing and readiness checks."""
 
 from job_apply_ai.storage.user_profile import (
+    DEFAULT_FAMILIARITY,
     parse_multiline_list,
     parse_professional_titles,
     parse_smtp_accounts_from_form,
@@ -9,7 +10,9 @@ from job_apply_ai.storage.user_profile import (
     parse_work_experience_text,
     profile_from_form,
     profile_is_ready,
+    profile_to_form_fields,
     profile_to_text,
+    skill_names,
 )
 
 
@@ -86,6 +89,28 @@ def test_profile_to_text_includes_sections():
     assert "Work Experience" in text
 
 
+def test_profile_to_text_includes_familiarity():
+    profile = profile_from_form(
+        {
+            "full_name": "Jane Doe",
+            "technical_skills_json": '[{"name": "Python", "familiarity": 85}]',
+        }
+    )
+    text = profile_to_text(profile)
+    assert "Python (85%)" in text
+
+
+def test_profile_from_form_legacy_strings_get_default_familiarity():
+    profile = profile_from_form(
+        {
+            "full_name": "Jane Doe",
+            "technical_skills": "Python\nFlask",
+        }
+    )
+    assert skill_names(profile["technical_skills"]) == ["Python", "Flask"]
+    assert all(item["familiarity"] == DEFAULT_FAMILIARITY for item in profile["technical_skills"])
+
+
 def test_parse_smtp_accounts_from_form_preserves_existing_password():
     class FakeForm(dict):
         def getlist(self, key):
@@ -122,14 +147,20 @@ def test_profile_from_form_parses_json_fields():
     profile = profile_from_form(
         {
             "full_name": "Jane Doe",
-            "technical_skills_json": '["Python", "Flask"]',
-            "minor_skills_json": '["Redis", "Celery"]',
+            "technical_skills_json": '[{"name": "Python", "familiarity": 90}, {"name": "Flask", "familiarity": 75}]',
+            "minor_skills_json": '[{"name": "Redis", "familiarity": 60}, "Celery"]',
             "work_experience_json": '[{"role": "Developer", "company": "Acme", "period": "2020", "bullets": ["Built APIs"]}]',
             "personal_projects_json": '[{"name": "Side Project", "description": "A demo", "bullets": ["Used Flask"]}]',
         }
     )
-    assert profile["technical_skills"] == ["Python", "Flask"]
-    assert profile["minor_skills"] == ["Redis", "Celery"]
+    assert profile["technical_skills"] == [
+        {"name": "Python", "familiarity": 90},
+        {"name": "Flask", "familiarity": 75},
+    ]
+    assert profile["minor_skills"] == [
+        {"name": "Redis", "familiarity": 60},
+        {"name": "Celery", "familiarity": DEFAULT_FAMILIARITY},
+    ]
     assert profile["work_experience"][0]["role"] == "Developer"
     assert profile["work_experience"][0]["bullets"] == ["Built APIs"]
     assert profile["personal_projects"][0]["name"] == "Side Project"
@@ -144,7 +175,7 @@ def test_profile_to_form_fields_returns_lists():
         }
     )
     form = profile_to_form_fields(profile)
-    assert form["technical_skills_list"] == ["Python"]
+    assert form["technical_skills_list"] == [{"name": "Python", "familiarity": DEFAULT_FAMILIARITY}]
     assert form["work_experience_list"][0]["role"] == "Dev"
 
 

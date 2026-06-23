@@ -9,7 +9,12 @@ from job_apply_ai.cv_modifier.job_match_analyzer import (
     normalize_min_match_score,
     profile_has_matchable_skills,
 )
-from job_apply_ai.storage.user_profile import profile_from_form, profile_to_form_fields
+from job_apply_ai.storage.user_profile import (
+    DEFAULT_FAMILIARITY,
+    profile_from_form,
+    profile_to_form_fields,
+    skill_names,
+)
 
 
 def test_profile_from_form_parses_minor_skills_and_stacks():
@@ -21,24 +26,55 @@ def test_profile_from_form_parses_minor_skills_and_stacks():
             "stacks": "Python/Django/PostgreSQL\nMERN",
         }
     )
-    assert profile["technical_skills"] == ["Python", "Flask"]
-    assert profile["minor_skills"] == ["Redis", "Celery"]
-    assert profile["stacks"] == ["Python/Django/PostgreSQL", "MERN"]
+    assert skill_names(profile["technical_skills"]) == ["Python", "Flask"]
+    assert skill_names(profile["minor_skills"]) == ["Redis", "Celery"]
+    assert skill_names(profile["stacks"]) == ["Python/Django/PostgreSQL", "MERN"]
 
     form = profile_to_form_fields(profile)
-    assert "Redis" in form["minor_skills_list"]
-    assert "MERN" in form["stacks_list"]
+    assert any(item["name"] == "Redis" for item in form["minor_skills_list"])
+    assert any(item["name"] == "MERN" for item in form["stacks_list"])
 
 
 def test_profile_has_matchable_skills():
     assert not profile_has_matchable_skills({"full_name": "Jane Doe"})
-    assert profile_has_matchable_skills({"minor_skills": ["Docker"]})
+    assert not profile_has_matchable_skills({"minor_skills": ["Docker"]})
+    assert profile_has_matchable_skills({"technical_skills": ["Python"]})
+    assert profile_has_matchable_skills({"stacks": ["MERN"]})
+
+
+def test_heuristic_job_match_weights_familiarity():
+    strong_profile = {
+        "technical_skills": [
+            {"name": "Python", "familiarity": 95},
+            {"name": "Rust", "familiarity": 5},
+        ],
+        "minor_skills": [],
+        "stacks": [],
+    }
+    weak_profile = {
+        "technical_skills": [
+            {"name": "Python", "familiarity": 20},
+            {"name": "Rust", "familiarity": 80},
+        ],
+        "minor_skills": [],
+        "stacks": [],
+    }
+    job = {
+        "title": "Python Developer",
+        "description": "Python backend development.",
+    }
+
+    strong_result = heuristic_job_match(job, strong_profile)
+    weak_result = heuristic_job_match(job, weak_profile)
+
+    assert strong_result["is_match"] is True
+    assert weak_result["match_score"] < strong_result["match_score"]
 
 
 def test_heuristic_job_match_detects_overlap():
     profile = {
-        "technical_skills": ["Python", "Flask", "PostgreSQL"],
-        "minor_skills": ["Redis"],
+        "technical_skills": ["Python", "Flask", "PostgreSQL", "Redis"],
+        "minor_skills": ["Java"],
         "stacks": ["Python/Django/PostgreSQL"],
     }
     matching_job = {
@@ -49,9 +85,14 @@ def test_heuristic_job_match_detects_overlap():
         "title": "iOS Developer",
         "description": "Swift and UIKit required. Objective-C experience preferred.",
     }
+    disqualifying_job = {
+        "title": "Java Backend Engineer",
+        "description": "Strong Java and Spring Boot experience required.",
+    }
 
     match_result = heuristic_job_match(matching_job, profile)
     mismatch_result = heuristic_job_match(mismatch_job, profile)
+    disqualified_result = heuristic_job_match(disqualifying_job, profile)
 
     assert match_result["is_match"] is True
     assert "python" in match_result["matched_skills"]
@@ -59,6 +100,8 @@ def test_heuristic_job_match_detects_overlap():
     assert match_result["mismatch_paragraph"]
     assert mismatch_result["is_match"] is False
     assert mismatch_result["mismatch_paragraph"]
+    assert disqualified_result["is_match"] is False
+    assert "java" in disqualified_result["missing_skills"]
 
 
 def test_build_match_paragraphs_fills_missing_text():

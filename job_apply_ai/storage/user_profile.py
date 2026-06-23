@@ -39,6 +39,90 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "smtp_accounts": [],
 }
 
+DEFAULT_FAMILIARITY = 70
+
+SKILL_LIST_FIELDS = (
+    "technical_skills",
+    "minor_skills",
+    "stacks",
+    "tools_platforms",
+    "soft_skills",
+    "languages",
+)
+
+
+def normalize_familiarity(value: Any) -> int:
+    """Clamp a familiarity percentage to 0-100."""
+    try:
+        score = int(round(float(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_FAMILIARITY
+    return max(0, min(100, score))
+
+
+def skill_item_name(item: Any) -> str:
+    """Return the display name for a skill item stored as a string or dict."""
+    if isinstance(item, dict):
+        return str(item.get("name") or item.get("skill") or "").strip()
+    return str(item or "").strip()
+
+
+def normalize_skill_item(item: Any) -> dict[str, Any] | None:
+    """Normalize a skill/language entry to {name, familiarity}."""
+    if isinstance(item, dict):
+        name = skill_item_name(item)
+        if not name:
+            return None
+        return {"name": name, "familiarity": normalize_familiarity(item.get("familiarity"))}
+    name = skill_item_name(item)
+    if not name:
+        return None
+    return {"name": name, "familiarity": DEFAULT_FAMILIARITY}
+
+
+def _normalize_skill_items(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        items = [part.strip() for part in value.replace("\n", ",").split(",")]
+    elif isinstance(value, list):
+        items = value
+    else:
+        items = []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        skill = normalize_skill_item(item)
+        if not skill:
+            continue
+        key = _normalize_key(skill["name"])
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(skill)
+    return normalized
+
+
+def skill_names(items: list[Any]) -> list[str]:
+    """Extract plain skill names from normalized or legacy skill lists."""
+    return [name for item in items if (name := skill_item_name(item))]
+
+
+def format_skill_item(item: Any) -> str:
+    """Format a skill item for prompts and profile text."""
+    name = skill_item_name(item)
+    if not name:
+        return ""
+    familiarity = (
+        normalize_familiarity(item.get("familiarity"))
+        if isinstance(item, dict)
+        else DEFAULT_FAMILIARITY
+    )
+    return f"{name} ({familiarity}%)"
+
+
+def format_skills_line(items: list[Any]) -> str:
+    """Join skill items into a comma-separated line with familiarity percentages."""
+    return ", ".join(text for item in items if (text := format_skill_item(item)))
+
 
 def normalize_profile(data: dict[str, Any] | None) -> dict[str, Any]:
     """Merge stored data with defaults and normalize list fields."""
@@ -50,7 +134,9 @@ def normalize_profile(data: dict[str, Any] | None) -> dict[str, Any]:
         if key not in data:
             continue
         value = data[key]
-        if isinstance(DEFAULT_PROFILE[key], list):
+        if key in SKILL_LIST_FIELDS:
+            profile[key] = _normalize_skill_items(value)
+        elif isinstance(DEFAULT_PROFILE[key], list):
             profile[key] = _normalize_string_list(value)
         else:
             profile[key] = str(value or "").strip()
@@ -408,16 +494,19 @@ def profile_to_text(profile: dict[str, Any]) -> str:
         sections.append(f"Personal Summary:\n{profile['personal_summary']}")
 
     if profile["technical_skills"]:
-        sections.append("Technical Skills:\n" + ", ".join(profile["technical_skills"]))
+        sections.append("Technical Skills:\n" + format_skills_line(profile["technical_skills"]))
 
     if profile["minor_skills"]:
-        sections.append("Minor Skills:\n" + ", ".join(profile["minor_skills"]))
+        sections.append(
+            "Disqualifying Skills (avoid roles requiring these):\n"
+            + format_skills_line(profile["minor_skills"])
+        )
 
     if profile["stacks"]:
-        sections.append("Technology Stacks:\n" + ", ".join(profile["stacks"]))
+        sections.append("Technology Stacks:\n" + format_skills_line(profile["stacks"]))
 
     if profile["tools_platforms"]:
-        sections.append("Tools & Platforms:\n" + ", ".join(profile["tools_platforms"]))
+        sections.append("Tools & Platforms:\n" + format_skills_line(profile["tools_platforms"]))
 
     if profile["work_experience"]:
         lines = ["Work Experience:"]
@@ -438,10 +527,10 @@ def profile_to_text(profile: dict[str, Any]) -> str:
         sections.append("\n".join(lines))
 
     if profile["soft_skills"]:
-        sections.append("Soft Skills:\n" + ", ".join(profile["soft_skills"]))
+        sections.append("Soft Skills:\n" + format_skills_line(profile["soft_skills"]))
 
     if profile["languages"]:
-        sections.append("Languages:\n" + ", ".join(profile["languages"]))
+        sections.append("Languages:\n" + format_skills_line(profile["languages"]))
 
     return "\n\n".join(section for section in sections if section.strip())
 
@@ -609,12 +698,12 @@ def profile_from_form(
         scalar_data = dict(form_data)
 
     # Parse JSON fields from new UI (tag inputs and structured entries)
-    technical_skills = _parse_json_list(scalar_data.get("technical_skills_json"))
-    minor_skills = _parse_json_list(scalar_data.get("minor_skills_json"))
-    stacks = _parse_json_list(scalar_data.get("stacks_json"))
-    tools_platforms = _parse_json_list(scalar_data.get("tools_platforms_json"))
-    soft_skills = _parse_json_list(scalar_data.get("soft_skills_json"))
-    languages = _parse_json_list(scalar_data.get("languages_json"))
+    technical_skills = _parse_skill_json_list(scalar_data.get("technical_skills_json"))
+    minor_skills = _parse_skill_json_list(scalar_data.get("minor_skills_json"))
+    stacks = _parse_skill_json_list(scalar_data.get("stacks_json"))
+    tools_platforms = _parse_skill_json_list(scalar_data.get("tools_platforms_json"))
+    soft_skills = _parse_skill_json_list(scalar_data.get("soft_skills_json"))
+    languages = _parse_skill_json_list(scalar_data.get("languages_json"))
     
     work_experience = _parse_experience_json(scalar_data.get("work_experience_json"))
     personal_projects = _parse_projects_json(scalar_data.get("personal_projects_json"))
@@ -662,6 +751,19 @@ def _parse_json_list(value: Any) -> list[str]:
         data = json.loads(value)
         if isinstance(data, list):
             return [str(item).strip() for item in data if str(item).strip()]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _parse_skill_json_list(value: Any) -> list[dict[str, Any]]:
+    """Parse a JSON array of skill items from form data."""
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        if isinstance(data, list):
+            return _normalize_skill_items(data)
     except (json.JSONDecodeError, TypeError):
         pass
     return []
@@ -737,6 +839,29 @@ def merge_string_lists(existing: list[str], incoming: list[str]) -> tuple[list[s
         seen.add(key)
         merged.append(item)
         added.append(item)
+
+    return merged, added
+
+
+def merge_skill_items(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Append only new skill items, preserving existing familiarity ratings."""
+    merged = list(existing)
+    seen = {_normalize_key(skill_item_name(item)) for item in existing if skill_item_name(item)}
+    added: list[str] = []
+
+    for item in incoming:
+        skill = normalize_skill_item(item)
+        if not skill:
+            continue
+        key = _normalize_key(skill["name"])
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(skill)
+        added.append(skill["name"])
 
     return merged, added
 
@@ -893,7 +1018,7 @@ def merge_profiles(
         ("languages", "added_languages"),
     ]
     for field_name, change_key in list_fields:
-        merged[field_name], added = merge_string_lists(merged[field_name], imported[field_name])
+        merged[field_name], added = merge_skill_items(merged[field_name], imported[field_name])
         if added:
             changes[change_key] = added
 
@@ -937,7 +1062,7 @@ def summarize_import_changes(changes: dict[str, Any]) -> list[str]:
     for skill in changes.get("added_technical_skills", []):
         lines.append(f"Added technical skill: {skill}")
     for skill in changes.get("added_minor_skills", []):
-        lines.append(f"Added minor skill: {skill}")
+        lines.append(f"Added disqualifying skill: {skill}")
     for stack in changes.get("added_stacks", []):
         lines.append(f"Added stack: {stack}")
     for tool in changes.get("added_tools_platforms", []):

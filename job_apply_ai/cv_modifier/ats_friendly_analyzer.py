@@ -181,7 +181,7 @@ Instructions:
    - Standard section structure and headings
    - Action-verb bullets with measurable outcomes
    - Natural keyword integration without stuffing
-   - Truthfulness to the candidate profile
+   - Truthfulness to the candidate profile and the candidate's self-rated skill familiarity percentages
 4. Identify matched and missing high-value keywords.
 5. Provide 4–10 concrete improvement suggestions. Each suggestion must include:
    - title: short label

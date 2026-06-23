@@ -4,7 +4,7 @@ import os
 import unittest
 
 from job_apply_ai.cv_modifier.profile_importer import ProfileImporter
-from job_apply_ai.storage.user_profile import merge_profiles, summarize_import_changes
+from job_apply_ai.storage.user_profile import merge_profiles, skill_names, summarize_import_changes
 
 
 class ProfileMergeTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class ProfileMergeTests(unittest.TestCase):
         merged, changes = merge_profiles(base, incoming)
         self.assertEqual(merged["full_name"], "Jane Doe")
         self.assertEqual(merged["email"], "existing@example.com")
-        self.assertEqual(merged["technical_skills"], ["Python"])
+        self.assertEqual(skill_names(merged["technical_skills"]), ["Python"])
         self.assertIn("full_name", changes["filled_fields"])
         self.assertEqual(changes["added_technical_skills"], ["Python"])
 
@@ -26,7 +26,7 @@ class ProfileMergeTests(unittest.TestCase):
         base = {"full_name": "Jane", "technical_skills": ["Python", "Flask"]}
         incoming = {"full_name": "Jane Doe", "technical_skills": ["python", "Docker"]}
         merged, changes = merge_profiles(base, incoming)
-        self.assertEqual(merged["technical_skills"], ["Python", "Flask", "Docker"])
+        self.assertEqual(skill_names(merged["technical_skills"]), ["Python", "Flask", "Docker"])
         self.assertEqual(changes["added_technical_skills"], ["Docker"])
 
     def test_merge_adds_new_experience_and_bullets(self):

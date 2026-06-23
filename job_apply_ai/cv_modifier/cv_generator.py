@@ -32,7 +32,10 @@ GENERATION_SYSTEM_PROMPT = (
     "specific variant the candidate does not have, use the broader truthful term from the profile "
     "(e.g. profile has Android (Java) and job wants Android (Kotlin) -> list Android only). "
     "Do not add skills from the job description to technical_skills unless they are supported by "
-    "the profile. Keep language concise, professional, and ATS-friendly. Return valid JSON only."
+    "the profile. Respect each skill's self-rated familiarity percentage: do not present "
+    "low-familiarity skills as expert-level strengths, and prioritize higher-familiarity skills "
+    "when ordering and emphasizing capabilities. Keep language concise, professional, and "
+    "ATS-friendly. Return valid JSON only."
 )
 
 
@@ -194,6 +197,7 @@ Rules for job_skills_in_cv and job_skills_not_in_cv:
 - Extract concrete skills, tools, and technologies from the job description only.
 - A skill belongs in job_skills_in_cv only when the profile clearly supports it (exact match or a broader parent the profile proves, e.g. Android for Android Java vs Android Kotlin).
 - A skill belongs in job_skills_not_in_cv when the job asks for it but the profile does not support it.
+- When the profile lists familiarity percentages, treat low-familiarity overlaps as weaker evidence than high-familiarity matches.
 - Use concise labels; generalize when only a parent skill is truthful (Android, not Kotlin).
 """
         return self.ollama.generate_json(
@@ -245,12 +249,12 @@ Instructions:
 1. Rewrite the personal summary for this specific role and company tone using job keywords the profile actually supports.
 2. Populate job_matched_skills from the job description skills the profile supports (use analysis.job_skills_in_cv as a guide).
 3. Populate job_skills_not_in_cv with job-required skills the profile does NOT support (use analysis.job_skills_not_in_cv as a guide). Do not add these to technical_skills.
-4. Select and reorder technical_skills from the profile, prioritizing job_matched_skills. Never invent skills.
+4. Select and reorder technical_skills from the profile, prioritizing job_matched_skills and higher familiarity ratings. Never invent skills.
 5. When a job skill differs in specificity from the profile, use the broader truthful label (e.g. Android instead of Kotlin when only Java is evidenced).
-6. Select the most relevant tools and platforms for this role from the profile.
+6. Select the most relevant tools and platforms for this role from the profile, favoring items with stronger familiarity.
 7. Reframe work experience bullets to emphasize measurable impact aligned with the job, using only facts from the profile.
 8. Include relevant personal projects when they strengthen the application.
-9. Keep soft skills and languages truthful to the supplied profile excerpts.
+9. Keep soft skills and languages truthful to the supplied profile excerpts and their familiarity levels.
 10. Use strong action verbs and professional UK/US business English.
 11. Limit the summary to 3-4 sentences.
 12. Provide 8-14 technical skills maximum, ordered by relevance to this job.

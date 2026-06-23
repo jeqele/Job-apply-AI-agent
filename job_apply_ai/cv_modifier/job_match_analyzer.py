@@ -7,13 +7,20 @@ import re
 from typing import Any, Callable
 
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
-from job_apply_ai.storage.user_profile import normalize_profile
+from job_apply_ai.storage.user_profile import (
+    format_skills_line,
+    normalize_profile,
+    skill_item_name,
+)
 
 logger = logging.getLogger(__name__)
 
 MATCH_SYSTEM_PROMPT = (
     "You evaluate whether a job listing is a reasonable fit for a candidate based on their "
-    "technical skills, minor skills, and technology stacks. Return only valid JSON."
+    "technical skills and technology stacks. Disqualifying skills are technologies the candidate "
+    "does not want in a role; if a job requires or heavily emphasizes them, the role is not a "
+    "fit. Each skill includes a self-rated familiarity percentage (0-100). Weight stronger "
+    "positive skills more heavily when judging fit. Return only valid JSON."
 )
 
 NOT_MATCH_STATUS = "not_match"
@@ -30,16 +37,27 @@ def normalize_min_match_score(value: Any) -> float:
 
 
 def profile_has_matchable_skills(profile: dict[str, Any] | None) -> bool:
-    """Return True when the profile has skills usable for job matching."""
+    """Return True when the profile has positive skills usable for job matching."""
     normalized = normalize_profile(profile)
-    return bool(
-        normalized["technical_skills"]
-        or normalized["minor_skills"]
-        or normalized["stacks"]
-    )
+    return bool(normalized["technical_skills"] or normalized["stacks"])
 
 
-def collect_profile_skills(profile: dict[str, Any] | None) -> dict[str, list[str]]:
+def collect_positive_profile_skills(profile: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    """Return technical skills and stacks used as positive fit signals."""
+    normalized = normalize_profile(profile)
+    return {
+        "technical_skills": normalized["technical_skills"],
+        "stacks": normalized["stacks"],
+    }
+
+
+def collect_disqualifying_skills(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return skills that disqualify a job when the role requires them."""
+    return normalize_profile(profile)["minor_skills"]
+
+
+def collect_profile_skills(profile: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    """Return all skill groups referenced during job matching."""
     normalized = normalize_profile(profile)
     return {
         "technical_skills": normalized["technical_skills"],
@@ -48,26 +66,32 @@ def collect_profile_skills(profile: dict[str, Any] | None) -> dict[str, list[str
     }
 
 
-def _normalize_token(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
-
-
-def _skill_tokens(skills: dict[str, list[str]]) -> list[str]:
-    tokens: list[str] = []
+def _skill_entries(skills: dict[str, list[dict[str, Any]]]) -> list[tuple[str, int]]:
+    """Flatten profile skills into searchable tokens with familiarity weights."""
+    entries: list[tuple[str, int]] = []
     seen: set[str] = set()
     for group in skills.values():
         for item in group:
-            normalized = _normalize_token(item)
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            tokens.append(normalized)
-            for part in re.split(r"[,/|+&]", item):
+            name = skill_item_name(item)
+            familiarity = int(item.get("familiarity", 70)) if isinstance(item, dict) else 70
+            normalized = _normalize_token(name)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                entries.append((normalized, familiarity))
+            for part in re.split(r"[,/|+&]", name):
                 part_norm = _normalize_token(part)
                 if part_norm and part_norm not in seen:
                     seen.add(part_norm)
-                    tokens.append(part_norm)
-    return tokens
+                    entries.append((part_norm, familiarity))
+    return entries
+
+
+def _skill_tokens(skills: dict[str, list[dict[str, Any]]]) -> list[str]:
+    return [token for token, _ in _skill_entries(skills)]
+
+
+def _normalize_token(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
 def _job_text(job: dict[str, Any]) -> str:
@@ -134,13 +158,41 @@ def _build_match_paragraphs(
     return match_text, mismatch_text
 
 
+def _disqualifying_tokens(profile: dict[str, Any] | None) -> list[str]:
+    return [token for token, _ in _skill_entries({"disqualifying": collect_disqualifying_skills(profile)})]
+
+
 def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
     """Keyword-based fallback when Ollama is unavailable."""
-    skills = collect_profile_skills(profile)
-    tokens = _skill_tokens(skills)
+    skills = collect_positive_profile_skills(profile)
+    entries = _skill_entries(skills)
     haystack = _job_text(job)
+    triggered_disqualifiers = [token for token in _disqualifying_tokens(profile) if token in haystack]
 
-    if not tokens:
+    if triggered_disqualifiers:
+        reason = (
+            "The job emphasizes skills you marked as disqualifying: "
+            + _format_skill_list(triggered_disqualifiers)
+            + "."
+        )
+        match_paragraph, mismatch_paragraph = _build_match_paragraphs(
+            matched_skills=[],
+            missing_skills=triggered_disqualifiers,
+            reason=reason,
+            is_match=False,
+        )
+        return {
+            "is_match": False,
+            "match_score": 0.0,
+            "matched_skills": [],
+            "missing_skills": triggered_disqualifiers,
+            "reason": reason,
+            "match_paragraph": match_paragraph,
+            "mismatch_paragraph": mismatch_paragraph,
+            "method": "heuristic",
+        }
+
+    if not entries:
         return {
             "is_match": True,
             "match_score": 0,
@@ -152,8 +204,11 @@ def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> 
             "method": "skipped",
         }
 
-    matched = [token for token in tokens if token in haystack]
-    ratio = len(matched) / max(len(tokens), 1)
+    matched = [(token, familiarity) for token, familiarity in entries if token in haystack]
+    total_weight = sum(familiarity for _, familiarity in entries)
+    matched_weight = sum(familiarity for _, familiarity in matched)
+    ratio = matched_weight / max(total_weight, 1)
+    matched_names = [token for token, _ in matched[:12]]
     is_match = bool(matched) and ratio >= 0.15
     reason = (
         "Matched profile skills found in the job description."
@@ -161,7 +216,7 @@ def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> 
         else "Too few profile skills appear in the job description."
     )
     match_paragraph, mismatch_paragraph = _build_match_paragraphs(
-        matched_skills=matched[:12],
+        matched_skills=matched_names,
         missing_skills=[],
         reason=reason,
         is_match=is_match,
@@ -170,7 +225,7 @@ def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> 
     return {
         "is_match": is_match,
         "match_score": round(min(ratio * 100, 100), 1),
-        "matched_skills": matched[:12],
+        "matched_skills": matched_names,
         "missing_skills": [],
         "reason": reason,
         "match_paragraph": match_paragraph,
@@ -185,8 +240,9 @@ def analyze_job_match(
     ollama: OllamaClient | None = None,
 ) -> dict[str, Any]:
     """Return match analysis for a single job against the stored profile."""
-    skills = collect_profile_skills(profile)
-    if not any(skills.values()):
+    skills = collect_positive_profile_skills(profile)
+    disqualifying = collect_disqualifying_skills(profile)
+    if not any(skills.values()) and not disqualifying:
         return heuristic_job_match(job, profile)
 
     client = ollama or OllamaClient()
@@ -204,11 +260,14 @@ def analyze_job_match(
         if line.strip()
     )
     skills_context = "\n".join(
-        f"{label}: {', '.join(values) if values else '(none)'}"
+        f"{label}: {format_skills_line(values) if values else '(none)'}"
         for label, values in [
             ("Technical skills", skills["technical_skills"]),
-            ("Minor skills", skills["minor_skills"]),
             ("Stacks", skills["stacks"]),
+            (
+                "Disqualifying skills (not a fit when the job requires these)",
+                disqualifying,
+            ),
         ]
     )
 
@@ -233,10 +292,12 @@ Return JSON with this exact shape:
 }}
 
 Rules:
-- is_match is true when the candidate's technical skills, minor skills, or stacks align with the role.
-- Minor skills and stack familiarity can support a match even when not every job keyword is listed.
-- is_match is false when the role targets a different domain or requires skills/stacks the profile does not support.
-- matched_skills must come from the candidate lists only.
+- is_match is true when the candidate's technical skills or stacks align with the role.
+- Stack familiarity can support a match even when not every job keyword is listed.
+- Treat familiarity percentages as the candidate's self-rated proficiency. Weight high-familiarity skills more when judging fit; low-familiarity overlaps are weaker evidence.
+- is_match is false when the job requires or heavily emphasizes any disqualifying skill, when the role targets a different domain, or when it needs skills/stacks the profile does not support.
+- Disqualifying skills override positive overlap: a strong technical match still fails if the role centers on a disqualifying technology.
+- matched_skills must come from the technical skills or stacks lists only, never from disqualifying skills.
 - missing_skills should list only important gaps from the job description.
 - match_score is 0-100 indicating overall fit.
 - match_paragraph and mismatch_paragraph must be written in second person ("you") for the candidate.
