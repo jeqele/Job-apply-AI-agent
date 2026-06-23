@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ATS Friendly — {{ job.title }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .score-ring {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+        }
+        .score-high { background: linear-gradient(135deg, #198754, #20c997); }
+        .score-mid { background: linear-gradient(135deg, #fd7e14, #ffc107); color: #212529; }
+        .score-low { background: linear-gradient(135deg, #dc3545, #e35d6a); }
+        .keyword-tag {
+            display: inline-block;
+            background: #e9ecef;
+            border-radius: 999px;
+            padding: 0.2rem 0.65rem;
+            margin: 0.15rem;
+            font-size: 0.85rem;
+        }
+        .keyword-tag.matched { background: #d1e7dd; color: #0f5132; }
+        .keyword-tag.missing { background: #f8d7da; color: #842029; }
+        .suggestion-card { border-left: 4px solid #dee2e6; }
+        .suggestion-card.priority-high { border-left-color: #dc3545; }
+        .suggestion-card.priority-medium { border-left-color: #fd7e14; }
+        .suggestion-card.status-applied { border-left-color: #198754; opacity: 0.85; }
+        .suggestion-card.status-denied { border-left-color: #6c757d; opacity: 0.7; }
+        .suggestion-card.status-failed { border-left-color: #dc3545; }
+        .preview-pane {
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.75rem;
+            max-height: 420px;
+            overflow-y: auto;
+            font-size: 0.92rem;
+        }
+        .preview-line { padding: 0.35rem 1rem; border-bottom: 1px solid #f1f3f5; }
+        .preview-line.kind-section { background: #f8f9fa; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('index') }}"><i class="fas fa-briefcase me-2"></i>Hermes Hire</a>
+            <div class="d-flex gap-2">
+                <a href="{{ back_url }}" class="btn btn-outline-light btn-sm"><i class="fas fa-arrow-left me-1"></i>Back</a>
+                {% if preview_cv_url %}
+                <a href="{{ preview_cv_url }}" class="btn btn-outline-info btn-sm"><i class="fas fa-eye me-1"></i>Preview CV</a>
+                {% endif %}
+                {% if reanalyze_url %}
+                <a href="{{ reanalyze_url }}?force=1" class="btn btn-success btn-sm"><i class="fas fa-rotate me-1"></i>Re-analyze</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="container py-4">
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <div class="d-flex flex-wrap align-items-center gap-4">
+                    {% set score = ats_analysis.ats_score %}
+                    <div class="score-ring {% if score >= 70 %}score-high{% elif score >= 50 %}score-mid{% else %}score-low{% endif %}">
+                        {{ score }}
+                    </div>
+                    <div class="flex-grow-1">
+                        <h1 class="h4 mb-1">ATS Friendly Score</h1>
+                        <p class="text-muted mb-2">{{ job.title }}{% if job.company %} · {{ job.company }}{% endif %}</p>
+                        <p class="mb-0">{{ ats_analysis.score_summary }}</p>
+                        {% if ats_analysis.trade_offs %}
+                        <p class="small text-muted mt-2 mb-0"><strong>Trade-offs:</strong> {{ ats_analysis.trade_offs }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-lg-7">
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0"><i class="fas fa-lightbulb me-2 text-warning"></i>Suggested Improvements</h2>
+                    </div>
+                    <div class="card-body" id="suggestionsPanel">
+                        {% if ats_analysis.suggestions %}
+                            {% for suggestion in ats_analysis.suggestions %}
+                            <div class="card suggestion-card mb-3 priority-{{ suggestion.priority }} status-{{ suggestion.status }}"
+                                 id="suggestion-{{ suggestion.id }}"
+                                 data-suggestion-id="{{ suggestion.id }}">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap mb-2">
+                                        <div>
+                                            <span class="badge bg-light text-dark text-uppercase">{{ suggestion.category }}</span>
+                                            <span class="badge {% if suggestion.priority == 'high' %}bg-danger{% elif suggestion.priority == 'medium' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+                                                {{ suggestion.priority }}
+                                            </span>
+                                            <span class="badge suggestion-status-badge
+                                                {% if suggestion.status == 'applied' %}bg-success
+                                                {% elif suggestion.status == 'denied' %}bg-secondary
+                                                {% elif suggestion.status == 'failed' %}bg-danger
+                                                {% else %}bg-primary{% endif %}">
+                                                {{ suggestion.status }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <h3 class="h6">{{ suggestion.title }}</h3>
+                                    <p class="mb-2">{{ suggestion.description }}</p>
+                                    {% if suggestion.rationale %}
+                                    <p class="small text-muted mb-2"><strong>Why:</strong> {{ suggestion.rationale }}</p>
+                                    {% endif %}
+                                    {% if suggestion.error %}
+                                    <div class="alert alert-danger py-2 small mb-2">{{ suggestion.error }}</div>
+                                    {% endif %}
+                                    <div class="d-flex gap-2 flex-wrap suggestion-actions">
+                                        {% if suggestion.status in ['pending', 'failed'] %}
+                                        <button type="button" class="btn btn-success btn-sm btn-apply" data-action="apply">
+                                            <i class="fas fa-check me-1"></i>Apply
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary btn-sm btn-deny" data-action="deny">
+                                            <i class="fas fa-xmark me-1"></i>Deny
+                                        </button>
+                                        {% if suggestion.status == 'failed' %}
+                                        <button type="button" class="btn btn-outline-warning btn-sm btn-reapply" data-action="reapply">
+                                            <i class="fas fa-rotate me-1"></i>Reapply
+                                        </button>
+                                        {% endif %}
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="text-muted mb-0">No improvement suggestions were returned. Your CV may already be well aligned.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-5">
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0"><i class="fas fa-key me-2 text-primary"></i>Keyword Analysis</h2>
+                    </div>
+                    <div class="card-body">
+                        {% if ats_analysis.keyword_bank %}
+                        <p class="small text-muted">Top ATS keywords from the job description:</p>
+                        <div class="mb-3">
+                            {% for kw in ats_analysis.keyword_bank %}
+                            <span class="keyword-tag">{{ kw }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% if ats_analysis.matched_keywords %}
+                        <p class="small text-muted mb-1">Matched in your CV:</p>
+                        <div class="mb-3">
+                            {% for kw in ats_analysis.matched_keywords %}
+                            <span class="keyword-tag matched">{{ kw }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% if ats_analysis.missing_keywords %}
+                        <p class="small text-muted mb-1">Weak or missing:</p>
+                        <div class="mb-3">
+                            {% for kw in ats_analysis.missing_keywords %}
+                            <span class="keyword-tag missing">{{ kw }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% if ats_analysis.formatting_notes %}
+                        <p class="small text-muted mb-1">Formatting notes:</p>
+                        <ul class="small mb-0">
+                            {% for note in ats_analysis.formatting_notes %}
+                            <li>{{ note }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0"><i class="fas fa-file-lines me-2"></i>CV Preview</h2>
+                    </div>
+                    <div class="preview-pane" id="cvPreview">
+                        {% for line in cv_preview_lines %}
+                        <div class="preview-line kind-{{ line.kind }}">{{ line.text }}</div>
+                        {% else %}
+                        <div class="p-3 text-muted">No CV preview available.</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const suggestionsApiUrl = {{ suggestions_api_url|tojson }};
+
+        function statusBadgeClass(status) {
+            if (status === 'applied') return 'bg-success';
+            if (status === 'denied') return 'bg-secondary';
+            if (status === 'failed') return 'bg-danger';
+            return 'bg-primary';
+        }
+
+        function renderCvPreview(lines) {
+            const preview = document.getElementById('cvPreview');
+            if (!lines || !lines.length) return;
+            preview.innerHTML = lines.map(line =>
+                `<div class="preview-line kind-${line.kind || 'text'}">${line.text || ''}</div>`
+            ).join('');
+        }
+
+        function updateSuggestionCard(suggestion) {
+            const card = document.getElementById(`suggestion-${suggestion.id}`);
+            if (!card) return;
+            card.className = `card suggestion-card mb-3 priority-${suggestion.priority} status-${suggestion.status}`;
+            const badge = card.querySelector('.suggestion-status-badge');
+            if (badge) {
+                badge.className = `badge suggestion-status-badge ${statusBadgeClass(suggestion.status)}`;
+                badge.textContent = suggestion.status;
+            }
+            const actions = card.querySelector('.suggestion-actions');
+            if (!actions) return;
+            if (suggestion.status === 'pending') {
+                actions.innerHTML = `
+                    <button type="button" class="btn btn-success btn-sm btn-apply" data-action="apply">
+                        <i class="fas fa-check me-1"></i>Apply
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm btn-deny" data-action="deny">
+                        <i class="fas fa-xmark me-1"></i>Deny
+                    </button>`;
+            } else if (suggestion.status === 'failed') {
+                const errorHtml = suggestion.error
+                    ? `<div class="alert alert-danger py-2 small mb-2">${suggestion.error}</div>` : '';
+                const existingError = card.querySelector('.alert-danger');
+                if (!existingError && errorHtml) {
+                    actions.insertAdjacentHTML('beforebegin', errorHtml);
+                }
+                actions.innerHTML = `
+                    <button type="button" class="btn btn-success btn-sm btn-apply" data-action="apply">
+                        <i class="fas fa-check me-1"></i>Apply
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm btn-deny" data-action="deny">
+                        <i class="fas fa-xmark me-1"></i>Deny
+                    </button>
+                    <button type="button" class="btn btn-outline-warning btn-sm btn-reapply" data-action="reapply">
+                        <i class="fas fa-rotate me-1"></i>Reapply
+                    </button>`;
+            } else {
+                actions.innerHTML = '';
+            }
+        }
+
+        async function handleSuggestionAction(card, action) {
+            if (!suggestionsApiUrl) return;
+            const suggestionId = card.dataset.suggestionId;
+            const buttons = card.querySelectorAll('button');
+            buttons.forEach(btn => btn.disabled = true);
+
+            try {
+                const response = await fetch(suggestionsApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, suggestion_id: suggestionId }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Request failed');
+                }
+                if (data.cv_preview_lines) {
+                    renderCvPreview(data.cv_preview_lines);
+                }
+                if (action === 'reapply' && data.suggestion) {
+                    updateSuggestionCard(data.suggestion);
+                } else if (data.ats_analysis && data.ats_analysis.suggestions) {
+                    const updated = data.ats_analysis.suggestions.find(item => item.id === suggestionId);
+                    if (updated) updateSuggestionCard(updated);
+                }
+            } catch (error) {
+                alert(error.message || 'Could not update suggestion.');
+            } finally {
+                buttons.forEach(btn => btn.disabled = false);
+            }
+        }
+
+        document.getElementById('suggestionsPanel').addEventListener('click', (event) => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) return;
+            const card = button.closest('[data-suggestion-id]');
+            if (!card) return;
+            handleSuggestionAction(card, button.dataset.action);
+        });
+    </script>
+</body>
+</html>

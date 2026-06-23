@@ -20,6 +20,7 @@ DEFAULT_STORE: dict[str, Any] = {
     "cv_chat_active_session_id": "",
     "cover_letter_chat_sessions": [],
     "cover_letter_chat_active_session_id": "",
+    "ats_analysis": {},
     "updated_at": "",
 }
 
@@ -247,6 +248,7 @@ def save_cv_content(
         "cv_chat_active_session_id": existing.get("cv_chat_active_session_id", ""),
         "cover_letter_chat_sessions": deepcopy(existing.get("cover_letter_chat_sessions", [])),
         "cover_letter_chat_active_session_id": existing.get("cover_letter_chat_active_session_id", ""),
+        "ats_analysis": deepcopy(existing.get("ats_analysis", {})),
         "updated_at": _utc_now(),
     }
     path = cv_content_path(output_dir, cv_filename)

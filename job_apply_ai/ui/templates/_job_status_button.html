@@ -1,0 +1,28 @@
+{# Quick job status change. Requires: target_status, button_label, confirm_message, icon, btn_class #}
+{% set job_status = job.workflow_status or 'new' %}
+{% if job.id and job_status != target_status %}
+<form method="post"
+      action="{{ url_for('update_job_status', job_id=job.id) }}"
+      class="d-inline"
+      onsubmit="return confirm({{ confirm_message|tojson }});">
+    <input type="hidden" name="workflow_status" value="{{ target_status }}">
+    <input type="hidden" name="return_view" value="{{ return_view|default('manage') }}">
+    {% if return_folder is defined and return_folder %}
+    <input type="hidden" name="return_folder" value="{{ return_folder }}">
+    {% endif %}
+    {% if return_search is defined and return_search %}
+    <input type="hidden" name="return_search" value="{{ return_search }}">
+    {% endif %}
+    {% if return_sort is defined and return_sort %}
+    <input type="hidden" name="return_sort" value="{{ return_sort }}">
+    {% endif %}
+    {% if return_from_manage is defined and return_from_manage %}
+    <input type="hidden" name="return_from_manage" value="1">
+    {% endif %}
+    <button type="submit"
+            class="btn {{ btn_class|default('btn-outline-secondary') }} {{ btn_size|default('btn-sm') }}"
+            title="{{ button_label }}">
+        <i class="fas {{ icon }} {% if show_label|default(true) %}me-1{% endif %}"></i>{% if show_label|default(true) %}{{ button_label }}{% endif %}
+    </button>
+</form>
+{% endif %}

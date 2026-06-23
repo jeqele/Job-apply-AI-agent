@@ -53,6 +53,14 @@ from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
 from job_apply_ai.cv_modifier.chat_context import cv_content_to_preview_lines
+from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
+    ATSFriendlyAnalyzer,
+    apply_suggestion_to_content,
+    get_suggestion,
+    normalize_ats_analysis,
+    replace_suggestion,
+    update_suggestion_status,
+)
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
 from job_apply_ai.cv_modifier.cv_content_store import (
     append_active_chat_messages,
@@ -144,6 +152,7 @@ profile_repo = UserProfileRepository()
 BACKGROUND_TASK_STALE_SECONDS = 900
 BACKGROUND_TASK_SESSION_KEYS = (
     'cv_generation_active',
+    'ats_friendly_active',
     'single_search_active',
     'batch_search_active',
     'job_match_analyze_active',
@@ -201,6 +210,7 @@ def _background_task_progress_label(task: dict) -> str:
         'job_match_analyze': 'Analyzing Profile Match',
         'single_cv': 'Generating AI CV',
         'batch_cv': 'Generating AI CVs',
+        'ats_friendly': 'ATS Friendly Analysis',
     }
     return labels.get(task.get('task_type', ''), 'Background task')
 
@@ -219,6 +229,10 @@ def _background_task_progress_url(task_id: str, task: dict) -> str | None:
             return url_for('make_cv', job_id=job_id)
     if task_type == 'batch_cv':
         return url_for('make_all_cvs')
+    if task_type == 'ats_friendly':
+        job_id = task.get('job_id')
+        if job_id:
+            return url_for('ats_friendly_progress', job_id=job_id)
     return None
 
 
@@ -258,6 +272,7 @@ def _inject_cv_generation_lock():
     accounts = list_smtp_accounts(profile)
     return {
         'cv_generation_active': session.get('cv_generation_active'),
+        'ats_friendly_active': session.get('ats_friendly_active'),
         'active_background_tasks': _active_background_tasks(),
         'smtp_configured': bool(accounts),
         'smtp_accounts': accounts,
@@ -344,6 +359,23 @@ def _document_chat_payload(
 
 def _load_job_cv_store(cv_filename: str) -> dict | None:
     return load_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename)
+
+
+def get_job_ats_analysis(job: dict) -> dict | None:
+    """Return stored ATS analysis for a job's generated CV, if any."""
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return None
+    store = _load_job_cv_store(cv_filename)
+    if not store:
+        return None
+    analysis = store.get('ats_analysis') or {}
+    if not analysis:
+        return None
+    normalized = normalize_ats_analysis(analysis)
+    if not normalized.get('ats_score') and not normalized.get('suggestions'):
+        return None
+    return normalized
 
 
 def _job_has_sendable_cv(job: dict) -> bool:
@@ -658,6 +690,118 @@ def _run_single_cv_task(
             'return_from_manage': return_from_manage,
         },
     )
+
+
+def _run_ats_friendly_task(
+    task_id: str,
+    job: dict,
+    job_id: int,
+    profile: dict,
+    cv_filename: str,
+    return_folder: str,
+    return_search: str,
+    return_from_manage: bool,
+    return_sort: str = '',
+) -> None:
+    update_task(
+        task_id,
+        status='running',
+        step='loading_cv',
+        message='Loading your CV content…',
+        percent=10,
+    )
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    cv_content = store.get('tailored_content', {})
+    if not cv_content:
+        fail_task(task_id, 'CV content not found. Regenerate the CV first.')
+        return
+
+    update_task(
+        task_id,
+        status='running',
+        step='analyzing_ats',
+        message='Comparing your CV against ATS rules and the job description…',
+        percent=35,
+    )
+    analyzer = ATSFriendlyAnalyzer()
+    try:
+        analysis = analyzer.analyze(job=job, cv_content=cv_content, profile=profile)
+    except Exception as exc:
+        logger.error('ATS analysis failed for job %s: %s', job_id, exc)
+        fail_task(task_id, str(exc))
+        return
+
+    analysis['analyzed_at'] = datetime.utcnow().isoformat(timespec='seconds')
+    store['ats_analysis'] = analysis
+    update_task(
+        task_id,
+        status='running',
+        step='saving',
+        message='Saving ATS report…',
+        percent=90,
+    )
+    _save_job_cv_content(cv_filename, cv_content, store=store)
+
+    complete_task(
+        task_id,
+        {
+            'job': job,
+            'job_id': job_id,
+            'cv_filename': cv_filename,
+            'ats_analysis': analysis,
+            'return_folder': return_folder,
+            'return_search': return_search,
+            'return_sort': return_sort,
+            'return_from_manage': return_from_manage,
+        },
+    )
+
+
+def _ats_friendly_results_context(
+    job: dict,
+    ats_analysis: dict,
+    *,
+    return_folder: str = 'all',
+    return_search: str = '',
+    return_sort: str = '',
+    return_from_manage: bool = False,
+) -> dict:
+    job_id = job.get('id')
+    cv_filename = job.get('cv_filename', '')
+    store = normalize_store(_load_job_cv_store(cv_filename) if cv_filename else None)
+    profile = profile_repo.get_profile()
+    content = store.get('tailored_content', {})
+    return {
+        'job': job,
+        'job_id': job_id,
+        'ats_analysis': normalize_ats_analysis(ats_analysis),
+        'cv_preview_lines': cv_content_to_preview_lines(content, profile.get('full_name', '')),
+        'suggestions_api_url': url_for('ats_suggestion_action', job_id=job_id) if job_id else None,
+        'reanalyze_url': url_for(
+            'ats_friendly_progress',
+            job_id=job_id,
+            folder=return_folder,
+            q=return_search or None,
+            sort=return_sort or None,
+        ) if job_id else None,
+        'preview_cv_url': url_for(
+            'preview_job_cv',
+            job_id=job_id,
+            folder=return_folder,
+            q=return_search or None,
+            sort=return_sort or None,
+        ) if job_id else None,
+        'return_folder': return_folder,
+        'return_search': return_search,
+        'return_sort': return_sort,
+        'return_from_manage': return_from_manage,
+        'back_url': _cv_generation_back_url(
+            return_from_manage,
+            return_folder,
+            return_search,
+            return_sort,
+        ),
+    }
 
 
 CONTROLLABLE_TASK_TYPES = frozenset({'single_search', 'batch_search', 'job_match_analyze'})
@@ -1037,6 +1181,44 @@ def _manage_jobs_redirect(folder: str = 'all', search: str = '', sort: str = '')
     return redirect(url_for('manage_jobs', **kwargs))
 
 
+def _redirect_after_job_status_update(
+    return_view: str,
+    job_id: int,
+    workflow_status: str,
+    return_folder: str,
+    return_search: str,
+    return_sort: str,
+    return_from_manage: bool,
+):
+    """Redirect after a single job status change based on where the action started."""
+    if return_view == 'list':
+        kwargs = {}
+        if return_sort and return_sort != DEFAULT_JOB_SORT:
+            kwargs['sort'] = return_sort
+        return redirect(url_for('job_list', **kwargs))
+
+    if return_view == 'preview':
+        if workflow_status in ('archived', 'shortlisted'):
+            if return_from_manage:
+                return _manage_jobs_redirect(workflow_status, return_search, return_sort)
+            kwargs = {}
+            if return_sort and return_sort != DEFAULT_JOB_SORT:
+                kwargs['sort'] = return_sort
+            return redirect(url_for('job_list', **kwargs))
+
+        kwargs = {}
+        if return_from_manage or return_folder != 'all' or return_search:
+            if return_folder:
+                kwargs['folder'] = return_folder
+            if return_search:
+                kwargs['q'] = return_search
+        if return_sort and return_sort != DEFAULT_JOB_SORT:
+            kwargs['sort'] = return_sort
+        return redirect(url_for('preview_job_cv', job_id=job_id, **kwargs))
+
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+
 def _manage_jobs_url_kwargs(
     folder: str = 'all',
     search: str = '',
@@ -1066,6 +1248,11 @@ def _profile_match_score_filter(job):
 @app.template_filter('profile_match_analysis')
 def _profile_match_analysis_filter(job):
     return get_profile_match_analysis(job)
+
+
+@app.template_filter('job_ats_analysis')
+def _job_ats_analysis_filter(job):
+    return get_job_ats_analysis(job)
 
 
 @app.route('/')
@@ -1953,19 +2140,37 @@ def edit_job(job_id):
 def update_job_status(job_id):
     """Move a job to another workflow folder."""
     workflow_status = request.form.get('workflow_status', '')
+    return_view = request.form.get('return_view', 'manage')
     return_folder = request.form.get('return_folder', 'all')
     return_search = request.form.get('return_search', '')
     return_sort = request.form.get('return_sort', '')
+    return_from_manage = bool(request.form.get('return_from_manage'))
 
     if not is_valid_job_status(workflow_status):
         flash('Invalid job status', 'error')
-        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return _redirect_after_job_status_update(
+            return_view,
+            job_id,
+            workflow_status,
+            return_folder,
+            return_search,
+            return_sort,
+            return_from_manage,
+        )
 
     if job_repo.update_job_status(job_id, workflow_status):
         flash(f'Job moved to {job_status_label(workflow_status)}', 'success')
     else:
         flash('Job not found', 'error')
-    return _manage_jobs_redirect(return_folder, return_search, return_sort)
+    return _redirect_after_job_status_update(
+        return_view,
+        job_id,
+        workflow_status,
+        return_folder,
+        return_search,
+        return_sort,
+        return_from_manage,
+    )
 
 
 @app.route('/jobs/batch/status', methods=['POST'])
@@ -2150,6 +2355,16 @@ def release_cv_generation_lock():
     return jsonify({'ok': True})
 
 
+@app.route('/api/ats_friendly/release', methods=['POST', 'GET'])
+def release_ats_friendly_lock():
+    """Clear UI lock after failed, abandoned, or stale ATS analysis."""
+    session.pop('ats_friendly_active', None)
+    if request.method == 'GET':
+        flash('ATS analysis lock cleared.', 'info')
+        return redirect(request.referrer or url_for('manage_jobs'))
+    return jsonify({'ok': True})
+
+
 @app.route('/api/cv_tasks/<task_id>/status')
 def cv_task_status(task_id):
     """Poll background CV generation progress."""
@@ -2256,6 +2471,220 @@ def preview_job_cv(job_id):
         return_from_manage=return_from_manage,
     )
     return render_template('cv_success.html', **context)
+
+
+@app.route('/jobs/<int:job_id>/ats-friendly')
+def ats_friendly_progress(job_id):
+    """Show progress while ATS analysis runs, or existing results when available."""
+    job = job_repo.get_job(job_id)
+    return_folder = request.args.get('folder', 'all')
+    return_search = request.args.get('q', '')
+    return_sort = request.args.get('sort', '')
+    return_from_manage = 'folder' in request.args or bool(return_search)
+    force = request.args.get('force') == '1'
+
+    if not job:
+        flash('Job not found', 'error')
+        if return_from_manage:
+            return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return redirect(url_for('job_list', sort=return_sort or None))
+
+    cv_filename = job.get('cv_filename', '')
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    if not cv_filename or not os.path.exists(cv_path):
+        flash('Generate a CV for this job before running ATS analysis.', 'error')
+        if return_from_manage:
+            return _manage_jobs_redirect(return_folder, return_search, return_sort)
+        return redirect(url_for('job_list', sort=return_sort or None))
+
+    if not force:
+        existing = get_job_ats_analysis(job)
+        if existing:
+            context = _ats_friendly_results_context(
+                job,
+                existing,
+                return_folder=return_folder,
+                return_search=return_search,
+                return_sort=return_sort,
+                return_from_manage=return_from_manage,
+            )
+            return render_template('ats_friendly_results.html', **context)
+
+    return render_template(
+        'ats_friendly_progress.html',
+        job=job,
+        start_url=url_for(
+            'start_ats_friendly',
+            job_id=job_id,
+            folder=return_folder,
+            q=return_search or None,
+            sort=return_sort or None,
+        ),
+        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
+        complete_url_template=url_for('ats_friendly_complete', job_id=job_id, task_id='TASK_ID'),
+        back_url=_cv_generation_back_url(
+            return_from_manage,
+            return_folder,
+            return_search,
+            return_sort,
+        ),
+    )
+
+
+@app.route('/jobs/<int:job_id>/ats-friendly/start', methods=['POST'])
+def start_ats_friendly(job_id):
+    """Start background ATS-friendly analysis for one job."""
+    job = job_repo.get_job(job_id)
+    profile = profile_repo.get_profile()
+    return_folder = request.args.get('folder', 'all')
+    return_search = request.args.get('q', '')
+    return_sort = request.args.get('sort', '')
+    return_from_manage = 'folder' in request.args or bool(return_search)
+
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if not profile_is_ready(profile):
+        return jsonify({'error': 'Please complete your CV profile first'}), 400
+
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename or not os.path.exists(os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)):
+        return jsonify({'error': 'Generate a CV for this job first'}), 400
+
+    if _sync_session_background_task('ats_friendly_active'):
+        return jsonify({'error': 'Another ATS analysis is already in progress'}), 409
+
+    task_id = create_task('ats_friendly', job_id=job_id)
+    session['ats_friendly_active'] = task_id
+    start_background_task(
+        task_id,
+        lambda: _run_ats_friendly_task(
+            task_id,
+            job,
+            job_id,
+            profile,
+            cv_filename,
+            return_folder,
+            return_search,
+            return_from_manage,
+            return_sort,
+        ),
+    )
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/jobs/<int:job_id>/ats-friendly/complete/<task_id>')
+def ats_friendly_complete(job_id, task_id):
+    """Render ATS analysis results after background processing completes."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('ATS analysis result not found', 'error')
+        return redirect(url_for('ats_friendly_progress', job_id=job_id))
+
+    result = task['result']
+    session.pop('ats_friendly_active', None)
+    job = result.get('job') or job_repo.get_job(job_id) or {}
+    context = _ats_friendly_results_context(
+        job,
+        result.get('ats_analysis', {}),
+        return_folder=result.get('return_folder', 'all'),
+        return_search=result.get('return_search', ''),
+        return_sort=result.get('return_sort', ''),
+        return_from_manage=result.get('return_from_manage', False),
+    )
+    return render_template('ats_friendly_results.html', **context)
+
+
+@app.route('/api/jobs/<int:job_id>/ats-friendly/suggestions', methods=['POST'])
+def ats_suggestion_action(job_id):
+    """Apply, deny, or regenerate an ATS improvement suggestion."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cv_filename = job.get('cv_filename', '')
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    if not cv_filename or not os.path.exists(cv_path):
+        return jsonify({'error': 'No CV file found for this job'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get('action', '')).strip().lower()
+    suggestion_id = str(payload.get('suggestion_id', '')).strip()
+    if action not in {'apply', 'deny', 'reapply'}:
+        return jsonify({'error': 'Invalid action'}), 400
+    if not suggestion_id:
+        return jsonify({'error': 'suggestion_id is required'}), 400
+
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    analysis = normalize_ats_analysis(store.get('ats_analysis', {}))
+    if not analysis.get('suggestions'):
+        return jsonify({'error': 'No ATS suggestions found. Run ATS analysis first.'}), 404
+
+    profile = profile_repo.get_profile()
+    current_content = store.get('tailored_content', {})
+
+    try:
+        if action == 'deny':
+            analysis = update_suggestion_status(analysis, suggestion_id, status='denied')
+            store['ats_analysis'] = analysis
+            _save_job_cv_content(cv_filename, current_content, store=store)
+            return jsonify({'ok': True, 'ats_analysis': analysis})
+
+        suggestion = get_suggestion(analysis, suggestion_id)
+
+        if action == 'reapply':
+            analyzer = ATSFriendlyAnalyzer()
+            refreshed = analyzer.reapply_suggestion(
+                job=job,
+                cv_content=current_content,
+                profile=profile,
+                suggestion=suggestion,
+            )
+            analysis = replace_suggestion(analysis, suggestion_id, refreshed)
+            store['ats_analysis'] = analysis
+            _save_job_cv_content(cv_filename, current_content, store=store)
+            return jsonify({'ok': True, 'ats_analysis': analysis, 'suggestion': refreshed})
+
+        updated_content = apply_suggestion_to_content(
+            current_content,
+            suggestion,
+            profile=profile,
+            job=job,
+        )
+        editor = CVChatEditor()
+        editor.rebuild_document(cv_path, updated_content, profile)
+        matched_categories = CVChatEditor.content_to_matched_categories(updated_content)
+        job['matched_categories'] = matched_categories
+        job_repo.update_job(job_id, job)
+
+        analysis = update_suggestion_status(analysis, suggestion_id, status='applied')
+        store['ats_analysis'] = analysis
+        store['tailored_content'] = updated_content
+        _save_job_cv_content(cv_filename, updated_content, store=store)
+
+        return jsonify({
+            'ok': True,
+            'ats_analysis': analysis,
+            'content': updated_content,
+            'cv_preview_lines': cv_content_to_preview_lines(
+                updated_content,
+                profile.get('full_name', ''),
+            ),
+            'matched_categories': matched_categories,
+        })
+    except Exception as exc:
+        logger.error('ATS suggestion %s failed for job %s: %s', action, job_id, exc)
+        try:
+            analysis = update_suggestion_status(
+                analysis,
+                suggestion_id,
+                status='failed',
+                error=str(exc),
+            )
+            store['ats_analysis'] = analysis
+            _save_job_cv_content(cv_filename, current_content, store=store)
+        except KeyError:
+            pass
+        return jsonify({'error': str(exc), 'ats_analysis': analysis}), 500
 
 
 @app.route('/api/jobs/<int:job_id>/documents/chat', methods=['POST'])
