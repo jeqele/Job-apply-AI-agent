@@ -104,6 +104,42 @@ def test_heuristic_job_match_detects_overlap():
     assert "java" in disqualified_result["missing_skills"]
 
 
+def test_heuristic_job_match_disqualifies_on_tools_platforms():
+    profile = {
+        "technical_skills": ["Python"],
+        "minor_skills": [],
+        "stacks": [],
+        "disqualifying_tools_platforms": ["Salesforce"],
+    }
+    job = {
+        "title": "Salesforce Administrator",
+        "description": "Manage Salesforce CRM workflows and automation.",
+    }
+
+    result = heuristic_job_match(job, profile)
+
+    assert result["is_match"] is False
+    assert "salesforce" in result["missing_skills"]
+
+
+def test_heuristic_job_match_disqualifies_on_stacks():
+    profile = {
+        "technical_skills": ["Python"],
+        "minor_skills": [],
+        "stacks": ["Python/FastAPI/PostgreSQL"],
+        "disqualifying_stacks": ["LAMP"],
+    }
+    job = {
+        "title": "PHP Web Developer",
+        "description": "Maintain legacy LAMP stack applications with Linux, Apache, MySQL, and PHP.",
+    }
+
+    result = heuristic_job_match(job, profile)
+
+    assert result["is_match"] is False
+    assert "lamp" in result["missing_skills"]
+
+
 def test_build_match_paragraphs_fills_missing_text():
     match_para, mismatch_para = _build_match_paragraphs(
         matched_skills=["Python", "Django"],

@@ -11,7 +11,7 @@ from typing import Any
 from job_apply_ai.cv_modifier.chat_context import build_job_context, cv_content_to_preview_lines
 from job_apply_ai.cv_modifier.cv_chat_editor import CONTENT_CHANGE_KEYS, CVChatEditor
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 from job_apply_ai.storage.user_profile import profile_to_text
 
 logger = logging.getLogger(__name__)
@@ -224,7 +224,7 @@ class ATSFriendlyAnalyzer:
     """Analyze CV ATS compatibility and produce actionable suggestions."""
 
     def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or OllamaClient()
+        self.ollama = ollama or get_ollama_client()
 
     def analyze(
         self,

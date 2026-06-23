@@ -9,7 +9,7 @@ from typing import Any
 from job_apply_ai.cv_modifier.chat_context import build_job_context, build_profile_context
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class CoverLetterChatEditor:
     """Modify cover letter content through conversational instructions."""
 
     def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or OllamaClient()
+        self.ollama = ollama or get_ollama_client()
 
     def modify(
         self,

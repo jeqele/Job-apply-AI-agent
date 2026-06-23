@@ -153,6 +153,12 @@ def init_db(db_path: str | None = None) -> None:
                 data TEXT NOT NULL DEFAULT '{}',
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                data TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
             """
         )
         conn.commit()

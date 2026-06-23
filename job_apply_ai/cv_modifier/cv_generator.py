@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import get_ollama_client
 from job_apply_ai.cv_modifier.rag_system import CVRAGSystem
 from job_apply_ai.storage.user_profile import (
     get_default_cv_template_path,
@@ -48,7 +48,7 @@ class RAGCVGenerator:
         ollama: OllamaClient | None = None,
     ):
         self.rag = rag or CVRAGSystem(chunking_strategy="document_aware", chunk_size=300)
-        self.ollama = ollama or OllamaClient()
+        self.ollama = ollama or get_ollama_client()
 
     def prepare_profile_index(self, profile: dict[str, Any]) -> int:
         """Index stored profile data once for batch generation."""

@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class CoverLetterGenerator:
     """Generate structured cover letter content with Ollama."""
 
     def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or OllamaClient()
+        self.ollama = ollama or get_ollama_client()
 
     def generate(
         self,

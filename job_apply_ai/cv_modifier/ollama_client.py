@@ -18,6 +18,23 @@ DEFAULT_MAIN_MODEL = os.environ.get("OLLAMA_CV_MODEL", "gemma4:e4b") # gemma4:12
 DEFAULT_NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "8192"))
 
 
+def get_ollama_client() -> OllamaClient:
+    """Build an Ollama client using saved app settings when available."""
+    try:
+        from job_apply_ai.storage.app_settings import AppSettingsRepository
+
+        settings = AppSettingsRepository().get_ollama_settings()
+        return OllamaClient(
+            base_url=settings["base_url"],
+            fast_model=settings["fast_model"],
+            main_model=settings["main_model"],
+            num_predict=settings["num_predict"],
+        )
+    except Exception as exc:
+        logger.warning("Could not load Ollama settings from storage: %s", exc)
+        return OllamaClient()
+
+
 class OllamaClient:
     """Thin wrapper around the Ollama HTTP API."""
 
@@ -26,11 +43,13 @@ class OllamaClient:
         base_url: str | None = None,
         fast_model: str | None = None,
         main_model: str | None = None,
+        num_predict: int | None = None,
         timeout: int = 300,
     ):
         self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
         self.fast_model = fast_model or DEFAULT_FAST_MODEL
         self.main_model = main_model or DEFAULT_MAIN_MODEL
+        self.num_predict = num_predict if num_predict is not None else DEFAULT_NUM_PREDICT
         self.timeout = timeout
         self._available_models: list[str] | None = None
 
@@ -89,7 +108,7 @@ class OllamaClient:
             "stream": False,
             "options": {
                 "temperature": temperature,
-                "num_predict": num_predict if num_predict is not None else DEFAULT_NUM_PREDICT,
+                "num_predict": num_predict if num_predict is not None else self.num_predict,
             },
         }
         if system:

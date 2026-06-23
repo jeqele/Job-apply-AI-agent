@@ -14,7 +14,7 @@ from job_apply_ai.cv_modifier.chat_context import (
 )
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 from job_apply_ai.storage.user_profile import get_default_cv_template_path
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class CVChatEditor:
     """Modify tailored CV content through conversational instructions."""
 
     def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or OllamaClient()
+        self.ollama = ollama or get_ollama_client()
 
     def modify(
         self,

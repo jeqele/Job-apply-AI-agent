@@ -291,6 +291,10 @@
                     </div>
                 </div>
                 <div class="nav-actions d-flex gap-2 flex-shrink-0">
+                    <a href="{{ url_for('app_settings') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="fas fa-sliders-h d-sm-none"></i>
+                        <span class="d-none d-sm-inline"><i class="fas fa-sliders-h me-1"></i>Settings</span>
+                    </a>
                     <a href="{{ url_for('manage_jobs') }}" class="btn btn-outline-primary btn-sm">
                         <i class="fas fa-database d-sm-none"></i>
                         <span class="d-none d-sm-inline"><i class="fas fa-database me-1"></i>Jobs</span>

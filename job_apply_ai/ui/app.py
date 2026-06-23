@@ -105,6 +105,8 @@ from job_apply_ai.storage.user_profile import (
     update_smtp_account_tokens,
     upsert_oauth_smtp_account,
 )
+from job_apply_ai.storage.app_settings import AppSettingsRepository, ollama_settings_from_form
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 from job_apply_ai.storage.exports import export_jobs
 from job_apply_ai.email.application_mailer import (
     build_application_body,
@@ -147,6 +149,7 @@ ensure_directory_exists(app.config['JOBS_OUTPUT_DIR'])
 init_db()
 job_repo = JobRepository()
 profile_repo = UserProfileRepository()
+app_settings_repo = AppSettingsRepository()
 
 # Clear abandoned background tasks after this many seconds without progress
 BACKGROUND_TASK_STALE_SECONDS = 900
@@ -1550,6 +1553,45 @@ def _profile_form_data() -> dict:
     if draft:
         defaults.update(draft)
     return defaults
+
+
+def _ollama_settings_context() -> dict:
+    """Build template context for the settings page."""
+    settings = app_settings_repo.get_ollama_settings()
+    client = OllamaClient(
+        base_url=settings["base_url"],
+        fast_model=settings["fast_model"],
+        main_model=settings["main_model"],
+        num_predict=settings["num_predict"],
+    )
+    ollama_available = client.is_available()
+    installed_models = client.list_models(refresh=True) if ollama_available else []
+    return {
+        "settings": settings,
+        "ollama_available": ollama_available,
+        "installed_models": installed_models,
+    }
+
+
+@app.route('/settings', methods=['GET', 'POST'], endpoint='app_settings')
+def app_settings():
+    """Configure Ollama models and generation settings."""
+    if request.method == 'POST':
+        ollama_settings = ollama_settings_from_form(request.form)
+        if not ollama_settings["fast_model"] or not ollama_settings["main_model"]:
+            flash('Fast model and main model are required.', 'error')
+            return render_template(
+                'settings.html',
+                settings=ollama_settings,
+                ollama_available=False,
+                installed_models=[],
+            )
+
+        app_settings_repo.save_ollama_settings(ollama_settings)
+        flash('Settings saved. New model choices apply to the next AI task.', 'success')
+        return redirect(url_for('app_settings'))
+
+    return render_template('settings.html', **_ollama_settings_context())
 
 
 @app.route('/profile/oauth/google/start')

@@ -31,7 +31,9 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "technical_skills": [],
     "minor_skills": [],
     "stacks": [],
+    "disqualifying_stacks": [],
     "tools_platforms": [],
+    "disqualifying_tools_platforms": [],
     "work_experience": [],
     "personal_projects": [],
     "soft_skills": [],
@@ -45,7 +47,9 @@ SKILL_LIST_FIELDS = (
     "technical_skills",
     "minor_skills",
     "stacks",
+    "disqualifying_stacks",
     "tools_platforms",
+    "disqualifying_tools_platforms",
     "soft_skills",
     "languages",
 )
@@ -505,8 +509,20 @@ def profile_to_text(profile: dict[str, Any]) -> str:
     if profile["stacks"]:
         sections.append("Technology Stacks:\n" + format_skills_line(profile["stacks"]))
 
+    if profile["disqualifying_stacks"]:
+        sections.append(
+            "Disqualifying Technology Stacks (avoid roles requiring these):\n"
+            + format_skills_line(profile["disqualifying_stacks"])
+        )
+
     if profile["tools_platforms"]:
         sections.append("Tools & Platforms:\n" + format_skills_line(profile["tools_platforms"]))
+
+    if profile["disqualifying_tools_platforms"]:
+        sections.append(
+            "Disqualifying Tools & Platforms (avoid roles requiring these):\n"
+            + format_skills_line(profile["disqualifying_tools_platforms"])
+        )
 
     if profile["work_experience"]:
         lines = ["Work Experience:"]
@@ -652,7 +668,9 @@ def profile_to_form_fields(profile: dict[str, Any]) -> dict[str, Any]:
         "technical_skills_list": profile["technical_skills"],
         "minor_skills_list": profile["minor_skills"],
         "stacks_list": profile["stacks"],
+        "disqualifying_stacks_list": profile["disqualifying_stacks"],
         "tools_platforms_list": profile["tools_platforms"],
+        "disqualifying_tools_platforms_list": profile["disqualifying_tools_platforms"],
         "soft_skills_list": profile["soft_skills"],
         "languages_list": profile["languages"],
         "work_experience_list": profile["work_experience"],
@@ -701,7 +719,11 @@ def profile_from_form(
     technical_skills = _parse_skill_json_list(scalar_data.get("technical_skills_json"))
     minor_skills = _parse_skill_json_list(scalar_data.get("minor_skills_json"))
     stacks = _parse_skill_json_list(scalar_data.get("stacks_json"))
+    disqualifying_stacks = _parse_skill_json_list(scalar_data.get("disqualifying_stacks_json"))
     tools_platforms = _parse_skill_json_list(scalar_data.get("tools_platforms_json"))
+    disqualifying_tools_platforms = _parse_skill_json_list(
+        scalar_data.get("disqualifying_tools_platforms_json")
+    )
     soft_skills = _parse_skill_json_list(scalar_data.get("soft_skills_json"))
     languages = _parse_skill_json_list(scalar_data.get("languages_json"))
     
@@ -713,7 +735,11 @@ def profile_from_form(
         technical_skills = parse_multiline_list(scalar_data.get("technical_skills", ""))
         minor_skills = parse_multiline_list(scalar_data.get("minor_skills", ""))
         stacks = parse_multiline_list(scalar_data.get("stacks", ""))
+        disqualifying_stacks = parse_multiline_list(scalar_data.get("disqualifying_stacks", ""))
         tools_platforms = parse_multiline_list(scalar_data.get("tools_platforms", ""))
+        disqualifying_tools_platforms = parse_multiline_list(
+            scalar_data.get("disqualifying_tools_platforms", "")
+        )
         soft_skills = parse_multiline_list(scalar_data.get("soft_skills", ""))
         languages = parse_multiline_list(scalar_data.get("languages", ""))
     
@@ -733,7 +759,9 @@ def profile_from_form(
             "technical_skills": technical_skills,
             "minor_skills": minor_skills,
             "stacks": stacks,
+            "disqualifying_stacks": disqualifying_stacks,
             "tools_platforms": tools_platforms,
+            "disqualifying_tools_platforms": disqualifying_tools_platforms,
             "soft_skills": soft_skills,
             "languages": languages,
             "work_experience": work_experience,
@@ -987,7 +1015,9 @@ def merge_profiles(
         "added_technical_skills": [],
         "added_minor_skills": [],
         "added_stacks": [],
+        "added_disqualifying_stacks": [],
         "added_tools_platforms": [],
+        "added_disqualifying_tools_platforms": [],
         "added_soft_skills": [],
         "added_languages": [],
         "added_work_experience": [],
@@ -1013,7 +1043,9 @@ def merge_profiles(
         ("technical_skills", "added_technical_skills"),
         ("minor_skills", "added_minor_skills"),
         ("stacks", "added_stacks"),
+        ("disqualifying_stacks", "added_disqualifying_stacks"),
         ("tools_platforms", "added_tools_platforms"),
+        ("disqualifying_tools_platforms", "added_disqualifying_tools_platforms"),
         ("soft_skills", "added_soft_skills"),
         ("languages", "added_languages"),
     ]
@@ -1065,8 +1097,12 @@ def summarize_import_changes(changes: dict[str, Any]) -> list[str]:
         lines.append(f"Added disqualifying skill: {skill}")
     for stack in changes.get("added_stacks", []):
         lines.append(f"Added stack: {stack}")
+    for stack in changes.get("added_disqualifying_stacks", []):
+        lines.append(f"Added disqualifying stack: {stack}")
     for tool in changes.get("added_tools_platforms", []):
         lines.append(f"Added tool/platform: {tool}")
+    for tool in changes.get("added_disqualifying_tools_platforms", []):
+        lines.append(f"Added disqualifying tool/platform: {tool}")
     for skill in changes.get("added_soft_skills", []):
         lines.append(f"Added soft skill: {skill}")
     for language in changes.get("added_languages", []):

@@ -149,6 +149,8 @@ def test_profile_from_form_parses_json_fields():
             "full_name": "Jane Doe",
             "technical_skills_json": '[{"name": "Python", "familiarity": 90}, {"name": "Flask", "familiarity": 75}]',
             "minor_skills_json": '[{"name": "Redis", "familiarity": 60}, "Celery"]',
+            "disqualifying_tools_platforms_json": '[{"name": "Salesforce", "familiarity": 100}]',
+            "disqualifying_stacks_json": '[{"name": "LAMP", "familiarity": 100}]',
             "work_experience_json": '[{"role": "Developer", "company": "Acme", "period": "2020", "bullets": ["Built APIs"]}]',
             "personal_projects_json": '[{"name": "Side Project", "description": "A demo", "bullets": ["Used Flask"]}]',
         }
@@ -160,6 +162,12 @@ def test_profile_from_form_parses_json_fields():
     assert profile["minor_skills"] == [
         {"name": "Redis", "familiarity": 60},
         {"name": "Celery", "familiarity": DEFAULT_FAMILIARITY},
+    ]
+    assert profile["disqualifying_tools_platforms"] == [
+        {"name": "Salesforce", "familiarity": 100},
+    ]
+    assert profile["disqualifying_stacks"] == [
+        {"name": "LAMP", "familiarity": 100},
     ]
     assert profile["work_experience"][0]["role"] == "Developer"
     assert profile["work_experience"][0]["bullets"] == ["Built APIs"]

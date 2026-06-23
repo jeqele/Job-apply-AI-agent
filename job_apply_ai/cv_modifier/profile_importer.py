@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 from job_apply_ai.storage.user_profile import normalize_profile
 from job_apply_ai.utils.helpers import extract_text_from_docx
 
@@ -32,7 +32,7 @@ class ProfileImporter:
     """Parse CV documents into profile-shaped data using Ollama with heuristic fallback."""
 
     def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or OllamaClient()
+        self.ollama = ollama or get_ollama_client()
 
     def extract_from_docx(self, file_path: str) -> dict[str, Any]:
         cv_text = extract_text_from_docx(file_path)

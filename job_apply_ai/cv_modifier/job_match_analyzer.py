@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any, Callable
 
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient
+from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 from job_apply_ai.storage.user_profile import (
     format_skills_line,
     normalize_profile,
@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 
 MATCH_SYSTEM_PROMPT = (
     "You evaluate whether a job listing is a reasonable fit for a candidate based on their "
-    "technical skills and technology stacks. Disqualifying skills are technologies the candidate "
-    "does not want in a role; if a job requires or heavily emphasizes them, the role is not a "
-    "fit. Each skill includes a self-rated familiarity percentage (0-100). Weight stronger "
-    "positive skills more heavily when judging fit. Return only valid JSON."
+    "technical skills and technology stacks. Disqualifying skills, stacks, tools, and platforms "
+    "are items the candidate does not want in a role; if a job requires or heavily emphasizes "
+    "them, the role is not a fit. Each skill includes a self-rated familiarity percentage "
+    "(0-100). Weight stronger positive skills more heavily when judging fit. Return only valid JSON."
 )
 
 NOT_MATCH_STATUS = "not_match"
@@ -54,6 +54,26 @@ def collect_positive_profile_skills(profile: dict[str, Any] | None) -> dict[str,
 def collect_disqualifying_skills(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Return skills that disqualify a job when the role requires them."""
     return normalize_profile(profile)["minor_skills"]
+
+
+def collect_disqualifying_tools_platforms(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return tools/platforms that disqualify a job when the role requires them."""
+    return normalize_profile(profile)["disqualifying_tools_platforms"]
+
+
+def collect_disqualifying_stacks(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return stacks that disqualify a job when the role requires them."""
+    return normalize_profile(profile)["disqualifying_stacks"]
+
+
+def collect_all_disqualifiers(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return every disqualifying skill, stack, and tool/platform entry."""
+    normalized = normalize_profile(profile)
+    return (
+        normalized["minor_skills"]
+        + normalized["disqualifying_stacks"]
+        + normalized["disqualifying_tools_platforms"]
+    )
 
 
 def collect_profile_skills(profile: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
@@ -159,7 +179,10 @@ def _build_match_paragraphs(
 
 
 def _disqualifying_tokens(profile: dict[str, Any] | None) -> list[str]:
-    return [token for token, _ in _skill_entries({"disqualifying": collect_disqualifying_skills(profile)})]
+    return [
+        token
+        for token, _ in _skill_entries({"disqualifying": collect_all_disqualifiers(profile)})
+    ]
 
 
 def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
@@ -171,7 +194,7 @@ def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> 
 
     if triggered_disqualifiers:
         reason = (
-            "The job emphasizes skills you marked as disqualifying: "
+            "The job emphasizes skills, stacks, or tools you marked as disqualifying: "
             + _format_skill_list(triggered_disqualifiers)
             + "."
         )
@@ -241,11 +264,18 @@ def analyze_job_match(
 ) -> dict[str, Any]:
     """Return match analysis for a single job against the stored profile."""
     skills = collect_positive_profile_skills(profile)
-    disqualifying = collect_disqualifying_skills(profile)
-    if not any(skills.values()) and not disqualifying:
+    disqualifying_skills = collect_disqualifying_skills(profile)
+    disqualifying_stacks = collect_disqualifying_stacks(profile)
+    disqualifying_tools = collect_disqualifying_tools_platforms(profile)
+    if (
+        not any(skills.values())
+        and not disqualifying_skills
+        and not disqualifying_stacks
+        and not disqualifying_tools
+    ):
         return heuristic_job_match(job, profile)
 
-    client = ollama or OllamaClient()
+    client = ollama or get_ollama_client()
     if not client.is_available():
         return heuristic_job_match(job, profile)
 
@@ -266,7 +296,15 @@ def analyze_job_match(
             ("Stacks", skills["stacks"]),
             (
                 "Disqualifying skills (not a fit when the job requires these)",
-                disqualifying,
+                disqualifying_skills,
+            ),
+            (
+                "Disqualifying technology stacks (not a fit when the job requires these)",
+                disqualifying_stacks,
+            ),
+            (
+                "Disqualifying tools & platforms (not a fit when the job requires these)",
+                disqualifying_tools,
             ),
         ]
     )
@@ -295,9 +333,9 @@ Rules:
 - is_match is true when the candidate's technical skills or stacks align with the role.
 - Stack familiarity can support a match even when not every job keyword is listed.
 - Treat familiarity percentages as the candidate's self-rated proficiency. Weight high-familiarity skills more when judging fit; low-familiarity overlaps are weaker evidence.
-- is_match is false when the job requires or heavily emphasizes any disqualifying skill, when the role targets a different domain, or when it needs skills/stacks the profile does not support.
-- Disqualifying skills override positive overlap: a strong technical match still fails if the role centers on a disqualifying technology.
-- matched_skills must come from the technical skills or stacks lists only, never from disqualifying skills.
+- is_match is false when the job requires or heavily emphasizes any disqualifying skill, stack, or tool/platform, when the role targets a different domain, or when it needs skills/stacks the profile does not support.
+- Disqualifying skills, stacks, and tools/platforms override positive overlap: a strong technical match still fails if the role centers on a disqualifying item.
+- matched_skills must come from the technical skills or stacks lists only, never from disqualifying lists.
 - missing_skills should list only important gaps from the job description.
 - match_score is 0-100 indicating overall fit.
 - match_paragraph and mismatch_paragraph must be written in second person ("you") for the candidate.

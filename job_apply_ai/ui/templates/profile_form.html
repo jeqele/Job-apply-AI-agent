@@ -208,7 +208,7 @@
                 <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
                     <div>
                         <h5 class="mb-2"><i class="fas fa-file-import section-icon"></i>Import from CV</h5>
-                        <p class="mb-0 hint">Upload an existing CV (.docx). New details will be merged into your profile for review before saving.</p>
+                        <p class="mb-0 hint">Upload an existing CV (.docx). New details will be merged into your profile for review before saving. Example: export your current CV from Word or Google Docs as <em>.docx</em>.</p>
                     </div>
                     <form method="POST" action="{{ url_for('start_profile_import') }}" enctype="multipart/form-data" class="d-flex flex-column flex-sm-row gap-2 align-items-stretch">
                         <input type="file" class="form-control" name="cv_file" accept=".docx" required>
@@ -245,28 +245,33 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label for="full_name" class="form-label">Full Name</label>
-                            <input type="text" class="form-control" id="full_name" name="full_name" value="{{ form.full_name }}" required>
+                            <input type="text" class="form-control" id="full_name" name="full_name" value="{{ form.full_name }}" placeholder="e.g. Jane Doe" required>
+                            <div class="hint mt-1">Your name as it should appear on generated CVs.</div>
                         </div>
                         <div class="col-md-6">
                             <label for="professional_title" class="form-label">Professional Title</label>
                             <input type="text" class="form-control" id="professional_title" name="professional_title" value="{{ form.professional_title }}" placeholder="e.g. Full-Stack Developer, Backend Engineer">
-                            <div class="form-text">Separate multiple titles with commas. The AI picks the best match for each job.</div>
+                            <div class="hint mt-1">Separate multiple titles with commas. The AI picks the best match for each job. Example: <em>Senior Python Developer, Backend Engineer</em></div>
                         </div>
                         <div class="col-md-6">
                             <label for="email" class="form-label">Email</label>
-                            <input type="email" class="form-control" id="email" name="email" value="{{ form.email }}">
+                            <input type="email" class="form-control" id="email" name="email" value="{{ form.email }}" placeholder="e.g. jane.doe@email.com">
+                            <div class="hint mt-1">Primary contact email for applications and outreach.</div>
                         </div>
                         <div class="col-md-6">
                             <label for="phone" class="form-label">Phone</label>
-                            <input type="text" class="form-control" id="phone" name="phone" value="{{ form.phone }}">
+                            <input type="text" class="form-control" id="phone" name="phone" value="{{ form.phone }}" placeholder="e.g. +44 7700 900123">
+                            <div class="hint mt-1">Include country code if you apply internationally.</div>
                         </div>
                         <div class="col-md-6">
                             <label for="github" class="form-label">GitHub</label>
-                            <input type="text" class="form-control" id="github" name="github" value="{{ form.github }}" placeholder="https://github.com/username">
+                            <input type="text" class="form-control" id="github" name="github" value="{{ form.github }}" placeholder="e.g. https://github.com/janedoe">
+                            <div class="hint mt-1">Profile or repo URL shown on tailored CVs when relevant.</div>
                         </div>
                         <div class="col-md-6">
                             <label for="linkedin" class="form-label">LinkedIn</label>
-                            <input type="text" class="form-control" id="linkedin" name="linkedin" value="{{ form.linkedin }}" placeholder="https://linkedin.com/in/username">
+                            <input type="text" class="form-control" id="linkedin" name="linkedin" value="{{ form.linkedin }}" placeholder="e.g. https://linkedin.com/in/janedoe">
+                            <div class="hint mt-1">Your public LinkedIn profile URL.</div>
                         </div>
                     </div>
                 </div>
@@ -275,8 +280,8 @@
             <div class="card">
                 <div class="card-header"><i class="fas fa-align-left section-icon"></i>Personal Summary</div>
                 <div class="card-body">
-                    <textarea class="form-control" id="personal_summary" name="personal_summary" rows="4">{{ form.personal_summary }}</textarea>
-                    <div class="hint mt-2">A short overview of your background. This will be tailored per job when generating CVs.</div>
+                    <textarea class="form-control" id="personal_summary" name="personal_summary" rows="4" placeholder="e.g. Backend engineer with 6+ years building Python APIs and data pipelines. Experienced in cloud-native systems, mentoring junior developers, and shipping reliable production software.">{{ form.personal_summary }}</textarea>
+                    <div class="hint mt-2">A short overview of your background. The AI rewrites this per job when generating CVs. Focus on role, years of experience, and strongest domains.</div>
                 </div>
             </div>
 
@@ -286,40 +291,58 @@
                     <div class="mb-4">
                         <label class="form-label">Technical Skills</label>
                         <div class="tag-container" data-tag-field="technical_skills_items">
-                            <input type="text" class="tag-input" placeholder="Type a skill and press Enter...">
+                            <input type="text" class="tag-input" placeholder="e.g. Python, TypeScript, PostgreSQL...">
                         </div>
-                        <div class="hint mt-1">Core skills you want to match against job listings. Set familiarity (0–100%) for how strong you are in each skill.</div>
+                        <div class="hint mt-1">Core skills used for job-fit matching and CV tailoring. Set familiarity (0–100%) for how strong you are in each skill. Example: <em>Python 90%, React 75%</em></div>
                     </div>
                     <div class="mb-4">
                         <label class="form-label">Disqualifying Skills</label>
                         <div class="tag-container" data-tag-field="minor_skills_items">
                             <input type="text" class="tag-input" placeholder="e.g. Java, PHP, .NET...">
                         </div>
-                        <div class="hint mt-1">Technologies you do not want in a role. Jobs that require or heavily emphasize these are marked as not a fit.</div>
+                        <div class="hint mt-1">Individual technologies you do not want in a role. Jobs that require or heavily emphasize these are marked as not a fit. Example: <em>Java, COBOL</em></div>
                     </div>
                     <div class="mb-4">
                         <label class="form-label">Technology Stacks</label>
                         <div class="tag-container" data-tag-field="stacks_items">
                             <input type="text" class="tag-input" placeholder="e.g. MERN, Python/Django/PostgreSQL...">
                         </div>
+                        <div class="hint mt-1">Combined stacks you work with and want to match against jobs. Use slash-separated groups for related tech. Examples: <em>MERN</em>, <em>Python/Django/PostgreSQL</em>, <em>React/Node/AWS</em></div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label">Disqualifying Technology Stacks</label>
+                        <div class="tag-container" data-tag-field="disqualifying_stacks_items">
+                            <input type="text" class="tag-input" placeholder="e.g. LAMP, .NET/Azure, WordPress/PHP...">
+                        </div>
+                        <div class="hint mt-1">Full stacks or ecosystems you want to avoid. Jobs centered on these are marked as not a fit. Example: <em>LAMP</em>, <em>WordPress/PHP/MySQL</em></div>
                     </div>
                     <div class="mb-4">
                         <label class="form-label">Tools &amp; Platforms</label>
                         <div class="tag-container" data-tag-field="tools_platforms_items">
-                            <input type="text" class="tag-input" placeholder="e.g. Docker, AWS, Jira...">
+                            <input type="text" class="tag-input" placeholder="e.g. Docker, AWS, GitHub Actions...">
                         </div>
+                        <div class="hint mt-1">Tools and platforms to highlight on your CV. Examples: <em>Docker</em>, <em>AWS</em>, <em>Kubernetes</em>, <em>GitHub Actions</em></div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label">Disqualifying Tools &amp; Platforms</label>
+                        <div class="tag-container" data-tag-field="disqualifying_tools_platforms_items">
+                            <input type="text" class="tag-input" placeholder="e.g. Jira, Salesforce, Azure DevOps...">
+                        </div>
+                        <div class="hint mt-1">Tools or platforms you do not want in a role. Jobs that require or heavily emphasize these are marked as not a fit. Example: <em>Salesforce</em>, <em>ServiceNow</em></div>
                     </div>
                     <div class="mb-4">
                         <label class="form-label">Soft Skills</label>
                         <div class="tag-container" data-tag-field="soft_skills_items">
-                            <input type="text" class="tag-input" placeholder="e.g. Leadership, Communication...">
+                            <input type="text" class="tag-input" placeholder="e.g. Leadership, Communication, Mentoring...">
                         </div>
+                        <div class="hint mt-1">Interpersonal and professional strengths included on tailored CVs. Examples: <em>Team leadership</em>, <em>Stakeholder communication</em>, <em>Agile collaboration</em></div>
                     </div>
                     <div class="mb-0">
                         <label class="form-label">Languages</label>
                         <div class="tag-container" data-tag-field="languages_items">
                             <input type="text" class="tag-input" placeholder="e.g. English (Native), German (B2)...">
                         </div>
+                        <div class="hint mt-1">Spoken or written languages with proficiency level. Examples: <em>English (Native)</em>, <em>French (B2)</em>, <em>Spanish (Professional)</em></div>
                     </div>
                 </div>
             </div>
@@ -332,6 +355,7 @@
                     </button>
                 </div>
                 <div class="card-body">
+                    <div class="hint mb-3">Add each role with measurable highlights. The AI reuses these bullets when tailoring CVs for similar jobs. Example highlight: <em>Built REST APIs serving 50k daily users, reducing response time by 35%</em></div>
                     <div id="experienceList" class="d-flex flex-column gap-3">
                     </div>
                     <div id="experienceEmpty" class="empty-state">
@@ -349,6 +373,7 @@
                     </button>
                 </div>
                 <div class="card-body">
+                    <div class="hint mb-3">Side projects, open-source work, or portfolio pieces that strengthen applications. Example highlight: <em>Implemented job matching with Ollama and profile-aware CV generation</em></div>
                     <div id="projectsList" class="d-flex flex-column gap-3">
                     </div>
                     <div id="projectsEmpty" class="empty-state">
@@ -367,7 +392,7 @@
                 </div>
                 <div class="card-body">
                     <p class="hint mb-3">
-                        Connect Gmail or Outlook with OAuth (works with 2FA), or add app-password / SMTP accounts manually below.
+                        Accounts used to send application emails. Connect Gmail or Outlook with OAuth (works with 2FA), or add app-password / SMTP accounts manually. Example label: <em>Work Gmail</em>
                     </p>
 
                     <div class="d-flex flex-wrap gap-2 mb-4">
@@ -468,6 +493,7 @@
                                 <div class="col-md-6">
                                     <label class="form-label">App password</label>
                                     <input type="password" class="form-control" name="smtp_password" placeholder="{% if account.has_password %}Leave blank to keep current password{% else %}Required{% endif %}">
+                                    <div class="hint mt-1">Gmail/Outlook app password, not your login password. Leave blank to keep an existing saved password.</div>
                                 </div>
                                 <div class="col-md-4 smtp-custom-fields {% if account.provider != 'custom' %}d-none{% endif %}">
                                     <label class="form-label">SMTP host</label>
@@ -495,6 +521,9 @@
             </div>
 
             <div class="d-flex justify-content-between">
+                <a href="{{ url_for('app_settings') }}" class="btn btn-outline-primary">
+                    <i class="fas fa-sliders-h me-2"></i>Settings
+                </a>
                 <a href="{{ url_for('index') }}" class="btn btn-secondary">
                     <i class="fas fa-arrow-left me-2"></i>Back
                 </a>
@@ -593,7 +622,7 @@
                     <label class="form-label">Highlights</label>
                     <div class="bullet-container" data-bullet-prefix="we_bullets">
                         <div class="d-flex gap-2 mb-2">
-                            <input type="text" class="form-control form-control-sm bullet-input" placeholder="Type a highlight and press Enter or click Add">
+                            <input type="text" class="form-control form-control-sm bullet-input" placeholder="e.g. Built REST APIs serving 50k daily users">
                             <button type="button" class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="addBulletFromInput(this)">
                                 <i class="fas fa-plus"></i>
                             </button>
@@ -631,7 +660,7 @@
                     <label class="form-label">Highlights</label>
                     <div class="bullet-container" data-bullet-prefix="pj_bullets">
                         <div class="d-flex gap-2 mb-2">
-                            <input type="text" class="form-control form-control-sm bullet-input" placeholder="Type a highlight and press Enter or click Add">
+                            <input type="text" class="form-control form-control-sm bullet-input" placeholder="e.g. Shipped MVP with Flask and SQLite in 3 weeks">
                             <button type="button" class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="addBulletFromInput(this)">
                                 <i class="fas fa-plus"></i>
                             </button>
@@ -650,7 +679,9 @@
             technical_skills: {{ form.technical_skills_list | tojson }},
             minor_skills: {{ form.minor_skills_list | tojson }},
             stacks: {{ form.stacks_list | tojson }},
+            disqualifying_stacks: {{ form.disqualifying_stacks_list | tojson }},
             tools_platforms: {{ form.tools_platforms_list | tojson }},
+            disqualifying_tools_platforms: {{ form.disqualifying_tools_platforms_list | tojson }},
             soft_skills: {{ form.soft_skills_list | tojson }},
             languages: {{ form.languages_list | tojson }},
             work_experience: {{ form.work_experience_list | tojson }},
@@ -968,14 +999,16 @@
             const form = document.getElementById('profileForm');
 
             // Remove any existing serialized data fields
-            form.querySelectorAll('input[name="technical_skills_json"], input[name="minor_skills_json"], input[name="stacks_json"], input[name="tools_platforms_json"], input[name="soft_skills_json"], input[name="languages_json"], input[name="work_experience_json"], input[name="personal_projects_json"]').forEach(el => el.remove());
+            form.querySelectorAll('input[name="technical_skills_json"], input[name="minor_skills_json"], input[name="stacks_json"], input[name="disqualifying_stacks_json"], input[name="tools_platforms_json"], input[name="disqualifying_tools_platforms_json"], input[name="soft_skills_json"], input[name="languages_json"], input[name="work_experience_json"], input[name="personal_projects_json"]').forEach(el => el.remove());
 
             // Collect tag data
             const tagFields = {
                 'technical_skills': 'technical_skills_items',
                 'minor_skills': 'minor_skills_items',
                 'stacks': 'stacks_items',
+                'disqualifying_stacks': 'disqualifying_stacks_items',
                 'tools_platforms': 'tools_platforms_items',
+                'disqualifying_tools_platforms': 'disqualifying_tools_platforms_items',
                 'soft_skills': 'soft_skills_items',
                 'languages': 'languages_items'
             };
