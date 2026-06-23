@@ -6,8 +6,10 @@ from job_apply_ai.storage.app_settings import (
     llm_settings_from_form,
     normalize_alibaba_settings,
     normalize_llm_provider,
+    normalize_model_providers,
     normalize_ollama_settings,
     ollama_settings_from_form,
+    uses_alibaba_provider,
 )
 from job_apply_ai.storage.database import init_db
 
@@ -56,6 +58,8 @@ def test_app_settings_repository_round_trip(monkeypatch, tmp_path):
 
     full = repo.get_settings()
     assert full["llm_provider"] == "ollama"
+    assert full["fast_model_provider"] == "ollama"
+    assert full["main_model_provider"] == "ollama"
     assert full["ollama"] == saved["ollama"]
 
 
@@ -85,13 +89,26 @@ def test_llm_settings_from_form():
     settings = llm_settings_from_form(
         {
             "llm_provider": "alibaba",
+            "fast_model_provider": "ollama",
+            "main_model_provider": "alibaba",
             "alibaba_api_key": "sk-test",
             "alibaba_fast_model": "qwen-turbo",
             "alibaba_main_model": "qwen-plus",
         }
     )
-    assert normalize_llm_provider(settings["llm_provider"]) == "alibaba"
+    assert settings["fast_model_provider"] == "ollama"
+    assert settings["main_model_provider"] == "alibaba"
     assert settings["alibaba"]["api_key"] == "sk-test"
+
+
+def test_normalize_model_providers_falls_back_to_legacy_provider():
+    providers = normalize_model_providers({}, legacy_provider="alibaba")
+    assert providers == {"fast_model_provider": "alibaba", "main_model_provider": "alibaba"}
+
+
+def test_uses_alibaba_provider():
+    assert uses_alibaba_provider({"fast_model_provider": "ollama", "main_model_provider": "alibaba"})
+    assert not uses_alibaba_provider({"fast_model_provider": "ollama", "main_model_provider": "ollama"})
 
 
 def test_save_llm_settings_preserves_alibaba_api_key(monkeypatch, tmp_path):

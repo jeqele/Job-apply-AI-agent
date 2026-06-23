@@ -28,6 +28,8 @@ DEFAULT_ALIBABA_SETTINGS: dict[str, Any] = {
 }
 
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
+DEFAULT_FAST_MODEL_PROVIDER = os.environ.get("LLM_FAST_PROVIDER", DEFAULT_LLM_PROVIDER)
+DEFAULT_MAIN_MODEL_PROVIDER = os.environ.get("LLM_MAIN_PROVIDER", DEFAULT_LLM_PROVIDER)
 
 OLLAMA_SETTING_KEYS = ("base_url", "fast_model", "main_model", "num_predict")
 ALIBABA_SETTING_KEYS = ("api_key", "base_url", "fast_model", "main_model", "num_predict")
@@ -95,6 +97,31 @@ def normalize_llm_provider(provider: str | None) -> str:
     return value if value in LLM_PROVIDERS else DEFAULT_LLM_PROVIDER
 
 
+def normalize_model_providers(
+    data: dict[str, Any] | None,
+    *,
+    legacy_provider: str | None = None,
+) -> dict[str, str]:
+    """Resolve fast/main model providers, falling back to legacy llm_provider."""
+    fallback = normalize_llm_provider(legacy_provider)
+    if data is None:
+        return {
+            "fast_model_provider": normalize_llm_provider(DEFAULT_FAST_MODEL_PROVIDER),
+            "main_model_provider": normalize_llm_provider(DEFAULT_MAIN_MODEL_PROVIDER),
+        }
+
+    fast = normalize_llm_provider(data.get("fast_model_provider") or fallback)
+    main = normalize_llm_provider(data.get("main_model_provider") or fallback)
+    return {"fast_model_provider": fast, "main_model_provider": main}
+
+
+def uses_alibaba_provider(providers: dict[str, str]) -> bool:
+    return (
+        providers["fast_model_provider"] == "alibaba"
+        or providers["main_model_provider"] == "alibaba"
+    )
+
+
 def ollama_settings_from_form(form_data: Any) -> dict[str, Any]:
     """Build Ollama settings from a submitted settings form."""
     if hasattr(form_data, "to_dict"):
@@ -149,8 +176,18 @@ def llm_settings_from_form(
     else:
         scalar_data = dict(form_data)
 
+    legacy_provider = normalize_llm_provider(scalar_data.get("llm_provider"))
+    providers = normalize_model_providers(
+        {
+            "fast_model_provider": scalar_data.get("fast_model_provider"),
+            "main_model_provider": scalar_data.get("main_model_provider"),
+        },
+        legacy_provider=legacy_provider,
+    )
+
     return {
-        "llm_provider": normalize_llm_provider(scalar_data.get("llm_provider")),
+        "llm_provider": legacy_provider,
+        **providers,
         "ollama": ollama_settings_from_form(form_data),
         "alibaba": alibaba_settings_from_form(
             form_data,
@@ -173,15 +210,20 @@ class AppSettingsRepository:
             data = {}
         if not isinstance(data, dict):
             data = {}
+        legacy_provider = normalize_llm_provider(data.get("llm_provider"))
+        providers = normalize_model_providers(data, legacy_provider=legacy_provider)
         return {
-            "llm_provider": normalize_llm_provider(data.get("llm_provider")),
+            "llm_provider": legacy_provider,
+            **providers,
             "ollama": normalize_ollama_settings(data.get("ollama")),
             "alibaba": normalize_alibaba_settings(data.get("alibaba")),
         }
 
     def _default_settings(self) -> dict[str, Any]:
+        providers = normalize_model_providers(None)
         return {
             "llm_provider": normalize_llm_provider(None),
+            **providers,
             "ollama": normalize_ollama_settings(None),
             "alibaba": normalize_alibaba_settings(None),
         }
@@ -209,6 +251,15 @@ class AppSettingsRepository:
         current = self.get_settings()
         if "llm_provider" in data:
             current["llm_provider"] = normalize_llm_provider(data["llm_provider"])
+        if "fast_model_provider" in data or "main_model_provider" in data:
+            providers = normalize_model_providers(
+                {
+                    "fast_model_provider": data.get("fast_model_provider", current.get("fast_model_provider")),
+                    "main_model_provider": data.get("main_model_provider", current.get("main_model_provider")),
+                },
+                legacy_provider=current.get("llm_provider"),
+            )
+            current.update(providers)
         if "ollama" in data:
             current["ollama"] = normalize_ollama_settings(data["ollama"])
         if "alibaba" in data:

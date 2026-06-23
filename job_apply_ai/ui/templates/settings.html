@@ -69,7 +69,7 @@
     <div class="container">
         <div class="page-header">
             <h1 class="display-6 fw-bold mb-2"><i class="fas fa-sliders-h me-2"></i>Settings</h1>
-            <p class="lead mb-0">Choose Ollama (local) or Alibaba Cloud Model Studio for CV generation, job matching, and AI editing.</p>
+            <p class="lead mb-0">Mix Ollama (local) and Alibaba Cloud Model Studio — e.g. a fast local model for analysis and a cloud model for CV writing.</p>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -86,7 +86,7 @@
         <form method="POST" action="{{ url_for('app_settings') }}" id="settingsForm">
             <div class="card">
                 <div class="card-header py-3">
-                    <i class="fas fa-plug section-icon"></i>LLM provider
+                    <i class="fas fa-plug section-icon"></i>Model providers
                 </div>
                 <div class="card-body">
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
@@ -97,26 +97,35 @@
                                 <span class="status-pill offline"><i class="fas fa-circle"></i> {{ active_provider_label }} not reachable</span>
                             {% endif %}
                         </div>
-                        {% if installed_models %}
-                            <span class="hint">{{ installed_models|length }} model{{ 's' if installed_models|length != 1 else '' }} available</span>
-                        {% endif %}
                     </div>
 
-                    <div class="mb-0">
-                        <label for="llm_provider" class="form-label">Active provider</label>
-                        <select class="form-select" id="llm_provider" name="llm_provider">
-                            <option value="ollama" {% if llm_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
-                            <option value="alibaba" {% if llm_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud Model Studio (Qwen)</option>
-                        </select>
-                        <div class="hint mt-2">
-                            Alibaba uses the <a href="https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions" target="_blank" rel="noopener">OpenAI-compatible DashScope API</a>.
-                            Create an API key in the <a href="https://modelstudio.console.alibabacloud.com/" target="_blank" rel="noopener">Model Studio console</a> (Singapore / international region).
+                    <div class="row g-4">
+                        <div class="col-md-6">
+                            <label for="fast_model_provider" class="form-label">Fast model provider</label>
+                            <select class="form-select" id="fast_model_provider" name="fast_model_provider">
+                                <option value="ollama" {% if fast_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
+                                <option value="alibaba" {% if fast_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud Model Studio (Qwen)</option>
+                            </select>
+                            <div class="hint mt-2">Used for quick tasks: job analysis, profile import, RAG prep.</div>
                         </div>
+                        <div class="col-md-6">
+                            <label for="main_model_provider" class="form-label">Main model provider</label>
+                            <select class="form-select" id="main_model_provider" name="main_model_provider">
+                                <option value="ollama" {% if main_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
+                                <option value="alibaba" {% if main_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud Model Studio (Qwen)</option>
+                            </select>
+                            <div class="hint mt-2">Used for quality tasks: CV generation, cover letters, chat editing.</div>
+                        </div>
+                    </div>
+                    <div class="hint mt-3 mb-0">
+                        Example: fast = Ollama <code>gemma4:e4b</code>, main = Alibaba <code>qwen-plus</code>.
+                        Alibaba uses the <a href="https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions" target="_blank" rel="noopener">OpenAI-compatible DashScope API</a>.
+                        Create an API key in the <a href="https://modelstudio.console.alibabacloud.com/" target="_blank" rel="noopener">Model Studio console</a> (Singapore / international region).
                     </div>
                 </div>
             </div>
 
-            <div id="ollamaPanel" class="provider-panel {% if llm_provider != 'ollama' %}d-none{% endif %}">
+            <div id="ollamaPanel" class="provider-panel">
                 <div class="card">
                     <div class="card-header py-3">
                         <i class="fas fa-robot section-icon"></i>Ollama connection
@@ -173,7 +182,7 @@
                 </div>
             </div>
 
-            <div id="alibabaPanel" class="provider-panel {% if llm_provider != 'alibaba' %}d-none{% endif %}">
+            <div id="alibabaPanel" class="provider-panel">
                 <div class="card">
                     <div class="card-header py-3">
                         <i class="fas fa-cloud section-icon"></i>Alibaba Cloud Model Studio
@@ -239,18 +248,34 @@
                 </div>
             </div>
 
-            {% if installed_models %}
+            {% if ollama_models or alibaba_models %}
                 <div class="card">
                     <div class="card-header py-3">
                         <i class="fas fa-list section-icon"></i>Available models
                     </div>
                     <div class="card-body">
-                        <div class="d-flex flex-wrap gap-2">
-                            {% for model in installed_models %}
-                                <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
-                                        data-model="{{ model }}">{{ model }}</button>
-                            {% endfor %}
-                        </div>
+                        {% if ollama_models %}
+                            <div class="mb-3">
+                                <div class="hint mb-2">Ollama</div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    {% for model in ollama_models %}
+                                        <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
+                                                data-model="{{ model }}" data-provider="ollama">{{ model }}</button>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+                        {% if alibaba_models %}
+                            <div class="{% if ollama_models %}mb-0{% else %}mb-0{% endif %}">
+                                <div class="hint mb-2">Alibaba Cloud</div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    {% for model in alibaba_models %}
+                                        <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
+                                                data-model="{{ model }}" data-provider="alibaba">{{ model }}</button>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
                     </div>
                 </div>
             {% endif %}
@@ -271,18 +296,7 @@
 
     <script>
         (function () {
-            const providerSelect = document.getElementById('llm_provider');
-            const ollamaPanel = document.getElementById('ollamaPanel');
-            const alibabaPanel = document.getElementById('alibabaPanel');
             let lastFocusedModelInput = document.querySelector('.model-input');
-
-            function togglePanels() {
-                const provider = providerSelect.value;
-                ollamaPanel.classList.toggle('d-none', provider !== 'ollama');
-                alibabaPanel.classList.toggle('d-none', provider !== 'alibaba');
-            }
-
-            providerSelect.addEventListener('change', togglePanels);
 
             document.querySelectorAll('.model-input').forEach(function (input) {
                 input.addEventListener('focus', function () {
@@ -292,9 +306,20 @@
 
             document.querySelectorAll('.model-preset').forEach(function (button) {
                 button.addEventListener('click', function () {
-                    if (!lastFocusedModelInput) return;
-                    lastFocusedModelInput.value = button.dataset.model;
-                    lastFocusedModelInput.focus();
+                    const provider = button.dataset.provider;
+                    const model = button.dataset.model;
+                    const targetId = provider === 'alibaba'
+                        ? (lastFocusedModelInput && lastFocusedModelInput.id.startsWith('alibaba_')
+                            ? lastFocusedModelInput.id
+                            : 'alibaba_fast_model')
+                        : (lastFocusedModelInput && lastFocusedModelInput.id.startsWith('ollama_')
+                            ? lastFocusedModelInput.id
+                            : 'ollama_fast_model');
+                    const target = document.getElementById(targetId);
+                    if (!target) return;
+                    target.value = model;
+                    target.focus();
+                    lastFocusedModelInput = target;
                 });
             });
         })();

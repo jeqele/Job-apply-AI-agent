@@ -112,7 +112,7 @@ from job_apply_ai.storage.user_profile import (
     update_smtp_account_tokens,
     upsert_oauth_smtp_account,
 )
-from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form
+from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form, uses_alibaba_provider
 from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient, KNOWN_MODELS
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 from job_apply_ai.storage.exports import export_jobs
@@ -1687,7 +1687,8 @@ def _profile_form_data() -> dict:
 def _llm_settings_context() -> dict:
     """Build template context for the settings page."""
     all_settings = app_settings_repo.get_settings()
-    provider = all_settings["llm_provider"]
+    fast_provider = all_settings["fast_model_provider"]
+    main_provider = all_settings["main_model_provider"]
     ollama_settings = all_settings["ollama"]
     alibaba_settings = all_settings["alibaba"]
 
@@ -1710,25 +1711,27 @@ def _llm_settings_context() -> dict:
     alibaba_available = alibaba_client.is_available()
     alibaba_models = alibaba_client.list_models(refresh=True) if alibaba_available else list(KNOWN_MODELS)
 
-    active_client = alibaba_client if provider == "alibaba" else ollama_client
-    llm_available = alibaba_available if provider == "alibaba" else ollama_available
-    installed_models = alibaba_models if provider == "alibaba" else ollama_models
+    from job_apply_ai.cv_modifier.llm_client import build_llm_client
+
+    active_client = build_llm_client(all_settings)
+    llm_available = active_client.is_available()
 
     return {
-        "llm_provider": provider,
+        "llm_provider": all_settings["llm_provider"],
+        "fast_model_provider": fast_provider,
+        "main_model_provider": main_provider,
         "ollama_settings": ollama_settings,
         "alibaba_settings": alibaba_settings,
         "has_alibaba_api_key": bool(alibaba_settings.get("api_key")),
         "ollama_available": ollama_available,
         "alibaba_available": alibaba_available,
         "llm_available": llm_available,
-        "installed_models": installed_models,
+        "installed_models": ollama_models + [m for m in alibaba_models if m not in ollama_models],
         "ollama_models": ollama_models,
         "alibaba_models": alibaba_models,
         "active_provider_label": active_client.provider_label,
         "known_alibaba_models": list(KNOWN_MODELS),
-        # Backward-compatible keys used by older template fragments
-        "settings": ollama_settings if provider == "ollama" else alibaba_settings,
+        "settings": ollama_settings,
     }
 
 
@@ -1741,14 +1744,18 @@ def app_settings():
             request.form,
             existing_alibaba_api_key=current["alibaba"].get("api_key", ""),
         )
-        provider = llm_settings["llm_provider"]
-        provider_settings = llm_settings[provider]
-        if not provider_settings.get("fast_model") or not provider_settings.get("main_model"):
-            flash('Fast model and main model are required.', 'error')
-            return render_template('settings.html', **_llm_settings_context())
+        fast_provider = llm_settings["fast_model_provider"]
+        main_provider = llm_settings["main_model_provider"]
 
-        if provider == "alibaba" and not llm_settings["alibaba"].get("api_key"):
-            flash('Alibaba Cloud API key is required when using Model Studio.', 'error')
+        for role, provider in (("fast", fast_provider), ("main", main_provider)):
+            provider_settings = llm_settings[provider]
+            model_key = f"{role}_model"
+            if not provider_settings.get(model_key):
+                flash(f'{role.title()} model is required for {provider}.', 'error')
+                return render_template('settings.html', **_llm_settings_context())
+
+        if uses_alibaba_provider(llm_settings) and not llm_settings["alibaba"].get("api_key"):
+            flash('Alibaba Cloud API key is required when Alibaba is selected for fast or main models.', 'error')
             return render_template('settings.html', **_llm_settings_context())
 
         app_settings_repo.save_llm_settings(llm_settings)
