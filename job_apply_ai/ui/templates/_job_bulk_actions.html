@@ -2,41 +2,52 @@
 {% set bulk_return_view = return_view|default('manage') %}
 <div id="job-bulk-toolbar" class="card border-primary mb-3 d-none">
     <div class="card-body py-2">
-        <form method="post"
-              action="{{ url_for('batch_update_job_status') }}"
-              id="job-bulk-form"
-              class="d-flex flex-wrap align-items-center gap-3">
-            <input type="hidden" name="return_view" value="{{ bulk_return_view }}">
-            {% if bulk_return_view == 'manage' %}
-                <input type="hidden" name="return_folder" value="{{ current_folder|default('all') }}">
-                <input type="hidden" name="return_search" value="{{ search_query|default('') }}">
-                {% if sort_query %}
+        <div class="d-flex flex-wrap align-items-center gap-3">
+            <form method="post"
+                  action="{{ url_for('batch_update_job_status') }}"
+                  id="job-bulk-form"
+                  class="d-flex flex-wrap align-items-center gap-3 mb-0">
+                <input type="hidden" name="return_view" value="{{ bulk_return_view }}">
+                {% if bulk_return_view == 'manage' %}
+                    <input type="hidden" name="return_folder" value="{{ current_folder|default('all') }}">
+                    <input type="hidden" name="return_search" value="{{ search_query|default('') }}">
+                    {% if sort_query %}
+                        <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                    {% endif %}
+                {% elif sort_query %}
                     <input type="hidden" name="return_sort" value="{{ sort_query }}">
                 {% endif %}
-            {% elif sort_query %}
-                <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                <span class="text-muted small text-nowrap">
+                    <strong id="job-bulk-count">0</strong> selected
+                </span>
+                <label class="text-muted small text-nowrap mb-0" for="bulk-workflow-status">Move to</label>
+                <select id="bulk-workflow-status"
+                        name="workflow_status"
+                        class="form-select form-select-sm"
+                        style="min-width: 200px;"
+                        required
+                        aria-label="Move selected jobs to folder">
+                    {% for status in job_statuses %}
+                        <option value="{{ status }}">{{ status_labels[status] }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm" id="job-bulk-submit" disabled>
+                    <i class="fas fa-folder-open me-1"></i>Apply
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="job-bulk-clear">
+                    Clear selection
+                </button>
+            </form>
+            {% if cv_generation_active %}
+                <button type="button" class="btn btn-success btn-sm" disabled>
+                    <i class="fas fa-wand-magic-sparkles me-1"></i>Generate CVs
+                </button>
+            {% else %}
+                <button type="button" class="btn btn-success btn-sm" id="job-bulk-generate-cvs" disabled>
+                    <i class="fas fa-wand-magic-sparkles me-1"></i>Generate CVs
+                </button>
             {% endif %}
-            <span class="text-muted small text-nowrap">
-                <strong id="job-bulk-count">0</strong> selected
-            </span>
-            <label class="text-muted small text-nowrap mb-0" for="bulk-workflow-status">Move to</label>
-            <select id="bulk-workflow-status"
-                    name="workflow_status"
-                    class="form-select form-select-sm"
-                    style="min-width: 200px;"
-                    required
-                    aria-label="Move selected jobs to folder">
-                {% for status in job_statuses %}
-                    <option value="{{ status }}">{{ status_labels[status] }}</option>
-                {% endfor %}
-            </select>
-            <button type="submit" class="btn btn-primary btn-sm" id="job-bulk-submit" disabled>
-                <i class="fas fa-folder-open me-1"></i>Apply
-            </button>
-            <button type="button" class="btn btn-outline-secondary btn-sm" id="job-bulk-clear">
-                Clear selection
-            </button>
-        </form>
+        </div>
     </div>
 </div>
 
@@ -47,11 +58,24 @@
         const countEl = document.getElementById('job-bulk-count');
         const submitBtn = document.getElementById('job-bulk-submit');
         const clearBtn = document.getElementById('job-bulk-clear');
+        const generateBtn = document.getElementById('job-bulk-generate-cvs');
         const selectAll = document.getElementById('job-select-all');
         const checkboxes = () => Array.from(document.querySelectorAll('.job-select-checkbox'));
+        const batchCvUrl = {{ url_for('batch_make_cvs')|tojson }};
 
         function selectedBoxes() {
             return checkboxes().filter((box) => box.checked);
+        }
+
+        function syncHiddenJobIds(targetForm) {
+            targetForm.querySelectorAll('input[name="job_ids"]').forEach((input) => input.remove());
+            selectedBoxes().forEach((box) => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'job_ids';
+                input.value = box.value;
+                targetForm.appendChild(input);
+            });
         }
 
         function syncToolbar() {
@@ -60,15 +84,11 @@
             countEl.textContent = String(count);
             toolbar.classList.toggle('d-none', count === 0);
             submitBtn.disabled = count === 0;
+            if (generateBtn) {
+                generateBtn.disabled = count === 0;
+            }
 
-            form.querySelectorAll('input[name="job_ids"]').forEach((input) => input.remove());
-            selected.forEach((box) => {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'job_ids';
-                input.value = box.value;
-                form.appendChild(input);
-            });
+            syncHiddenJobIds(form);
 
             if (selectAll) {
                 const boxes = checkboxes();
@@ -107,6 +127,34 @@
                 if (!confirm(`Move ${selectedBoxes().length} job(s) to ${statusLabel}?`)) {
                     event.preventDefault();
                 }
+            });
+        }
+
+        if (generateBtn) {
+            generateBtn.addEventListener('click', () => {
+                const selected = selectedBoxes();
+                if (selected.length === 0) {
+                    return;
+                }
+                if (!confirm(`Generate tailored CVs for ${selected.length} selected job(s)?`)) {
+                    return;
+                }
+
+                const cvForm = document.createElement('form');
+                cvForm.method = 'post';
+                cvForm.action = batchCvUrl;
+
+                form.querySelectorAll('input[type="hidden"]').forEach((input) => {
+                    const clone = document.createElement('input');
+                    clone.type = 'hidden';
+                    clone.name = input.name;
+                    clone.value = input.value;
+                    cvForm.appendChild(clone);
+                });
+
+                syncHiddenJobIds(cvForm);
+                document.body.appendChild(cvForm);
+                cvForm.submit();
             });
         }
 

@@ -239,6 +239,8 @@ def _background_task_progress_url(task_id: str, task: dict) -> str | None:
         if job_id:
             return url_for('make_cv', job_id=job_id)
     if task_type == 'batch_cv':
+        if session.get('batch_cv_job_ids'):
+            return url_for('batch_make_cvs_progress')
         return url_for('make_all_cvs')
     if task_type == 'ats_friendly':
         job_id = task.get('job_id')
@@ -1235,6 +1237,45 @@ def _get_jobs_for_view(
     return sort_jobs(job_repo.list_jobs(), sort_by)
 
 
+def _parse_bulk_job_ids(raw_job_ids: list[str]) -> list[int] | None:
+    """Parse submitted bulk job IDs, or None when empty or invalid."""
+    if not raw_job_ids:
+        return None
+    try:
+        return [int(job_id) for job_id in raw_job_ids]
+    except ValueError:
+        return None
+
+
+def _get_jobs_by_ids(job_ids: list[int]) -> list[dict]:
+    """Load jobs by ID, preserving the submitted selection order."""
+    jobs = []
+    for job_id in job_ids:
+        job = job_repo.get_job(job_id)
+        if job:
+            jobs.append(job)
+    return jobs
+
+
+def _batch_cv_back_url(
+    return_view: str,
+    return_folder: str,
+    return_search: str,
+    return_sort: str,
+) -> str:
+    """Build the return URL after selected-job batch CV generation."""
+    if return_view == 'manage':
+        kwargs = {}
+        if return_search:
+            kwargs['q'] = return_search
+        if return_sort and return_sort != DEFAULT_JOB_SORT:
+            kwargs['sort'] = return_sort
+        if return_folder and return_folder != 'all':
+            return url_for('manage_jobs', folder=return_folder, **kwargs)
+        return url_for('manage_jobs', **kwargs)
+    return url_for('job_list', sort=return_sort or None)
+
+
 def _job_form_data() -> dict:
     """Read job fields from the current request form."""
     data = {column: request.form.get(column, '') for column in JOB_COLUMNS}
@@ -1302,7 +1343,7 @@ def _redirect_after_clear_cv(
     return_sort: str,
 ):
     """Redirect after clearing a job's generated CV."""
-    if return_view == 'list':
+    if return_view in ('list', 'preview'):
         kwargs = {}
         if return_sort and return_sort != DEFAULT_JOB_SORT:
             kwargs['sort'] = return_sort
@@ -3315,7 +3356,148 @@ def make_all_cvs_complete(task_id):
         'all_cvs_success.html',
         successful_jobs=result.get('successful_jobs', []),
         failed_jobs=result.get('failed_jobs', []),
+        back_url=url_for('job_list'),
     )
+
+
+@app.route('/jobs/batch/make_cvs', methods=['POST'])
+def batch_make_cvs():
+    """Start batch CV generation for selected jobs."""
+    raw_job_ids = request.form.getlist('job_ids')
+    return_view = request.form.get('return_view', 'list')
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '')
+    return_sort = request.form.get('return_sort', '')
+
+    job_ids = _parse_bulk_job_ids(raw_job_ids)
+    if not job_ids:
+        flash('No jobs selected', 'warning')
+        if return_view == 'list':
+            return redirect(url_for('job_list', sort=return_sort or None))
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    jobs = _get_jobs_by_ids(job_ids)
+    if not jobs:
+        flash('Selected jobs were not found', 'error')
+        if return_view == 'list':
+            return redirect(url_for('job_list', sort=return_sort or None))
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    profile = profile_repo.get_profile()
+    if not profile_is_ready(profile):
+        flash('Please complete your CV profile first', 'error')
+        return redirect(url_for('user_profile'))
+
+    if _sync_cv_generation_lock():
+        flash('Another CV generation is already in progress', 'warning')
+        if return_view == 'list':
+            return redirect(url_for('job_list', sort=return_sort or None))
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    session['batch_cv_job_ids'] = job_ids
+    session['batch_cv_back_url'] = _batch_cv_back_url(
+        return_view, return_folder, return_search, return_sort
+    )
+    session['batch_cv_back_label'] = (
+        'Back to Manage Jobs' if return_view == 'manage' else 'Back to Job List'
+    )
+    return redirect(url_for('batch_make_cvs_progress'))
+
+
+@app.route('/jobs/batch/make_cvs/progress')
+def batch_make_cvs_progress():
+    """Show progress UI while selected jobs are batch-generated."""
+    job_ids = session.get('batch_cv_job_ids')
+    if not job_ids:
+        flash('No jobs selected for batch CV generation', 'warning')
+        return redirect(url_for('job_list'))
+
+    jobs = _get_jobs_by_ids(job_ids)
+    if not jobs:
+        session.pop('batch_cv_job_ids', None)
+        session.pop('batch_cv_back_url', None)
+        flash('Selected jobs were not found', 'error')
+        return redirect(url_for('job_list'))
+
+    profile = profile_repo.get_profile()
+    if not profile_is_ready(profile):
+        flash('Please complete your CV profile first', 'error')
+        return redirect(url_for('user_profile'))
+
+    back_url = session.get('batch_cv_back_url') or url_for('job_list')
+
+    return render_template(
+        'cv_progress.html',
+        job=None,
+        batch=True,
+        job_count=len(jobs),
+        start_url=url_for('start_batch_make_cvs'),
+        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
+        complete_url_template=url_for('batch_make_cvs_complete', task_id='TASK_ID'),
+        back_url=back_url,
+    )
+
+
+@app.route('/jobs/batch/make_cvs/start', methods=['POST'])
+def start_batch_make_cvs():
+    """Start background batch AI CV generation for selected jobs."""
+    job_ids = session.get('batch_cv_job_ids')
+    if not job_ids:
+        return jsonify({'error': 'No jobs selected'}), 404
+
+    jobs = _get_jobs_by_ids(job_ids)
+    profile = profile_repo.get_profile()
+
+    if not jobs:
+        return jsonify({'error': 'Selected jobs were not found'}), 404
+    if not profile_is_ready(profile):
+        return jsonify({'error': 'Please complete your CV profile first'}), 400
+
+    if _sync_cv_generation_lock():
+        return jsonify({'error': 'Another CV generation is already in progress'}), 409
+
+    task_id = create_task('batch_cv', meta={'total_jobs': len(jobs), 'selected': True})
+    session['cv_generation_active'] = task_id
+    start_background_task(
+        task_id,
+        lambda: _run_batch_cv_task(task_id, profile, jobs),
+    )
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/jobs/batch/make_cvs/complete/<task_id>')
+def batch_make_cvs_complete(task_id):
+    """Render batch success page after selected-job generation completes."""
+    back_url = session.get('batch_cv_back_url') or url_for('job_list')
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Batch CV generation result not found', 'error')
+        session.pop('batch_cv_job_ids', None)
+        session.pop('batch_cv_back_url', None)
+        session.pop('batch_cv_back_label', None)
+        return redirect(back_url)
+
+    result = task['result']
+    back_label = session.pop('batch_cv_back_label', None) or 'Back to Job List'
+    session.pop('cv_generation_active', None)
+    session.pop('batch_cv_job_ids', None)
+    session.pop('batch_cv_back_url', None)
+    session['generated_cvs'] = result.get('generated_cvs', [])
+    session['successful_jobs'] = result.get('successful_jobs', [])
+    session['failed_jobs'] = result.get('failed_jobs', [])
+
+    flash(f"Successfully generated {result.get('generated_count', 0)} tailored CVs with RAG + AI", 'success')
+    if result.get('failed_jobs'):
+        flash(f"Failed to generate {len(result['failed_jobs'])} CVs", 'warning')
+
+    return render_template(
+        'all_cvs_success.html',
+        successful_jobs=result.get('successful_jobs', []),
+        failed_jobs=result.get('failed_jobs', []),
+        back_url=back_url,
+        back_label=back_label,
+    )
+
 
 @app.route('/download_all_cvs')
 def download_all_cvs():

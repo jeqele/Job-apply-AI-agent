@@ -211,8 +211,8 @@
                 </div>
                 
                 <div class="d-grid gap-2">
-                    <a href="{{ url_for('job_list') }}" class="btn btn-secondary">
-                        <i class="fas fa-arrow-left me-2"></i>Back to Job List
+                    <a href="{{ back_url|default(url_for('job_list')) }}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left me-2"></i>{{ back_label|default('Back to Job List') }}
                     </a>
                     <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
                         <i class="fas fa-home me-2"></i>Return to Home

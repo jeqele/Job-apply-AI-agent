@@ -1,0 +1,147 @@
+{# Shared job actions for job cards and CV preview sidebar. Set actions_mode='panel' for stacked preview layout. #}
+{% set panel_mode = actions_mode|default('card') == 'panel' %}
+{% set manage_mode = manage_mode|default(false) %}
+{% set nav_folder = current_folder if manage_mode else return_folder|default('all') %}
+{% set nav_search = search_query if manage_mode else return_search|default('') %}
+{% set nav_sort = sort_query|default('') if manage_mode else return_sort|default('') %}
+{% set nav_return_view = 'preview' if panel_mode else ('manage' if manage_mode else 'list') %}
+{% set btn_size = 'btn-sm w-100' if panel_mode else ('btn-sm' if manage_mode else '') %}
+{% set workflow_status = job.workflow_status or 'new' %}
+{% set show_manage_move = manage_mode or (panel_mode and return_from_manage|default(false)) %}
+
+<div class="job-item-actions{% if panel_mode %} job-item-actions-panel{% endif %}">
+    <div class="{{ 'd-grid gap-2' if panel_mode else 'd-flex gap-2 flex-wrap align-items-center' }}">
+        {% if job.link %}
+            <a href="{{ job.link }}" target="_blank" rel="noopener" class="btn btn-outline-primary {{ btn_size }}">
+                <i class="fas fa-external-link-alt {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>View Job
+            </a>
+        {% endif %}
+        {% if job.cv_filename and not panel_mode %}
+            <a href="{{ url_for('preview_job_cv', job_id=job.id, folder=nav_folder if nav_folder != 'all' else none, q=nav_search or none, sort=nav_sort or none) }}"
+               class="btn btn-outline-info {{ btn_size }}">
+                <i class="fas fa-eye {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Preview & Edit
+            </a>
+            <a href="{{ url_for('download_job_cv', job_id=job.id) }}" class="btn btn-outline-success {{ btn_size }}">
+                <i class="fas fa-file-word {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Download CV
+            </a>
+            {% if job.cover_letter_filename %}
+            <a href="{{ url_for('download_job_cover_letter', job_id=job.id) }}" class="btn btn-outline-primary {{ btn_size }}">
+                <i class="fas fa-envelope {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Cover Letter
+            </a>
+            {% endif %}
+            {% if smtp_configured and job.emails and job.cv_filename %}
+            <form method="post"
+                  action="{{ url_for('send_job_application', job_id=job.id) }}"
+                  class="{{ 'd-grid' if panel_mode else 'd-inline-flex align-items-center gap-2' }}"
+                  onsubmit="return confirm('Send your CV{% if job.cover_letter_filename %} and cover letter{% endif %} to {{ job.emails.split(',')[0].strip() }}?');">
+                {% if manage_mode or panel_mode %}
+                    <input type="hidden" name="return_folder" value="{{ nav_folder }}">
+                    <input type="hidden" name="return_search" value="{{ nav_search }}">
+                    {% if nav_sort %}
+                    <input type="hidden" name="return_sort" value="{{ nav_sort }}">
+                    {% endif %}
+                    {% if manage_mode or return_from_manage|default(false) %}
+                    <input type="hidden" name="return_from_manage" value="1">
+                    {% endif %}
+                {% endif %}
+                {% if smtp_accounts|length > 1 %}
+                <select name="smtp_account_id" class="form-select form-select-sm{% if panel_mode %} w-100{% endif %}"{% if not panel_mode %} style="width: auto;"{% endif %} aria-label="Send from account">
+                    {% for account in smtp_accounts %}
+                    <option value="{{ account.id }}" {% if account.is_default %}selected{% endif %}>
+                        From: {{ account.email }}
+                    </option>
+                    {% endfor %}
+                </select>
+                {% elif smtp_accounts|length == 1 %}
+                <input type="hidden" name="smtp_account_id" value="{{ smtp_accounts[0].id }}">
+                {% endif %}
+                <button type="submit" class="btn btn-success {{ btn_size }}">
+                    <i class="fas fa-paper-plane {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>Send Application
+                </button>
+            </form>
+            {% endif %}
+        {% endif %}
+        <a href="{{ url_for('edit_job', job_id=job.id, folder=nav_folder if nav_folder != 'all' else none, q=nav_search or none, sort=nav_sort or none) }}"
+           class="btn btn-outline-secondary {{ btn_size }}" title="Edit job">
+            <i class="fas fa-edit{% if not panel_mode %} me-0{% else %} me-1{% endif %}"></i>{% if panel_mode %}Edit Job{% endif %}
+        </a>
+        {% with return_view=nav_return_view, return_folder=nav_folder, return_search=nav_search, return_sort=nav_sort, return_from_manage=return_from_manage|default(manage_mode), btn_size=btn_size %}
+            {% if panel_mode %}
+            <div class="{{ 'd-grid gap-2' if panel_mode else 'd-inline-flex flex-wrap gap-2 align-items-center' }}">
+                {% include '_job_quick_status_buttons.html' %}
+            </div>
+            {% else %}
+                {% include '_job_quick_status_buttons.html' %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <div class="{{ 'd-grid gap-2 mt-2' if panel_mode else 'd-flex gap-2 flex-wrap align-items-center' }}">
+        {% if show_manage_move %}
+        <form method="post"
+              action="{{ url_for('update_job_status', job_id=job.id) }}"
+              class="{{ 'd-grid gap-1' if panel_mode else 'd-inline-flex align-items-center gap-2' }}">
+            <input type="hidden" name="return_view" value="{{ nav_return_view }}">
+            <input type="hidden" name="return_folder" value="{{ nav_folder }}">
+            <input type="hidden" name="return_search" value="{{ nav_search }}">
+            {% if nav_sort %}
+            <input type="hidden" name="return_sort" value="{{ nav_sort }}">
+            {% endif %}
+            {% if manage_mode or return_from_manage|default(false) %}
+            <input type="hidden" name="return_from_manage" value="1">
+            {% endif %}
+            <label class="text-muted small text-nowrap mb-0" for="status-{{ job.id }}-{{ 'panel' if panel_mode else 'card' }}">Move to</label>
+            <select id="status-{{ job.id }}-{{ 'panel' if panel_mode else 'card' }}"
+                    name="workflow_status"
+                    class="form-select form-select-sm status-select{% if panel_mode %} w-100{% endif %}"
+                    aria-label="Move job to folder"
+                    onchange="this.form.submit()">
+                {% for status in job_statuses %}
+                    <option value="{{ status }}" {% if workflow_status == status %}selected{% endif %}>
+                        {{ status_labels[status] }}
+                    </option>
+                {% endfor %}
+            </select>
+        </form>
+        {% endif %}
+        {% if cv_generation_active %}
+            <button type="button" class="btn btn-success {{ btn_size }}" disabled>
+                <i class="fas fa-wand-magic-sparkles {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>Make AI CV
+            </button>
+        {% else %}
+            <a href="{{ url_for('make_cv', job_id=job.id, folder=nav_folder if nav_folder != 'all' else none, q=nav_search or none, sort=nav_sort or none) }}"
+               class="btn btn-success {{ btn_size }}">
+                <i class="fas fa-wand-magic-sparkles {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>Make AI CV
+            </a>
+        {% endif %}
+        {% if job.cv_filename %}
+            {% if ats_friendly_active %}
+            <button type="button" class="btn btn-outline-success {{ btn_size }}" disabled title="ATS analysis in progress">
+                <i class="fas fa-file-circle-check {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>ATS Friendly
+            </button>
+            {% else %}
+            <a href="{{ url_for('ats_friendly_progress', job_id=job.id, folder=nav_folder if nav_folder != 'all' else none, q=nav_search or none, sort=nav_sort or none) }}"
+               class="btn btn-outline-success {{ btn_size }}"
+               title="Score your CV for ATS compatibility and apply improvements">
+                <i class="fas fa-file-circle-check {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>ATS Friendly
+            </a>
+            {% endif %}
+            <form method="post"
+                  action="{{ url_for('clear_job_cv', job_id=job.id) }}"
+                  class="{{ 'd-grid' if panel_mode else 'd-inline' }}"
+                  onsubmit="return confirm('Clear the generated CV, cover letter, chat history, and ATS analysis for this job? You can regenerate fresh from your base profile with Make AI CV.');">
+                <input type="hidden" name="return_view" value="{{ nav_return_view }}">
+                {% if nav_sort %}
+                <input type="hidden" name="return_sort" value="{{ nav_sort }}">
+                {% endif %}
+                {% if manage_mode or panel_mode %}
+                <input type="hidden" name="return_folder" value="{{ nav_folder }}">
+                <input type="hidden" name="return_search" value="{{ nav_search }}">
+                {% endif %}
+                <button type="submit" class="btn btn-outline-danger {{ btn_size }}" title="Remove generated CV and regenerate from base profile">
+                    <i class="fas fa-eraser {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>Clear CV
+                </button>
+            </form>
+        {% endif %}
+    </div>
+</div>

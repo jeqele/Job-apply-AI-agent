@@ -128,16 +128,8 @@
                     {% endif %}
                 </div>
             {% endif %}
-            {% if job.link %}
-                <a href="{{ job.link }}" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm w-100">
-                    <i class="fas fa-external-link-alt me-1"></i>View Job Posting
-                </a>
-            {% endif %}
-            {% with return_view='preview', return_folder=return_folder|default('all'), return_search=return_search|default(''), return_sort=return_sort|default(''), return_from_manage=return_from_manage|default(false), btn_size='btn-sm w-100' %}
-                <div class="d-grid gap-2 mt-2">
-                    {% include '_shortlist_job_button.html' %}
-                    {% include '_archive_job_button.html' %}
-                </div>
+            {% with actions_mode='panel' %}
+                {% include '_job_item_actions.html' %}
             {% endwith %}
         </div>
     </div>
