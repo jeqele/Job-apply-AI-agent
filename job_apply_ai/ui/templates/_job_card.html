@@ -41,6 +41,15 @@
                         <span class="opacity-75">· KW</span>
                     {% endif %}
                 </span>
+                {% if match_analysis and (match_analysis.match_paragraph or match_analysis.mismatch_paragraph or match_analysis.reason) %}
+                    <button type="button"
+                            class="btn btn-light btn-sm py-0 px-2"
+                            data-bs-toggle="modal"
+                            data-bs-target="#job-match-modal-{{ job.id }}"
+                            title="View profile fit details">
+                        <i class="fas fa-magnifying-glass-chart"></i>
+                    </button>
+                {% endif %}
             {% endif %}
             {% if job.posted_days_ago is not none %}
                 <span class="badge bg-light text-dark">{{ job.posted_days_ago }} days ago</span>
@@ -91,6 +100,17 @@
 
         {% if job.relocation_info %}
             <p class="text-muted small mb-3"><strong>Relocation note:</strong> {{ job.relocation_info }}</p>
+        {% endif %}
+
+        {% if match_analysis and (match_analysis.match_paragraph or match_analysis.mismatch_paragraph or match_analysis.reason) %}
+            <div class="mb-3">
+                <button type="button"
+                        class="btn btn-outline-info btn-sm"
+                        data-bs-toggle="modal"
+                        data-bs-target="#job-match-modal-{{ job.id }}">
+                    <i class="fas fa-magnifying-glass-chart me-1"></i>Why you match / don't match
+                </button>
+            </div>
         {% endif %}
 
         {% if job.emails %}
@@ -209,3 +229,37 @@
         </div>
     </div>
 </div>
+
+{% if match_analysis and (match_analysis.match_paragraph or match_analysis.mismatch_paragraph or match_analysis.reason) %}
+<div class="modal fade" id="job-match-modal-{{ job.id }}" tabindex="-1" aria-labelledby="job-match-modal-label-{{ job.id }}" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title mb-1" id="job-match-modal-label-{{ job.id }}">Profile fit analysis</h5>
+                    <p class="text-muted small mb-0">{{ job.title }}{% if job.company %} · {{ job.company }}{% endif %}</p>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                {% if match_score is not none %}
+                    <div class="mb-3">
+                        <span class="badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                            {{ match_score|round(0)|int }}% match
+                        </span>
+                        {% if match_analysis.method == 'ai' %}
+                            <span class="badge bg-light text-dark">AI analysis</span>
+                        {% elif match_analysis.method == 'heuristic' %}
+                            <span class="badge bg-light text-dark">Keyword fallback</span>
+                        {% endif %}
+                    </div>
+                {% endif %}
+                {% include '_job_match_analysis_sections.html' %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}

@@ -1,0 +1,33 @@
+{# Profile-fit narrative. Expects match_analysis from profile_match_analysis filter. #}
+{% if match_analysis and (match_analysis.match_paragraph or match_analysis.mismatch_paragraph or match_analysis.reason) %}
+    {% set match_text = match_analysis.match_paragraph or (match_analysis.reason if match_analysis.is_match else '') %}
+    {% set mismatch_text = match_analysis.mismatch_paragraph or (match_analysis.reason if not match_analysis.is_match else '') %}
+
+    {% if match_text %}
+        <div class="job-match-section job-match-section-positive">
+            <div class="job-match-section-label"><i class="fas fa-circle-check me-1"></i>Why you match</div>
+            <p class="job-match-paragraph mb-0">{{ match_text }}</p>
+            {% if match_analysis.matched_skills %}
+                <div class="job-match-skill-tags mt-2">
+                    {% for skill in match_analysis.matched_skills[:8] %}
+                        <span class="job-match-skill job-match-skill-positive">{{ skill }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+
+    {% if mismatch_text %}
+        <div class="job-match-section job-match-section-negative">
+            <div class="job-match-section-label"><i class="fas fa-circle-xmark me-1"></i>Why you may not match</div>
+            <p class="job-match-paragraph mb-0">{{ mismatch_text }}</p>
+            {% if match_analysis.missing_skills %}
+                <div class="job-match-skill-tags mt-2">
+                    {% for skill in match_analysis.missing_skills[:8] %}
+                        <span class="job-match-skill job-match-skill-negative">{{ skill }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+{% endif %}

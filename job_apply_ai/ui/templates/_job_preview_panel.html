@@ -62,10 +62,9 @@
             </div>
         {% endif %}
 
-        {% if match_analysis and match_analysis.reason %}
+        {% if match_analysis %}
             <div class="job-preview-section">
-                <div class="job-preview-section-label">Why it matches</div>
-                <p class="job-preview-text mb-0">{{ match_analysis.reason }}</p>
+                {% include '_job_match_analysis_sections.html' %}
             </div>
         {% endif %}
 

@@ -2,6 +2,7 @@
 
 from job_apply_ai.cv_modifier.job_match_analyzer import (
     NOT_MATCH_STATUS,
+    _build_match_paragraphs,
     classify_jobs_by_profile_match,
     heuristic_job_match,
     job_meets_threshold,
@@ -54,7 +55,21 @@ def test_heuristic_job_match_detects_overlap():
 
     assert match_result["is_match"] is True
     assert "python" in match_result["matched_skills"]
+    assert match_result["match_paragraph"]
+    assert match_result["mismatch_paragraph"]
     assert mismatch_result["is_match"] is False
+    assert mismatch_result["mismatch_paragraph"]
+
+
+def test_build_match_paragraphs_fills_missing_text():
+    match_para, mismatch_para = _build_match_paragraphs(
+        matched_skills=["Python", "Django"],
+        missing_skills=["Kubernetes"],
+        reason="Strong backend overlap.",
+        is_match=True,
+    )
+    assert "Python" in match_para
+    assert "Kubernetes" in mismatch_para
 
 
 def test_classify_jobs_routes_non_matches_to_folder():

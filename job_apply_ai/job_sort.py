@@ -33,7 +33,36 @@ def get_profile_match_analysis(job: dict[str, Any]) -> dict[str, Any] | None:
     """Return stored AI/heuristic profile fit analysis for a job, if any."""
     categories = job.get("matched_categories") or {}
     fit = categories.get("Profile Fit")
-    return fit if isinstance(fit, dict) else None
+    if not isinstance(fit, dict):
+        return None
+
+    if fit.get("match_paragraph") and fit.get("mismatch_paragraph"):
+        return fit
+
+    from job_apply_ai.cv_modifier.job_match_analyzer import _build_match_paragraphs
+
+    matched_skills = [
+        str(skill).strip()
+        for skill in (fit.get("matched_skills") or [])
+        if str(skill).strip()
+    ]
+    missing_skills = [
+        str(skill).strip()
+        for skill in (fit.get("missing_skills") or [])
+        if str(skill).strip()
+    ]
+    match_paragraph, mismatch_paragraph = _build_match_paragraphs(
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
+        reason=str(fit.get("reason") or ""),
+        is_match=bool(fit.get("is_match")),
+        match_paragraph=str(fit.get("match_paragraph") or ""),
+        mismatch_paragraph=str(fit.get("mismatch_paragraph") or ""),
+    )
+    enriched = dict(fit)
+    enriched["match_paragraph"] = match_paragraph
+    enriched["mismatch_paragraph"] = mismatch_paragraph
+    return enriched
 
 
 def get_profile_match_score(job: dict[str, Any]) -> float | None:

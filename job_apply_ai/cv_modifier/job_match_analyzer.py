@@ -79,6 +79,61 @@ def _job_text(job: dict[str, Any]) -> str:
     return "\n".join(part.strip() for part in parts if part.strip()).lower()
 
 
+def _format_skill_list(skills: list[str], limit: int = 6) -> str:
+    shown = [skill for skill in skills if str(skill).strip()][:limit]
+    if not shown:
+        return ""
+    if len(skills) > limit:
+        return f"{', '.join(shown)}, and others"
+    return ", ".join(shown)
+
+
+def _build_match_paragraphs(
+    *,
+    matched_skills: list[str],
+    missing_skills: list[str],
+    reason: str,
+    is_match: bool,
+    match_paragraph: str = "",
+    mismatch_paragraph: str = "",
+) -> tuple[str, str]:
+    """Ensure readable fit summaries exist for UI display."""
+    match_text = str(match_paragraph or "").strip()
+    mismatch_text = str(mismatch_paragraph or "").strip()
+
+    if not match_text:
+        if matched_skills:
+            skills_text = _format_skill_list(matched_skills)
+            match_text = (
+                f"Your profile overlaps with this role through skills such as {skills_text}. "
+                "These appear in the job description and support applying for the position."
+            )
+        elif reason and is_match:
+            match_text = reason
+
+    if not mismatch_text:
+        if missing_skills:
+            gaps_text = _format_skill_list(missing_skills)
+            mismatch_text = (
+                f"The posting also emphasizes {gaps_text}, which are not clearly represented "
+                "in your profile and may weaken your fit for this role."
+            )
+        elif reason and not is_match:
+            mismatch_text = reason
+        elif not is_match:
+            mismatch_text = (
+                "Only limited overlap was found between your profile skills and the job requirements, "
+                "so the role may target a different focus area."
+            )
+        elif matched_skills:
+            mismatch_text = (
+                "No major skill gaps stood out, though the role may still expect seniority, domain "
+                "experience, or responsibilities beyond what your profile highlights."
+            )
+
+    return match_text, mismatch_text
+
+
 def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
     """Keyword-based fallback when Ollama is unavailable."""
     skills = collect_profile_skills(profile)
@@ -92,23 +147,34 @@ def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> 
             "matched_skills": [],
             "missing_skills": [],
             "reason": "No profile skills configured for matching.",
+            "match_paragraph": "",
+            "mismatch_paragraph": "",
             "method": "skipped",
         }
 
     matched = [token for token in tokens if token in haystack]
     ratio = len(matched) / max(len(tokens), 1)
     is_match = bool(matched) and ratio >= 0.15
+    reason = (
+        "Matched profile skills found in the job description."
+        if is_match
+        else "Too few profile skills appear in the job description."
+    )
+    match_paragraph, mismatch_paragraph = _build_match_paragraphs(
+        matched_skills=matched[:12],
+        missing_skills=[],
+        reason=reason,
+        is_match=is_match,
+    )
 
     return {
         "is_match": is_match,
         "match_score": round(min(ratio * 100, 100), 1),
         "matched_skills": matched[:12],
         "missing_skills": [],
-        "reason": (
-            "Matched profile skills found in the job description."
-            if is_match
-            else "Too few profile skills appear in the job description."
-        ),
+        "reason": reason,
+        "match_paragraph": match_paragraph,
+        "mismatch_paragraph": mismatch_paragraph,
         "method": "heuristic",
     }
 
@@ -161,7 +227,9 @@ Return JSON with this exact shape:
   "match_score": 75,
   "matched_skills": ["skill from profile that fits the job"],
   "missing_skills": ["important job requirement the profile lacks"],
-  "reason": "one short sentence explaining the decision"
+  "reason": "one short sentence explaining the decision",
+  "match_paragraph": "2-4 sentences explaining why the candidate matches this job, citing specific profile skills and job requirements.",
+  "mismatch_paragraph": "2-4 sentences explaining why the candidate may not match, citing missing skills, domain gaps, or seniority mismatches."
 }}
 
 Rules:
@@ -171,6 +239,8 @@ Rules:
 - matched_skills must come from the candidate lists only.
 - missing_skills should list only important gaps from the job description.
 - match_score is 0-100 indicating overall fit.
+- match_paragraph and mismatch_paragraph must be written in second person ("you") for the candidate.
+- Always provide both paragraphs, even when fit is strong or weak.
 """
 
     try:
@@ -181,12 +251,26 @@ Rules:
             temperature=0.1,
             max_attempts=2,
         )
+        matched_skills = _normalize_result_list(result.get("matched_skills"))
+        missing_skills = _normalize_result_list(result.get("missing_skills"))
+        reason = str(result.get("reason") or "").strip()
+        is_match = bool(result.get("is_match"))
+        match_paragraph, mismatch_paragraph = _build_match_paragraphs(
+            matched_skills=matched_skills,
+            missing_skills=missing_skills,
+            reason=reason,
+            is_match=is_match,
+            match_paragraph=str(result.get("match_paragraph") or ""),
+            mismatch_paragraph=str(result.get("mismatch_paragraph") or ""),
+        )
         return {
-            "is_match": bool(result.get("is_match")),
+            "is_match": is_match,
             "match_score": float(result.get("match_score") or 0),
-            "matched_skills": _normalize_result_list(result.get("matched_skills")),
-            "missing_skills": _normalize_result_list(result.get("missing_skills")),
-            "reason": str(result.get("reason") or "").strip(),
+            "matched_skills": matched_skills,
+            "missing_skills": missing_skills,
+            "reason": reason,
+            "match_paragraph": match_paragraph,
+            "mismatch_paragraph": mismatch_paragraph,
             "method": "ai",
         }
     except Exception as exc:
