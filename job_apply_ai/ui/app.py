@@ -5,11 +5,12 @@ This module provides a Flask web application for the job application AI agent.
 """
 
 import os
+import json
 import logging
 import secrets
 import tempfile
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session, jsonify, Response
 import zipfile
 import io
 
@@ -113,6 +114,8 @@ from job_apply_ai.storage.user_profile import (
     upsert_oauth_smtp_account,
 )
 from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form, uses_alibaba_provider
+from job_apply_ai.storage.dev_log import DEV_LOG_CATEGORIES, DevLogRepository
+from job_apply_ai.dev_logging import dev_agent, dev_task, dev_llm_context, invalidate_dev_mode_cache
 from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient, KNOWN_MODELS
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 from job_apply_ai.storage.exports import export_jobs
@@ -297,6 +300,7 @@ def _inject_cv_generation_lock():
         'status_labels': JOB_STATUS_LABELS,
         'status_icons': JOB_STATUS_ICONS,
         'status_badges': JOB_STATUS_BADGE_CLASSES,
+        'dev_mode': app_settings_repo.get_dev_mode(),
     }
 
 
@@ -547,7 +551,8 @@ def _generate_and_save_cover_letter(
     """Generate a cover letter docx and persist its structured content."""
     cl_filename, cl_path = _cover_letter_output_path(job)
     generator = CoverLetterGenerator()
-    cl_content = generator.generate(job, profile, tailored_content)
+    with dev_agent("CoverLetterGenerator", job_id=job_id):
+        cl_content = generator.generate(job, profile, tailored_content)
     CoverLetterBuilder().build(cl_path, cl_content)
 
     if job_id:
@@ -675,6 +680,7 @@ def _generate_rag_cv(
     """Generate a tailored CV using RAG + Ollama and the stored user profile."""
     output_filename, output_path = _cv_output_path(job)
     generator = RAGCVGenerator()
+    job_id = job.get("id") if isinstance(job.get("id"), int) else None
 
     def on_progress(step: str, message: str, percent: int) -> None:
         if task_id:
@@ -686,14 +692,23 @@ def _generate_rag_cv(
                 percent=percent,
             )
 
-    result = generator.generate_cv(
-        job,
-        output_path,
-        profile=profile,
-        cv_template_path=get_default_cv_template_path(),
-        reindex=reindex,
-        on_progress=on_progress,
-    )
+    with dev_agent(
+        "RAGCVGenerator",
+        task_id=task_id,
+        job_id=job_id,
+        context={
+            "job_title": job.get("title", ""),
+            "job_company": job.get("company", ""),
+        },
+    ):
+        result = generator.generate_cv(
+            job,
+            output_path,
+            profile=profile,
+            cv_template_path=get_default_cv_template_path(),
+            reindex=reindex,
+            on_progress=on_progress,
+        )
     result['output_filename'] = output_filename
     return result
 
@@ -724,50 +739,51 @@ def _run_single_cv_task(
     return_from_manage: bool,
     return_sort: str = '',
 ) -> None:
-    result = _generate_rag_cv(job, profile, task_id=task_id)
-    output_path = result['output_path']
-    output_filename = result['output_filename']
-    tailored_content = result.get('tailored_content', {})
+    with dev_task(task_id, "cv_generation", job_id=job_id):
+        result = _generate_rag_cv(job, profile, task_id=task_id)
+        output_path = result['output_path']
+        output_filename = result['output_filename']
+        tailored_content = result.get('tailored_content', {})
 
-    matched_categories = {
-        'Skills Matching Job Description': tailored_content.get('job_matched_skills', []),
-        'Job Skills Not In CV': tailored_content.get('job_skills_not_in_cv', []),
-        'Technical Skills': tailored_content.get('technical_skills', tailored_content.get('key_skills', [])),
-        'Tools & Platforms': tailored_content.get('tools_platforms', []),
-    }
-    job['matched_categories'] = matched_categories
-    job['cv_filename'] = output_filename
-    job_repo.update_job(job_id, job)
-    _save_job_cv_content(output_filename, tailored_content, chat_history=[])
+        matched_categories = {
+            'Skills Matching Job Description': tailored_content.get('job_matched_skills', []),
+            'Job Skills Not In CV': tailored_content.get('job_skills_not_in_cv', []),
+            'Technical Skills': tailored_content.get('technical_skills', tailored_content.get('key_skills', [])),
+            'Tools & Platforms': tailored_content.get('tools_platforms', []),
+        }
+        job['matched_categories'] = matched_categories
+        job['cv_filename'] = output_filename
+        job_repo.update_job(job_id, job)
+        _save_job_cv_content(output_filename, tailored_content, chat_history=[])
 
-    try:
-        cl_filename, _, cl_content = _generate_and_save_cover_letter(
-            job, job_id, profile, tailored_content, output_filename
+        try:
+            cl_filename, _, cl_content = _generate_and_save_cover_letter(
+                job, job_id, profile, tailored_content, output_filename
+            )
+        except Exception as cl_error:
+            logger.error('Cover letter generation failed for job %s: %s', job_id, cl_error)
+            cl_filename = ''
+            cl_content = {}
+
+        complete_task(
+            task_id,
+            {
+                'job': job,
+                'cv_filename': output_filename,
+                'cover_letter_filename': cl_filename,
+                'cover_letter': cl_content,
+                'output_path': output_path,
+                'matched_categories': matched_categories,
+                'tailored_content': tailored_content,
+                'analysis': result.get('analysis', {}),
+                'generation_meta': result.get('models', {}),
+                'rag_chunk_count': result.get('chunk_count', 0),
+                'return_folder': return_folder,
+                'return_search': return_search,
+                'return_sort': return_sort,
+                'return_from_manage': return_from_manage,
+            },
         )
-    except Exception as cl_error:
-        logger.error('Cover letter generation failed for job %s: %s', job_id, cl_error)
-        cl_filename = ''
-        cl_content = {}
-
-    complete_task(
-        task_id,
-        {
-            'job': job,
-            'cv_filename': output_filename,
-            'cover_letter_filename': cl_filename,
-            'cover_letter': cl_content,
-            'output_path': output_path,
-            'matched_categories': matched_categories,
-            'tailored_content': tailored_content,
-            'analysis': result.get('analysis', {}),
-            'generation_meta': result.get('models', {}),
-            'rag_chunk_count': result.get('chunk_count', 0),
-            'return_folder': return_folder,
-            'return_search': return_search,
-            'return_sort': return_sort,
-            'return_from_manage': return_from_manage,
-        },
-    )
 
 
 def _run_ats_friendly_task(
@@ -803,7 +819,8 @@ def _run_ats_friendly_task(
     )
     analyzer = ATSFriendlyAnalyzer()
     try:
-        analysis = analyzer.analyze(job=job, cv_content=cv_content, profile=profile)
+        with dev_agent("ATSFriendlyAnalyzer", task_id=task_id, job_id=job_id):
+            analysis = analyzer.analyze(job=job, cv_content=cv_content, profile=profile)
     except Exception as exc:
         logger.error('ATS analysis failed for job %s: %s', job_id, exc)
         fail_task(task_id, str(exc))
@@ -1170,24 +1187,33 @@ def _run_batch_cv_task(task_id: str, profile: dict, jobs: list[dict]) -> None:
 
         try:
             output_filename, output_path = _cv_output_path(job)
-            result = generator.generate_cv(
-                job,
-                output_path,
-                profile=profile,
-                cv_template_path=get_default_cv_template_path(),
-                reindex=False,
-                on_progress=lambda step, message, percent, bp=base_percent: update_task(
-                    task_id,
-                    step=step,
-                    message=message,
-                    percent=min(95, bp + percent // 10),
-                    meta={
-                        'current_index': index,
-                        'total_jobs': total,
-                        'current_job_title': title,
-                    },
-                ),
-            )
+            with dev_agent(
+                "RAGCVGenerator",
+                job_id=job_id,
+                context={
+                    "job_title": title,
+                    "batch_index": index,
+                    "batch_total": total,
+                },
+            ):
+                result = generator.generate_cv(
+                    job,
+                    output_path,
+                    profile=profile,
+                    cv_template_path=get_default_cv_template_path(),
+                    reindex=False,
+                    on_progress=lambda step, message, percent, bp=base_percent: update_task(
+                        task_id,
+                        step=step,
+                        message=message,
+                        percent=min(95, bp + percent // 10),
+                        meta={
+                            'current_index': index,
+                            'total_jobs': total,
+                            'current_job_title': title,
+                        },
+                    ),
+                )
             generated_cvs.append(result['output_path'])
             successful_jobs.append(job)
             if job_id:
@@ -1613,28 +1639,30 @@ def _clear_profile_import_session() -> None:
 
 def _run_profile_import_task(task_id: str, cv_path: str, current_profile: dict) -> None:
     try:
-        update_task(task_id, status='running', step='extracting', message='Reading CV document…', percent=10)
-        importer = ProfileImporter()
-        extracted = importer.extract_from_docx(cv_path)
+        with dev_task(task_id, "profile_import"):
+            update_task(task_id, status='running', step='extracting', message='Reading CV document…', percent=10)
+            importer = ProfileImporter()
+            with dev_agent("ProfileImporter"):
+                extracted = importer.extract_from_docx(cv_path)
 
-        update_task(
-            task_id,
-            step='merging',
-            message='Merging new details into your profile…',
-            percent=70,
-        )
-        merged_profile, changes = merge_profiles(current_profile, extracted)
-        summary_lines = summarize_import_changes(changes)
+            update_task(
+                task_id,
+                step='merging',
+                message='Merging new details into your profile…',
+                percent=70,
+            )
+            merged_profile, changes = merge_profiles(current_profile, extracted)
+            summary_lines = summarize_import_changes(changes)
 
-        complete_task(
-            task_id,
-            {
-                'form': profile_to_form_fields(merged_profile),
-                'import_summary': summary_lines,
-                'has_changes': import_has_changes(changes),
-                'merged_profile': merged_profile,
-            },
-        )
+            complete_task(
+                task_id,
+                {
+                    'form': profile_to_form_fields(merged_profile),
+                    'import_summary': summary_lines,
+                    'has_changes': import_has_changes(changes),
+                    'merged_profile': merged_profile,
+                },
+            )
     finally:
         if os.path.exists(cv_path):
             os.remove(cv_path)
@@ -1732,6 +1760,7 @@ def _llm_settings_context() -> dict:
         "active_provider_label": active_client.provider_label,
         "known_alibaba_models": list(KNOWN_MODELS),
         "settings": ollama_settings,
+        "dev_mode": all_settings.get("dev_mode", False),
     }
 
 
@@ -1758,11 +1787,113 @@ def app_settings():
             flash('Alibaba Cloud API key is required when Alibaba is selected for fast or main models.', 'error')
             return render_template('settings.html', **_llm_settings_context())
 
+        llm_settings["dev_mode"] = request.form.get("dev_mode") == "on"
         app_settings_repo.save_llm_settings(llm_settings)
+        invalidate_dev_mode_cache()
         flash('Settings saved. New model choices apply to the next AI task.', 'success')
         return redirect(url_for('app_settings'))
 
     return render_template('settings.html', **_llm_settings_context())
+
+
+@app.route('/dev/logs')
+def dev_logs_page():
+    """Developer log viewer (requires dev mode)."""
+    if not app_settings_repo.get_dev_mode():
+        flash('Enable Developer mode in Settings to view developer logs.', 'warning')
+        return redirect(url_for('app_settings'))
+    repo = DevLogRepository()
+    return render_template(
+        'dev_logs.html',
+        categories=DEV_LOG_CATEGORIES,
+        agents=repo.list_agents(),
+        total_logs=repo.count_logs(),
+    )
+
+
+@app.route('/api/dev/logs')
+def api_dev_logs():
+    """JSON API for developer logs."""
+    if not app_settings_repo.get_dev_mode():
+        return jsonify({'error': 'Developer mode is disabled'}), 403
+    repo = DevLogRepository()
+    category = request.args.get('category', '').strip()
+    agent = request.args.get('agent', '').strip()
+    search = request.args.get('search', '').strip()
+    task_id = request.args.get('task_id', '').strip()
+    since_id = request.args.get('since_id', 0, type=int)
+    limit = request.args.get('limit', 200, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    logs = repo.list_logs(
+        category=category,
+        agent=agent,
+        search=search,
+        task_id=task_id,
+        since_id=since_id,
+        limit=limit,
+        offset=offset,
+    )
+    return jsonify({
+        'logs': logs,
+        'total': repo.count_logs(category=category, agent=agent, search=search, task_id=task_id),
+    })
+
+
+@app.route('/api/dev/logs', methods=['DELETE'])
+def api_dev_logs_clear():
+    """Clear developer logs (all or filtered)."""
+    if not app_settings_repo.get_dev_mode():
+        return jsonify({'error': 'Developer mode is disabled'}), 403
+    payload = request.get_json(silent=True) or {}
+    category = str(payload.get('category') or request.args.get('category', '')).strip()
+    task_id = str(payload.get('task_id') or request.args.get('task_id', '')).strip()
+    deleted = DevLogRepository().clear_logs(category=category, task_id=task_id)
+    return jsonify({'deleted': deleted})
+
+
+@app.route('/api/dev/logs/download')
+def api_dev_logs_download():
+    """Download developer logs as JSON or plain text."""
+    if not app_settings_repo.get_dev_mode():
+        return jsonify({'error': 'Developer mode is disabled'}), 403
+    repo = DevLogRepository()
+    category = request.args.get('category', '').strip()
+    agent = request.args.get('agent', '').strip()
+    search = request.args.get('search', '').strip()
+    task_id = request.args.get('task_id', '').strip()
+    fmt = request.args.get('format', 'json').strip().lower()
+    logs = repo.list_logs(
+        category=category,
+        agent=agent,
+        search=search,
+        task_id=task_id,
+        limit=10000,
+        offset=0,
+    )
+    logs.reverse()
+
+    if fmt == 'txt':
+        lines = []
+        for entry in logs:
+            lines.append(
+                f"[{entry['created_at']}] {entry['category']}/{entry['agent']}/{entry['event']}: {entry['message']}"
+            )
+            if entry.get('data'):
+                lines.append(json.dumps(entry['data'], ensure_ascii=False, indent=2))
+            lines.append('')
+        body = '\n'.join(lines)
+        return Response(
+            body,
+            mimetype='text/plain; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename=dev-logs.txt'},
+        )
+
+    body = json.dumps(logs, ensure_ascii=False, indent=2)
+    return Response(
+        body,
+        mimetype='application/json; charset=utf-8',
+        headers={'Content-Disposition': 'attachment; filename=dev-logs.json'},
+    )
 
 
 @app.route('/profile/oauth/google/start')
@@ -2064,71 +2195,85 @@ def _run_job_match_analyze_task(
     return_search: str,
     return_sort: str = '',
 ) -> None:
-    total = len(jobs)
+    with dev_task(task_id, "job_match_analyze"):
+        total = len(jobs)
 
-    def on_progress(index: int, _total: int, job: dict) -> None:
-        percent = 5 + int(((index + 1) / max(total, 1)) * 90)
-        update_task(
-            task_id,
-            status='running',
-            step='analyzing',
-            message=f"Analyzing job {index + 1} of {total}: {job.get('title', 'Untitled')}",
-            percent=percent,
-            meta={
-                'current_index': index + 1,
-                'total_jobs': total,
-                'current_job_title': job.get('title', ''),
-            },
-        )
-
-    def should_continue() -> bool:
-        try:
-            task_control_checkpoint(task_id)
-            return True
-        except TaskStopped:
-            return False
-
-    try:
-        update_task(
-            task_id,
-            status='running',
-            step='starting',
-            message='Starting AI profile match analysis…',
-            percent=5,
-            meta={'total_jobs': total, 'min_match_score': min_match_score},
-        )
-        result = analyze_jobs_with_threshold(
-            jobs,
-            profile,
-            min_match_score,
-            on_progress=on_progress,
-            should_continue=should_continue,
-        )
-
-        for job, updated in zip(jobs, result['jobs']):
-            job_id = job.get('id')
-            if not job_id:
-                continue
-            job_repo.update_job(
-                job_id,
-                {
-                    'matched_categories': updated.get('matched_categories', {}),
-                    'matched_skills': updated.get('matched_skills', job.get('matched_skills', [])),
+        def on_progress(index: int, _total: int, job: dict) -> None:
+            percent = 5 + int(((index + 1) / max(total, 1)) * 90)
+            update_task(
+                task_id,
+                status='running',
+                step='analyzing',
+                message=f"Analyzing job {index + 1} of {total}: {job.get('title', 'Untitled')}",
+                percent=percent,
+                meta={
+                    'current_index': index + 1,
+                    'total_jobs': total,
+                    'current_job_title': job.get('title', ''),
                 },
             )
-            previous_status = job.get('workflow_status') or DEFAULT_JOB_STATUS
-            new_status = updated.get('workflow_status') or previous_status
-            if new_status != previous_status:
-                job_repo.update_job_status(job_id, new_status)
 
-        stats = result['stats']
-        current_task = get_task(task_id)
-        stopped = bool(current_task and current_task.get('control') == 'stop')
-        if stopped:
-            analyzed = stats.get('analyzed', 0)
-            if analyzed == 0:
-                fail_task(task_id, 'Profile match analysis stopped before any jobs were analyzed.')
+        def should_continue() -> bool:
+            try:
+                task_control_checkpoint(task_id)
+                return True
+            except TaskStopped:
+                return False
+
+        try:
+            update_task(
+                task_id,
+                status='running',
+                step='starting',
+                message='Starting AI profile match analysis…',
+                percent=5,
+                meta={'total_jobs': total, 'min_match_score': min_match_score},
+            )
+            result = analyze_jobs_with_threshold(
+                jobs,
+                profile,
+                min_match_score,
+                on_progress=on_progress,
+                should_continue=should_continue,
+            )
+
+            for job, updated in zip(jobs, result['jobs']):
+                job_id = job.get('id')
+                if not job_id:
+                    continue
+                job_repo.update_job(
+                    job_id,
+                    {
+                        'matched_categories': updated.get('matched_categories', {}),
+                        'matched_skills': updated.get('matched_skills', job.get('matched_skills', [])),
+                    },
+                )
+                previous_status = job.get('workflow_status') or DEFAULT_JOB_STATUS
+                new_status = updated.get('workflow_status') or previous_status
+                if new_status != previous_status:
+                    job_repo.update_job_status(job_id, new_status)
+
+            stats = result['stats']
+            current_task = get_task(task_id)
+            stopped = bool(current_task and current_task.get('control') == 'stop')
+            if stopped:
+                analyzed = stats.get('analyzed', 0)
+                if analyzed == 0:
+                    fail_task(task_id, 'Profile match analysis stopped before any jobs were analyzed.')
+                    return
+                complete_task(
+                    task_id,
+                    {
+                        'stats': stats,
+                        'return_folder': return_folder,
+                        'return_search': return_search,
+                        'return_sort': return_sort,
+                        'stopped': True,
+                    },
+                    message=f'Profile match analysis stopped — analyzed {analyzed} of {total} jobs',
+                )
                 return
+
             complete_task(
                 task_id,
                 {
@@ -2136,30 +2281,17 @@ def _run_job_match_analyze_task(
                     'return_folder': return_folder,
                     'return_search': return_search,
                     'return_sort': return_sort,
-                    'stopped': True,
                 },
-                message=f'Profile match analysis stopped — analyzed {analyzed} of {total} jobs',
             )
-            return
-
-        complete_task(
-            task_id,
-            {
-                'stats': stats,
-                'return_folder': return_folder,
-                'return_search': return_search,
-                'return_sort': return_sort,
-            },
-        )
-        update_task(
-            task_id,
-            step='complete',
-            message='Profile match analysis complete',
-            percent=100,
-        )
-    except Exception as exc:
-        logger.error('Job match analysis failed: %s', exc)
-        fail_task(task_id, str(exc))
+            update_task(
+                task_id,
+                step='complete',
+                message='Profile match analysis complete',
+                percent=100,
+            )
+        except Exception as exc:
+            logger.error('Job match analysis failed: %s', exc)
+            fail_task(task_id, str(exc))
 
 
 @app.route('/jobs/manage/analyze-match', methods=['POST'])
@@ -2910,12 +3042,13 @@ def ats_suggestion_action(job_id):
 
         if action == 'reapply':
             analyzer = ATSFriendlyAnalyzer()
-            refreshed = analyzer.reapply_suggestion(
-                job=job,
-                cv_content=current_content,
-                profile=profile,
-                suggestion=suggestion,
-            )
+            with dev_agent("ATSFriendlyAnalyzer", job_id=job_id):
+                refreshed = analyzer.reapply_suggestion(
+                    job=job,
+                    cv_content=current_content,
+                    profile=profile,
+                    suggestion=suggestion,
+                )
             analysis = replace_suggestion(analysis, suggestion_id, refreshed)
             store['ats_analysis'] = analysis
             _save_job_cv_content(cv_filename, current_content, store=store)
@@ -2987,6 +3120,7 @@ def document_chat(job_id):
     profile = profile_repo.get_profile()
 
     try:
+        endpoint = f"POST /api/jobs/{job_id}/documents/chat"
         if document_type == 'cover_letter':
             cl_filename = job.get('cover_letter_filename', '')
             cl_path = os.path.join(app.config['CV_OUTPUT_DIR'], cl_filename)
@@ -2995,14 +3129,20 @@ def document_chat(job_id):
 
             chat_history = get_active_chat_messages(store, 'cover_letter')
             editor = CoverLetterChatEditor()
-            result = editor.modify(
-                current_content=store['cover_letter'],
-                user_message=user_message,
-                job=job,
-                profile=profile,
-                tailored_cv_content=store.get('tailored_content', {}),
+            with dev_llm_context(
+                endpoint=endpoint,
+                operation="cover_letter_chat",
                 chat_history=chat_history,
-            )
+                context={"user_message": user_message, "document_type": document_type},
+            ), dev_agent("CoverLetterChatEditor", job_id=job_id):
+                result = editor.modify(
+                    current_content=store['cover_letter'],
+                    user_message=user_message,
+                    job=job,
+                    profile=profile,
+                    tailored_cv_content=store.get('tailored_content', {}),
+                    chat_history=chat_history,
+                )
             updated_content = result['content']
             reply = result['reply']
             editor.rebuild_document(cl_path, updated_content)
@@ -3045,15 +3185,21 @@ def document_chat(job_id):
         )
 
         editor = CVChatEditor()
-        result = editor.modify(
-            current_content=current_content,
-            user_message=user_message,
-            job=job,
-            profile=profile,
+        with dev_llm_context(
+            endpoint=endpoint,
+            operation="cv_chat",
             chat_history=chat_history,
-            preview_lines=current_preview_lines,
-            preview_customized=bool(store.get('cv_preview_customized')),
-        )
+            context={"user_message": user_message, "document_type": document_type},
+        ), dev_agent("CVChatEditor", job_id=job_id):
+            result = editor.modify(
+                current_content=current_content,
+                user_message=user_message,
+                job=job,
+                profile=profile,
+                chat_history=chat_history,
+                preview_lines=current_preview_lines,
+                preview_customized=bool(store.get('cv_preview_customized')),
+            )
         updated_content = result['content']
         reply = result['reply']
 

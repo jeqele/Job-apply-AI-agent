@@ -159,6 +159,22 @@ def init_db(db_path: str | None = None) -> None:
                 data TEXT NOT NULL DEFAULT '{}',
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS dev_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL DEFAULT 'system',
+                agent TEXT NOT NULL DEFAULT '',
+                event TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL DEFAULT '',
+                data TEXT NOT NULL DEFAULT '{}',
+                task_id TEXT NOT NULL DEFAULT '',
+                job_id INTEGER,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dev_logs_category ON dev_logs(category);
+            CREATE INDEX IF NOT EXISTS idx_dev_logs_task_id ON dev_logs(task_id);
+            CREATE INDEX IF NOT EXISTS idx_dev_logs_created_at ON dev_logs(created_at);
             """
         )
         conn.commit()

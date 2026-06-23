@@ -138,3 +138,20 @@ def test_save_llm_settings_preserves_alibaba_api_key(monkeypatch, tmp_path):
         }
     )
     assert repo.get_alibaba_settings()["api_key"] == "sk-secret"
+
+
+def test_dev_mode_round_trip(monkeypatch, tmp_path):
+    from job_apply_ai.storage.app_settings import normalize_dev_mode
+
+    assert normalize_dev_mode("on") is True
+    assert normalize_dev_mode("false") is False
+
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setenv("JOB_APPLY_AI_DB", db_path)
+    init_db(db_path)
+
+    repo = AppSettingsRepository()
+    repo.save_dev_mode(True)
+    assert repo.get_dev_mode() is True
+    repo.save_llm_settings({"dev_mode": False})
+    assert repo.get_dev_mode() is False

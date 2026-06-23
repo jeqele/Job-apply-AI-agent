@@ -30,6 +30,7 @@ DEFAULT_ALIBABA_SETTINGS: dict[str, Any] = {
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
 DEFAULT_FAST_MODEL_PROVIDER = os.environ.get("LLM_FAST_PROVIDER", DEFAULT_LLM_PROVIDER)
 DEFAULT_MAIN_MODEL_PROVIDER = os.environ.get("LLM_MAIN_PROVIDER", DEFAULT_LLM_PROVIDER)
+DEFAULT_DEV_MODE = os.environ.get("DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
 
 OLLAMA_SETTING_KEYS = ("base_url", "fast_model", "main_model", "num_predict")
 ALIBABA_SETTING_KEYS = ("api_key", "base_url", "fast_model", "main_model", "num_predict")
@@ -165,6 +166,14 @@ def alibaba_settings_from_form(
     )
 
 
+def normalize_dev_mode(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return DEFAULT_DEV_MODE
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def llm_settings_from_form(
     form_data: Any,
     *,
@@ -188,6 +197,7 @@ def llm_settings_from_form(
     return {
         "llm_provider": legacy_provider,
         **providers,
+        "dev_mode": normalize_dev_mode(scalar_data.get("dev_mode")),
         "ollama": ollama_settings_from_form(form_data),
         "alibaba": alibaba_settings_from_form(
             form_data,
@@ -215,6 +225,7 @@ class AppSettingsRepository:
         return {
             "llm_provider": legacy_provider,
             **providers,
+            "dev_mode": normalize_dev_mode(data.get("dev_mode")),
             "ollama": normalize_ollama_settings(data.get("ollama")),
             "alibaba": normalize_alibaba_settings(data.get("alibaba")),
         }
@@ -224,9 +235,18 @@ class AppSettingsRepository:
         return {
             "llm_provider": normalize_llm_provider(None),
             **providers,
+            "dev_mode": DEFAULT_DEV_MODE,
             "ollama": normalize_ollama_settings(None),
             "alibaba": normalize_alibaba_settings(None),
         }
+
+    def get_dev_mode(self) -> bool:
+        return bool(self.get_settings().get("dev_mode"))
+
+    def save_dev_mode(self, enabled: bool) -> dict[str, Any]:
+        current = self.get_settings()
+        current["dev_mode"] = normalize_dev_mode(enabled)
+        return self._persist(current)
 
     def get_ollama_settings(self) -> dict[str, Any]:
         return self.get_settings()["ollama"]
@@ -267,6 +287,8 @@ class AppSettingsRepository:
             if not incoming.get("api_key") and current["alibaba"].get("api_key"):
                 incoming["api_key"] = current["alibaba"]["api_key"]
             current["alibaba"] = incoming
+        if "dev_mode" in data:
+            current["dev_mode"] = normalize_dev_mode(data["dev_mode"])
         return self._persist(current)
 
     def save_settings(self, data: dict[str, Any]) -> dict[str, Any]:

@@ -51,6 +51,182 @@ class LLMClient(Protocol):
     ) -> dict: ...
 
 
+class DevLoggingLLMClient:
+    """Wraps an LLM client to log conversations when developer mode is on."""
+
+    def __init__(self, client: LLMClient):
+        self._client = client
+
+    @property
+    def fast_model(self) -> str:
+        return self._client.fast_model
+
+    @property
+    def main_model(self) -> str:
+        return self._client.main_model
+
+    @property
+    def num_predict(self) -> int:
+        return self._client.num_predict
+
+    @property
+    def provider_label(self) -> str:
+        return self._client.provider_label
+
+    def is_available(self) -> bool:
+        return self._client.is_available()
+
+    def list_models(self, refresh: bool = False) -> list[str]:
+        return self._client.list_models(refresh=refresh)
+
+    def validate_models(self) -> dict[str, str]:
+        return self._client.validate_models()
+
+    def _parse_json_response(self, raw: str) -> dict[str, Any]:
+        parse = getattr(self._client, "_parse_json_response", None)
+        if callable(parse):
+            return parse(raw)
+        import json
+
+        return json.loads(raw)
+
+    def _generate_raw(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        system: str | None = None,
+        temperature: float = 0.3,
+        json_format: bool = False,
+        json_schema: dict[str, Any] | None = None,
+        num_predict: int | None = None,
+    ) -> str:
+        return self._client.generate(
+            prompt,
+            model=model,
+            system=system,
+            temperature=temperature,
+            json_format=json_format,
+            json_schema=json_schema,
+            num_predict=num_predict,
+        )
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        system: str | None = None,
+        temperature: float = 0.3,
+        json_format: bool = False,
+        json_schema: dict[str, Any] | None = None,
+        num_predict: int | None = None,
+    ) -> str:
+        from job_apply_ai.dev_logging import log_llm_conversation
+
+        resolved_model = model or self._client.main_model
+        response = self._generate_raw(
+            prompt,
+            model=model,
+            system=system,
+            temperature=temperature,
+            json_format=json_format,
+            json_schema=json_schema,
+            num_predict=num_predict,
+        )
+        log_llm_conversation(
+            call_type="generate",
+            provider=self._client.provider_label,
+            model=resolved_model,
+            system=system,
+            prompt=prompt,
+            raw_response=response,
+            temperature=temperature,
+            schema=json_schema,
+            json_format=json_format,
+        )
+        return response
+
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        system: str | None = None,
+        temperature: float = 0.2,
+        max_attempts: int = 2,
+        schema: dict[str, Any] | None = None,
+        num_predict: int | None = None,
+    ) -> dict:
+        from job_apply_ai.dev_logging import log_llm_conversation
+
+        resolved_model = model or self._client.main_model
+        json_system = (system or "") + " Return only a single valid JSON object."
+        last_error: Exception | None = None
+        last_raw = ""
+
+        for attempt in range(max_attempts):
+            attempt_prompt = prompt
+            if attempt > 0:
+                attempt_prompt = (
+                    f"{prompt}\n\n"
+                    "Your previous answer was not valid JSON. "
+                    "Reply again with ONLY one JSON object. "
+                    "Use double quotes for all keys and strings. "
+                    "Do not include markdown fences, comments, trailing commas, or prose."
+                )
+
+            raw = self._generate_raw(
+                attempt_prompt,
+                model=model,
+                system=json_system.strip(),
+                temperature=max(temperature - (attempt * 0.05), 0.05),
+                json_format=schema is None,
+                json_schema=schema,
+                num_predict=num_predict,
+            )
+            last_raw = raw
+            try:
+                parsed = self._parse_json_response(raw)
+                log_llm_conversation(
+                    call_type="generate_json",
+                    provider=self._client.provider_label,
+                    model=resolved_model,
+                    system=system,
+                    prompt=attempt_prompt,
+                    raw_response=raw,
+                    parsed_response=parsed,
+                    temperature=temperature,
+                    schema=schema,
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                )
+                return parsed
+            except ValueError as exc:
+                last_error = exc
+                log_llm_conversation(
+                    call_type="generate_json",
+                    provider=self._client.provider_label,
+                    model=resolved_model,
+                    system=system,
+                    prompt=attempt_prompt,
+                    raw_response=raw,
+                    temperature=temperature,
+                    schema=schema,
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                )
+                logger.warning(
+                    "Failed to parse JSON on attempt %s/%s via %s: %s",
+                    attempt + 1,
+                    max_attempts,
+                    self._client.provider_label,
+                    exc,
+                )
+
+        raise ValueError(str(last_error) if last_error else "Model response was not valid JSON")
+
+
 class CompositeLLMClient:
     """Routes fast and main model calls to different LLM providers."""
 
@@ -161,6 +337,12 @@ def _build_alibaba_client(settings: dict[str, Any]) -> AlibabaClient:
     )
 
 
+def _maybe_wrap_dev_logging(client: LLMClient, settings: dict[str, Any]) -> LLMClient:
+    if settings.get("dev_mode"):
+        return DevLoggingLLMClient(client)
+    return client
+
+
 def build_llm_client(settings: dict[str, Any]) -> LLMClient:
     """Build an LLM client from normalized app settings."""
     fast_provider = settings.get("fast_model_provider", settings.get("llm_provider", "ollama"))
@@ -168,18 +350,18 @@ def build_llm_client(settings: dict[str, Any]) -> LLMClient:
 
     if fast_provider == main_provider:
         if fast_provider == "alibaba":
-            return _build_alibaba_client(settings)
-        return _build_ollama_client(settings)
+            client: LLMClient = _build_alibaba_client(settings)
+        else:
+            client = _build_ollama_client(settings)
+        return _maybe_wrap_dev_logging(client, settings)
 
-    fast_client = (
-        _build_alibaba_client(settings)
-        if fast_provider == "alibaba"
-        else _build_ollama_client(settings)
+    fast_client = _maybe_wrap_dev_logging(
+        _build_alibaba_client(settings) if fast_provider == "alibaba" else _build_ollama_client(settings),
+        settings,
     )
-    main_client = (
-        _build_alibaba_client(settings)
-        if main_provider == "alibaba"
-        else _build_ollama_client(settings)
+    main_client = _maybe_wrap_dev_logging(
+        _build_alibaba_client(settings) if main_provider == "alibaba" else _build_ollama_client(settings),
+        settings,
     )
     return CompositeLLMClient(fast_client, main_client)
 

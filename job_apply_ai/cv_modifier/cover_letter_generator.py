@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_llm_context
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +73,21 @@ Return JSON with this exact shape:
   "signature_name": "candidate full name"
 }}
 """
-        result = self.llm.generate_json(
-            prompt,
-            model=self.llm.main_model,
-            system=GENERATION_SYSTEM_PROMPT,
-            temperature=0.3,
-            max_attempts=2,
-        )
+        with dev_llm_context(
+            operation="cover_letter_generate",
+            context={
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "candidate_name": profile.get("full_name", ""),
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=GENERATION_SYSTEM_PROMPT,
+                temperature=0.3,
+                max_attempts=2,
+            )
         return self.normalize(result, profile, job)
 
     @staticmethod

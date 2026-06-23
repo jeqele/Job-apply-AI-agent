@@ -1,0 +1,99 @@
+{# Live developer log panel for progress pages. Requires dev_mode and optional task_id. #}
+{% if dev_mode %}
+<div class="dev-log-panel card mt-4" id="devLogPanel">
+    <div class="card-header py-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <span class="fw-semibold small"><i class="fas fa-terminal me-1"></i>Developer logs</span>
+        <div class="d-flex flex-wrap gap-2">
+            <a href="{{ url_for('dev_logs_page') }}{% if task_id is defined and task_id %}?task_id={{ task_id }}{% endif %}"
+               class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener">Open full viewer</a>
+            <a href="{{ url_for('api_dev_logs_download', format='json') }}{% if task_id is defined and task_id %}&task_id={{ task_id }}{% endif %}"
+               class="btn btn-sm btn-outline-primary">Download JSON</a>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div id="devLogStream" class="dev-log-stream small font-monospace"></div>
+    </div>
+</div>
+<style>
+    .dev-log-panel .dev-log-stream {
+        max-height: 220px;
+        overflow-y: auto;
+        padding: 0.75rem 1rem;
+        background: #0b1220;
+        color: #d8e2ef;
+    }
+    .dev-log-entry {
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        padding: 0.35rem 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .dev-log-entry .meta { color: #8aa0b8; }
+    .dev-log-entry.agent .label { color: #6ea8fe; }
+    .dev-log-entry.llm .label { color: #75b798; }
+    .dev-log-entry.task .label { color: #ffda6a; }
+    .dev-log-entry.system .label { color: #adb5bd; }
+</style>
+<script>
+(function () {
+    const stream = document.getElementById('devLogStream');
+    if (!stream) return;
+
+    let taskId = {{ task_id|tojson if task_id is defined else 'null' }};
+    window.setDevLogTaskId = function (id) { taskId = id || null; };
+    let sinceId = 0;
+    const pollMs = 2000;
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function renderEntry(entry) {
+        const label = [entry.category, entry.agent, entry.event].filter(Boolean).join(' / ');
+        const detail = entry.message || '';
+        let data = '';
+        if (entry.data && Object.keys(entry.data).length) {
+            if (entry.event === 'conversation' && entry.data.messages) {
+                data = '\n' + entry.data.messages.map(function (m) {
+                    return '[' + m.role + ']\n' + m.content;
+                }).join('\n\n');
+            } else {
+                data = '\n' + JSON.stringify(entry.data, null, 2);
+            }
+        }
+        const line = document.createElement('div');
+        line.className = 'dev-log-entry ' + (entry.category || 'system');
+        line.innerHTML =
+            '<span class="meta">[' + escapeHtml(entry.created_at || '') + ']</span> ' +
+            '<span class="label">' + escapeHtml(label) + '</span>' +
+            (detail ? '\n' + escapeHtml(detail) : '') +
+            (data ? '\n' + escapeHtml(data) : '');
+        stream.appendChild(line);
+        stream.scrollTop = stream.scrollHeight;
+    }
+
+    async function poll() {
+        try {
+            const params = new URLSearchParams({ since_id: String(sinceId), limit: '100' });
+            if (taskId) params.set('task_id', taskId);
+            const response = await fetch('/api/dev/logs?' + params.toString());
+            if (!response.ok) return;
+            const payload = await response.json();
+            const logs = (payload.logs || []).slice().reverse();
+            logs.forEach(function (entry) {
+                if (entry.id > sinceId) sinceId = entry.id;
+                renderEntry(entry);
+            });
+        } catch (err) {
+            /* ignore transient network errors */
+        }
+    }
+
+    poll();
+    setInterval(poll, pollMs);
+})();
+</script>
+{% endif %}

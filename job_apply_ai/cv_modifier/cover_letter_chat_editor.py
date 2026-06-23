@@ -10,6 +10,7 @@ from job_apply_ai.cv_modifier.chat_context import build_job_context, build_profi
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_llm_context
 
 logger = logging.getLogger(__name__)
 
@@ -88,15 +89,25 @@ Return JSON with this exact shape:
     "candidate_email": "string",
     "candidate_phone": "string"
   }}
-}}
+  }}
 """
-        result = self.llm.generate_json(
-            prompt,
-            model=self.llm.main_model,
-            system=CHAT_SYSTEM_PROMPT,
-            temperature=0.2,
-            max_attempts=2,
-        )
+        with dev_llm_context(
+            operation="cover_letter_chat_edit",
+            chat_history=chat_history or [],
+            context={
+                "user_message": user_message,
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "document": "cover_letter",
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=CHAT_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_attempts=2,
+            )
         reply = str(result.get("reply", "")).strip() or "I've updated your cover letter based on your request."
         updated = CoverLetterGenerator.normalize(
             result.get("content") or current_content,

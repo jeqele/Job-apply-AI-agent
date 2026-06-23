@@ -247,11 +247,13 @@
                 return;
             }
             taskId = data.task_id;
+            if (window.setDevLogTaskId) window.setDevLogTaskId(taskId);
             pollTimer = setInterval(pollStatus, 900);
             pollStatus();
         }
 
         startTask();
     </script>
+    {% include '_dev_log_panel.html' %}
 </body>
 </html>

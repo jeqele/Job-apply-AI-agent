@@ -12,6 +12,7 @@ from job_apply_ai.cv_modifier.chat_context import build_job_context, cv_content_
 from job_apply_ai.cv_modifier.cv_chat_editor import CONTENT_CHANGE_KEYS, CVChatEditor
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_llm_context
 from job_apply_ai.storage.user_profile import profile_to_text
 
 logger = logging.getLogger(__name__)
@@ -240,14 +241,22 @@ class ATSFriendlyAnalyzer:
         self.llm.validate_models()
 
         prompt = _build_analysis_prompt(job=job, cv_content=cv_content, profile=profile)
-        result = self.llm.generate_json(
-            prompt,
-            model=self.llm.main_model,
-            system=ATS_SYSTEM_PROMPT,
-            temperature=0.2,
-            max_attempts=3,
-            schema=ATS_ANALYSIS_SCHEMA,
-        )
+        with dev_llm_context(
+            operation="ats_analysis",
+            context={
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "cv_fields": list(cv_content.keys()) if isinstance(cv_content, dict) else [],
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=ATS_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_attempts=3,
+                schema=ATS_ANALYSIS_SCHEMA,
+            )
         analysis = normalize_ats_analysis(result)
         analysis["method"] = "ai"
         return analysis
@@ -296,14 +305,22 @@ Rules:
 - Only modify fields present in changes; use the same CONTENT_CHANGE_KEYS as the CV JSON.
 - Never invent facts beyond the profile and current CV content.
 """
-        result = self.llm.generate_json(
-            prompt,
-            model=self.llm.main_model,
-            system=ATS_SYSTEM_PROMPT,
-            temperature=0.25,
-            max_attempts=3,
-            schema=SUGGESTION_REAPPLY_SCHEMA,
-        )
+        with dev_llm_context(
+            operation="ats_suggestion_reapply",
+            context={
+                "job_title": job.get("title", ""),
+                "suggestion_id": suggestion.get("id", ""),
+                "suggestion_title": suggestion.get("title", ""),
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=ATS_SYSTEM_PROMPT,
+                temperature=0.25,
+                max_attempts=3,
+                schema=SUGGESTION_REAPPLY_SCHEMA,
+            )
         refreshed = _normalize_suggestion(
             {
                 **suggestion,

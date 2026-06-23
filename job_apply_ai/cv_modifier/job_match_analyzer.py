@@ -7,6 +7,7 @@ import re
 from typing import Any, Callable
 
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_agent, dev_llm_context
 from job_apply_ai.storage.user_profile import (
     format_skills_line,
     normalize_profile,
@@ -343,35 +344,43 @@ Rules:
 """
 
     try:
-        result = client.generate_json(
-            prompt,
-            model=client.fast_model,
-            system=MATCH_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_attempts=2,
-        )
-        matched_skills = _normalize_result_list(result.get("matched_skills"))
-        missing_skills = _normalize_result_list(result.get("missing_skills"))
-        reason = str(result.get("reason") or "").strip()
-        is_match = bool(result.get("is_match"))
-        match_paragraph, mismatch_paragraph = _build_match_paragraphs(
-            matched_skills=matched_skills,
-            missing_skills=missing_skills,
-            reason=reason,
-            is_match=is_match,
-            match_paragraph=str(result.get("match_paragraph") or ""),
-            mismatch_paragraph=str(result.get("mismatch_paragraph") or ""),
-        )
-        return {
-            "is_match": is_match,
-            "match_score": float(result.get("match_score") or 0),
-            "matched_skills": matched_skills,
-            "missing_skills": missing_skills,
-            "reason": reason,
-            "match_paragraph": match_paragraph,
-            "mismatch_paragraph": mismatch_paragraph,
-            "method": "ai",
-        }
+        job_id = job.get("id") if isinstance(job.get("id"), int) else None
+        with dev_agent("JobMatchAnalyzer", job_id=job_id), dev_llm_context(
+            operation="job_match_analyze",
+            context={
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+            },
+        ):
+            result = client.generate_json(
+                prompt,
+                model=client.fast_model,
+                system=MATCH_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_attempts=2,
+            )
+            matched_skills = _normalize_result_list(result.get("matched_skills"))
+            missing_skills = _normalize_result_list(result.get("missing_skills"))
+            reason = str(result.get("reason") or "").strip()
+            is_match = bool(result.get("is_match"))
+            match_paragraph, mismatch_paragraph = _build_match_paragraphs(
+                matched_skills=matched_skills,
+                missing_skills=missing_skills,
+                reason=reason,
+                is_match=is_match,
+                match_paragraph=str(result.get("match_paragraph") or ""),
+                mismatch_paragraph=str(result.get("mismatch_paragraph") or ""),
+            )
+            return {
+                "is_match": is_match,
+                "match_score": float(result.get("match_score") or 0),
+                "matched_skills": matched_skills,
+                "missing_skills": missing_skills,
+                "reason": reason,
+                "match_paragraph": match_paragraph,
+                "mismatch_paragraph": mismatch_paragraph,
+                "method": "ai",
+            }
     except Exception as exc:
         logger.warning("AI job match failed for %r: %s", job.get("title", ""), exc)
         return heuristic_job_match(job, profile)

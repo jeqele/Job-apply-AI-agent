@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_llm_context
 from job_apply_ai.storage.user_profile import normalize_profile
 from job_apply_ai.utils.helpers import extract_text_from_docx
 
@@ -96,13 +97,17 @@ Rules:
 3. Preserve bullet achievements under the correct role or project.
 4. Use empty strings or empty lists when a field is missing.
 """
-        content = self.llm.generate_json(
-            prompt,
-            model=self.llm.fast_model,
-            system=EXTRACT_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_attempts=2,
-        )
+        with dev_llm_context(
+            operation="profile_import_extract",
+            context={"cv_text_length": len(cv_text)},
+        ):
+            content = self.llm.generate_json(
+                prompt,
+                model=self.llm.fast_model,
+                system=EXTRACT_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_attempts=2,
+            )
         return normalize_profile(content)
 
     def _extract_with_heuristics(self, cv_text: str) -> dict[str, Any]:

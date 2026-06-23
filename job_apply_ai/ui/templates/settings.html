@@ -280,6 +280,25 @@
                 </div>
             {% endif %}
 
+            <div class="card">
+                <div class="card-header py-3">
+                    <i class="fas fa-code section-icon"></i>Developer mode
+                </div>
+                <div class="card-body">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" role="switch" id="dev_mode" name="dev_mode" value="on"
+                               {% if dev_mode %}checked{% endif %}>
+                        <label class="form-check-label" for="dev_mode">Enable developer logging</label>
+                    </div>
+                    <div class="hint mb-0">
+                        When enabled, agent activity and full LLM conversations are recorded.
+                        View, search, filter, and download logs on the
+                        <a href="{{ url_for('dev_logs_page') }}">developer logs</a> page.
+                        Progress screens also show a live log panel during background tasks.
+                    </div>
+                </div>
+            </div>
+
             <div class="d-flex flex-wrap gap-2">
                 <button type="submit" class="btn btn-primary btn-lg">
                     <i class="fas fa-save me-2"></i>Save settings

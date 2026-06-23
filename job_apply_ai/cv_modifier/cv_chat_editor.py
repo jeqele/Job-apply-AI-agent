@@ -18,6 +18,7 @@ from job_apply_ai.cv_modifier.chat_context import (
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_llm_context
 from job_apply_ai.storage.user_profile import get_default_cv_template_path
 
 logger = logging.getLogger(__name__)
@@ -122,16 +123,26 @@ Return JSON with this exact shape:
     "professional_summary": "only when changed",
     "experience_highlights": []
   }}
-}}
+  }}
 """
-        result = self.llm.generate_json(
-            prompt,
-            model=self.llm.main_model,
-            system=CHAT_SYSTEM_PROMPT,
-            temperature=0.2,
-            max_attempts=3,
-            schema=CV_CHAT_RESPONSE_SCHEMA,
-        )
+        with dev_llm_context(
+            operation="cv_chat_edit",
+            chat_history=chat_history or [],
+            context={
+                "user_message": user_message,
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "document": "cv",
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=CHAT_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_attempts=3,
+                schema=CV_CHAT_RESPONSE_SCHEMA,
+            )
         reply = str(result.get("reply", "")).strip() or "I've updated your CV based on your request."
         updated_content = self._resolve_updated_content(current_content, result)
         updated = RAGCVGenerator._normalize_generated_content(

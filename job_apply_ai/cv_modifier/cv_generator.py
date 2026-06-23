@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
+from job_apply_ai.dev_logging import dev_llm_context
 from job_apply_ai.cv_modifier.rag_system import CVRAGSystem
 from job_apply_ai.storage.user_profile import (
     get_default_cv_template_path,
@@ -200,13 +201,20 @@ Rules for job_skills_in_cv and job_skills_not_in_cv:
 - When the profile lists familiarity percentages, treat low-familiarity overlaps as weaker evidence than high-familiarity matches.
 - Use concise labels; generalize when only a parent skill is truthful (Android, not Kotlin).
 """
-        return self.llm.generate_json(
-            prompt,
-            model=self.llm.fast_model,
-            system=ANALYSIS_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_attempts=2,
-        )
+        with dev_llm_context(
+            operation="cv_job_analysis",
+            context={
+                "rag_chunk_count": len(retrieved_chunks[:6]),
+                "job_context_preview": job_context[:500],
+            },
+        ):
+            return self.llm.generate_json(
+                prompt,
+                model=self.llm.fast_model,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_attempts=2,
+            )
 
     def _generate_tailored_cv(
         self,
@@ -288,13 +296,22 @@ Return JSON with this exact shape:
   "languages": ["language and level"]
 }}
 """
-        content = self.llm.generate_json(
-            prompt,
-            model=self.llm.main_model,
-            system=GENERATION_SYSTEM_PROMPT,
-            temperature=0.25,
-            max_attempts=3,
-        )
+        with dev_llm_context(
+            operation="cv_content_generate",
+            context={
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "rag_chunk_count": len(retrieved_chunks),
+                "analysis_role_focus": analysis.get("role_focus", ""),
+            },
+        ):
+            content = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=GENERATION_SYSTEM_PROMPT,
+                temperature=0.25,
+                max_attempts=3,
+            )
         return self._normalize_generated_content(content, analysis, profile, job)
 
     @staticmethod

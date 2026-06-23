@@ -69,6 +69,20 @@ def update_task(
             task["meta"].update(meta)
         task["updated_at"] = datetime.utcnow().isoformat(timespec="seconds")
 
+    try:
+        from job_apply_ai.dev_logging import dev_log, is_dev_mode
+
+        if is_dev_mode():
+            dev_log(
+                "task",
+                "task_update",
+                message or "",
+                data={"step": step, "status": status, "percent": percent},
+                task_id=task_id,
+            )
+    except Exception:
+        pass
+
 
 def complete_task(
     task_id: str,
