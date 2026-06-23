@@ -1735,6 +1735,7 @@ def _llm_settings_context() -> dict:
         fast_model=alibaba_settings["fast_model"],
         main_model=alibaba_settings["main_model"],
         num_predict=alibaba_settings["num_predict"],
+        model_mode=alibaba_settings["model_mode"],
     )
     alibaba_available = alibaba_client.is_available()
     alibaba_models = alibaba_client.list_models(refresh=True) if alibaba_available else list(KNOWN_MODELS)

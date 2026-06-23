@@ -25,7 +25,10 @@ DEFAULT_ALIBABA_SETTINGS: dict[str, Any] = {
     "fast_model": os.environ.get("ALIBABA_CV_FAST_MODEL", "qwen-turbo"),
     "main_model": os.environ.get("ALIBABA_CV_MODEL", "qwen-plus"),
     "num_predict": int(os.environ.get("ALIBABA_MAX_TOKENS", "8192")),
+    "model_mode": os.environ.get("ALIBABA_MODEL_MODE", "fixed"),
 }
+
+ALIBABA_MODEL_MODES = ("fixed", "round_robin", "auto")
 
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
 DEFAULT_FAST_MODEL_PROVIDER = os.environ.get("LLM_FAST_PROVIDER", DEFAULT_LLM_PROVIDER)
@@ -33,7 +36,7 @@ DEFAULT_MAIN_MODEL_PROVIDER = os.environ.get("LLM_MAIN_PROVIDER", DEFAULT_LLM_PR
 DEFAULT_DEV_MODE = os.environ.get("DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
 
 OLLAMA_SETTING_KEYS = ("base_url", "fast_model", "main_model", "num_predict")
-ALIBABA_SETTING_KEYS = ("api_key", "base_url", "fast_model", "main_model", "num_predict")
+ALIBABA_SETTING_KEYS = ("api_key", "base_url", "fast_model", "main_model", "num_predict", "model_mode")
 LLM_PROVIDERS = ("ollama", "alibaba")
 
 
@@ -89,6 +92,9 @@ def normalize_alibaba_settings(data: dict[str, Any] | None) -> dict[str, Any]:
         settings["num_predict"] = max(256, int(data.get("num_predict", settings["num_predict"])))
     except (TypeError, ValueError):
         pass
+
+    mode = str(data.get("model_mode") or settings["model_mode"]).strip().lower()
+    settings["model_mode"] = mode if mode in ALIBABA_MODEL_MODES else "fixed"
 
     return settings
 
@@ -162,6 +168,7 @@ def alibaba_settings_from_form(
             "fast_model": scalar_data.get("alibaba_fast_model", ""),
             "main_model": scalar_data.get("alibaba_main_model", ""),
             "num_predict": scalar_data.get("alibaba_num_predict", ""),
+            "model_mode": scalar_data.get("alibaba_model_mode", ""),
         }
     )
 

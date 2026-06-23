@@ -222,16 +222,30 @@
                     <div class="card-body">
                         <div class="row g-4">
                             <div class="col-md-6">
-                                <label for="alibaba_fast_model" class="form-label">Fast model</label>
+                                <label for="alibaba_model_mode" class="form-label">Model selection mode</label>
+                                <select class="form-select" id="alibaba_model_mode" name="alibaba_model_mode">
+                                    <option value="fixed" {% if alibaba_settings.model_mode == 'fixed' %}selected{% endif %}>Fixed — use configured models only</option>
+                                    <option value="round_robin" {% if alibaba_settings.model_mode == 'round_robin' %}selected{% endif %}>Round robin — rotate model each request</option>
+                                    <option value="auto" {% if alibaba_settings.model_mode == 'auto' %}selected{% endif %}>Auto — stick with current model until it errors</option>
+                                </select>
+                                <div class="hint mt-2">
+                                    For round robin or auto, list multiple models separated by commas.
+                                    On API errors (403, 500, etc.) the client tries the next model in the list.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row g-4 mt-1">
+                            <div class="col-md-6">
+                                <label for="alibaba_fast_model" class="form-label">Fast model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
                                 <input type="text" class="form-control model-input" id="alibaba_fast_model" name="alibaba_fast_model"
                                        list="alibaba-model-options" value="{{ alibaba_settings.fast_model }}"
-                                       placeholder="qwen-turbo">
+                                       placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-turbo{% else %}qwen-turbo, qwen-plus{% endif %}">
                             </div>
                             <div class="col-md-6">
-                                <label for="alibaba_main_model" class="form-label">Main model</label>
+                                <label for="alibaba_main_model" class="form-label">Main model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
                                 <input type="text" class="form-control model-input" id="alibaba_main_model" name="alibaba_main_model"
                                        list="alibaba-model-options" value="{{ alibaba_settings.main_model }}"
-                                       placeholder="qwen-plus">
+                                       placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-plus{% else %}qwen-plus, qwen-max{% endif %}">
                             </div>
                         </div>
                         <datalist id="alibaba-model-options">

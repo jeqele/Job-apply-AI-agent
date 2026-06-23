@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import requests
@@ -16,6 +17,9 @@ DEFAULT_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 DEFAULT_FAST_MODEL = os.environ.get("ALIBABA_CV_FAST_MODEL", "qwen-turbo")
 DEFAULT_MAIN_MODEL = os.environ.get("ALIBABA_CV_MODEL", "qwen-plus")
 DEFAULT_MAX_TOKENS = int(os.environ.get("ALIBABA_MAX_TOKENS", "8192"))
+DEFAULT_MODEL_MODE = os.environ.get("ALIBABA_MODEL_MODE", "fixed")
+
+MODEL_MODES = ("fixed", "round_robin", "auto")
 
 KNOWN_MODELS = (
     "qwen-turbo",
@@ -30,6 +34,26 @@ KNOWN_MODELS = (
 )
 
 
+class AlibabaAPIError(RuntimeError):
+    """Alibaba API failure that may trigger model failover."""
+
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def parse_model_pool(value: str) -> list[str]:
+    """Split a comma/newline-separated model list into unique model names."""
+    models: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,;\n]+", value):
+        name = part.strip()
+        if name and name not in seen:
+            seen.add(name)
+            models.append(name)
+    return models
+
+
 def get_alibaba_client() -> AlibabaClient:
     """Build an Alibaba client using saved app settings when available."""
     try:
@@ -42,6 +66,7 @@ def get_alibaba_client() -> AlibabaClient:
             fast_model=settings["fast_model"],
             main_model=settings["main_model"],
             num_predict=settings["num_predict"],
+            model_mode=settings["model_mode"],
         )
     except Exception as exc:
         logger.warning("Could not load Alibaba settings from storage: %s", exc)
@@ -60,15 +85,47 @@ class AlibabaClient:
         fast_model: str | None = None,
         main_model: str | None = None,
         num_predict: int | None = None,
+        model_mode: str | None = None,
         timeout: int = 300,
     ):
         self.api_key = (api_key or os.environ.get("DASHSCOPE_API_KEY", "")).strip()
         self.base_url = (base_url or os.environ.get("ALIBABA_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
-        self.fast_model = fast_model or DEFAULT_FAST_MODEL
-        self.main_model = main_model or DEFAULT_MAIN_MODEL
+        self._fast_model_config = fast_model or DEFAULT_FAST_MODEL
+        self._main_model_config = main_model or DEFAULT_MAIN_MODEL
         self.num_predict = num_predict if num_predict is not None else DEFAULT_MAX_TOKENS
+        mode = (model_mode or os.environ.get("ALIBABA_MODEL_MODE", DEFAULT_MODEL_MODE)).strip().lower()
+        self.model_mode = mode if mode in MODEL_MODES else "fixed"
         self.timeout = timeout
         self._available_models: list[str] | None = None
+        self._round_robin_index = {"fast": 0, "main": 0}
+        self._auto_index = {"fast": 0, "main": 0}
+
+    @property
+    def fast_model(self) -> str:
+        pool = self._model_pool("fast")
+        if self.model_mode == "auto":
+            return pool[self._auto_index["fast"] % len(pool)]
+        return pool[0]
+
+    @fast_model.setter
+    def fast_model(self, value: str) -> None:
+        self._fast_model_config = value
+
+    @property
+    def main_model(self) -> str:
+        pool = self._model_pool("main")
+        if self.model_mode == "auto":
+            return pool[self._auto_index["main"] % len(pool)]
+        return pool[0]
+
+    @main_model.setter
+    def main_model(self, value: str) -> None:
+        self._main_model_config = value
+
+    def _model_pool(self, role: str) -> list[str]:
+        raw = self._fast_model_config if role == "fast" else self._main_model_config
+        pool = parse_model_pool(raw)
+        return pool or [raw.strip() or (DEFAULT_FAST_MODEL if role == "fast" else DEFAULT_MAIN_MODEL)]
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -128,8 +185,16 @@ class AlibabaClient:
             )
 
         available = self.list_models(refresh=True)
-        self.fast_model = self._resolve_model(self.fast_model, available, role="fast")
-        self.main_model = self._resolve_model(self.main_model, available, role="main")
+        fast_pool = [
+            self._resolve_model(model, available, role="fast")
+            for model in self._model_pool("fast")
+        ]
+        main_pool = [
+            self._resolve_model(model, available, role="main")
+            for model in self._model_pool("main")
+        ]
+        self._fast_model_config = ", ".join(fast_pool)
+        self._main_model_config = ", ".join(main_pool)
         return {"fast": self.fast_model, "main": self.main_model}
 
     def generate(
@@ -143,11 +208,89 @@ class AlibabaClient:
         json_schema: dict[str, Any] | None = None,
         num_predict: int | None = None,
     ) -> str:
-        resolved_model = self._resolve_model(
-            model or self.main_model,
-            self.list_models(),
-            role="generation",
-        )
+        role = self._infer_role(model)
+        if self.model_mode == "fixed":
+            configured = model or (self.fast_model if role == "fast" else self.main_model)
+            resolved_model = self._resolve_model(
+                configured,
+                self.list_models(),
+                role=role,
+                allow_unlisted=configured in self._model_pool(role),
+            )
+            return self._generate_once(
+                resolved_model,
+                prompt,
+                system=system,
+                temperature=temperature,
+                json_format=json_format,
+                json_schema=json_schema,
+                num_predict=num_predict,
+            )
+
+        pool = self._model_pool(role)
+        if model and model not in pool:
+            pool = [model, *[name for name in pool if name != model]]
+
+        if self.model_mode == "round_robin":
+            start_idx = self._round_robin_index[role] % len(pool)
+            self._round_robin_index[role] = (start_idx + 1) % len(pool)
+        else:
+            start_idx = self._auto_index[role] % len(pool)
+
+        last_error: Exception | None = None
+        for offset in range(len(pool)):
+            idx = (start_idx + offset) % len(pool)
+            candidate = pool[idx]
+            resolved_model = self._resolve_model(
+                candidate,
+                self.list_models(),
+                role=role,
+                allow_unlisted=True,
+            )
+            try:
+                content = self._generate_once(
+                    resolved_model,
+                    prompt,
+                    system=system,
+                    temperature=temperature,
+                    json_format=json_format,
+                    json_schema=json_schema,
+                    num_predict=num_predict,
+                )
+                if self.model_mode == "auto" and offset > 0:
+                    self._auto_index[role] = idx
+                    logger.info(
+                        "Alibaba auto mode switched %s model to '%s' after error",
+                        role,
+                        resolved_model,
+                    )
+                return content
+            except Exception as exc:
+                if not self._should_failover(exc, len(pool), offset):
+                    raise
+                last_error = exc
+                logger.warning(
+                    "Alibaba %s model '%s' failed (%s); trying next model",
+                    role,
+                    resolved_model,
+                    exc,
+                )
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Alibaba Cloud returned no model candidates")
+
+    def _generate_once(
+        self,
+        resolved_model: str,
+        prompt: str,
+        *,
+        system: str | None = None,
+        temperature: float = 0.3,
+        json_format: bool = False,
+        json_schema: dict[str, Any] | None = None,
+        num_predict: int | None = None,
+    ) -> str:
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -171,22 +314,29 @@ class AlibabaClient:
         elif json_format:
             payload["response_format"] = {"type": "json_object"}
 
-        response = requests.post(
-            f"{self.base_url}/chat/completions",
-            headers=self._headers(),
-            json=payload,
-            timeout=self.timeout,
-        )
+        try:
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=payload,
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise AlibabaAPIError(f"Alibaba Cloud request failed: {exc}") from exc
+
         if not response.ok:
-            raise RuntimeError(self._format_api_error(response, resolved_model))
+            raise AlibabaAPIError(
+                self._format_api_error(response, resolved_model),
+                status_code=response.status_code,
+            )
 
         choices = response.json().get("choices") or []
         if not choices:
-            raise RuntimeError("Alibaba Cloud returned an empty response")
+            raise AlibabaAPIError("Alibaba Cloud returned an empty response")
         message = choices[0].get("message") or {}
         content = (message.get("content") or "").strip()
         if not content:
-            raise RuntimeError("Alibaba Cloud returned an empty response")
+            raise AlibabaAPIError("Alibaba Cloud returned an empty response")
         return content
 
     def generate_json(
@@ -245,7 +395,40 @@ class AlibabaClient:
             )
         raise ValueError(str(last_error) if last_error else "Model response was not valid JSON")
 
-    def _resolve_model(self, model: str, available: list[str], role: str) -> str:
+    def _infer_role(self, model: str | None) -> str:
+        if model is None:
+            return "main"
+
+        fast_pool = self._model_pool("fast")
+        if model in fast_pool:
+            return "fast"
+
+        main_pool = self._model_pool("main")
+        if model in main_pool:
+            return "main"
+
+        if model == self.fast_model:
+            return "fast"
+        if model == self.main_model:
+            return "main"
+        return "main"
+
+    @staticmethod
+    def _should_failover(exc: Exception, pool_size: int, attempt_offset: int) -> bool:
+        if pool_size <= 1 or attempt_offset >= pool_size - 1:
+            return False
+        if isinstance(exc, AlibabaAPIError) and exc.status_code == 401:
+            return False
+        return isinstance(exc, (AlibabaAPIError, requests.RequestException))
+
+    def _resolve_model(
+        self,
+        model: str,
+        available: list[str],
+        role: str,
+        *,
+        allow_unlisted: bool = False,
+    ) -> str:
         if model in available:
             return model
 
@@ -260,13 +443,14 @@ class AlibabaClient:
                 )
                 return name
 
-        if available:
-            available_text = ", ".join(available)
-            raise RuntimeError(
-                f"Alibaba model '{model}' is not available for {role} generation. "
-                f"Available models: {available_text}."
-            )
-        return model
+        if allow_unlisted or not available:
+            return model
+
+        available_text = ", ".join(available)
+        raise RuntimeError(
+            f"Alibaba model '{model}' is not available for {role} generation. "
+            f"Available models: {available_text}."
+        )
 
     @staticmethod
     def _format_api_error(response: requests.Response, model: str) -> str:

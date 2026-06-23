@@ -334,6 +334,7 @@ def _build_alibaba_client(settings: dict[str, Any]) -> AlibabaClient:
         fast_model=alibaba["fast_model"],
         main_model=alibaba["main_model"],
         num_predict=alibaba["num_predict"],
+        model_mode=alibaba["model_mode"],
     )
 
 

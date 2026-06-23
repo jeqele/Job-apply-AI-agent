@@ -68,6 +68,14 @@ def test_normalize_alibaba_settings_uses_defaults():
     assert settings["base_url"] == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     assert settings["fast_model"] == "qwen-turbo"
     assert settings["main_model"] == "qwen-plus"
+    assert settings["model_mode"] == "fixed"
+
+
+def test_normalize_alibaba_settings_model_mode():
+    settings = normalize_alibaba_settings({"model_mode": "round_robin"})
+    assert settings["model_mode"] == "round_robin"
+    settings = normalize_alibaba_settings({"model_mode": "invalid"})
+    assert settings["model_mode"] == "fixed"
 
 
 def test_alibaba_settings_from_form_preserves_existing_key():

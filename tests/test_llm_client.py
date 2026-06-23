@@ -28,6 +28,7 @@ def _base_settings(**overrides):
             "fast_model": "qwen-turbo",
             "main_model": "qwen-plus",
             "num_predict": 4096,
+            "model_mode": "fixed",
         },
     }
     settings.update(overrides)
