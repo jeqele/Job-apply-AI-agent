@@ -103,7 +103,7 @@ def test_analyzer_analyze_calls_ollama():
         "suggestions": [],
     }
 
-    analyzer = ATSFriendlyAnalyzer(ollama=ollama)
+    analyzer = ATSFriendlyAnalyzer(llm=ollama)
     result = analyzer.analyze(
         job={"title": "Developer", "description": "Python and SQL required"},
         cv_content={"professional_summary": "Python developer."},

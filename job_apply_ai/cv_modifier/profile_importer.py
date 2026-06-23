@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.storage.user_profile import normalize_profile
 from job_apply_ai.utils.helpers import extract_text_from_docx
 
@@ -31,8 +31,8 @@ SECTION_ALIASES = {
 class ProfileImporter:
     """Parse CV documents into profile-shaped data using Ollama with heuristic fallback."""
 
-    def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or get_ollama_client()
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or get_llm_client()
 
     def extract_from_docx(self, file_path: str) -> dict[str, Any]:
         cv_text = extract_text_from_docx(file_path)
@@ -41,9 +41,9 @@ class ProfileImporter:
         return self.extract_from_text(cv_text)
 
     def extract_from_text(self, cv_text: str) -> dict[str, Any]:
-        if self.ollama.is_available():
+        if self.llm.is_available():
             try:
-                self.ollama.validate_models()
+                self.llm.validate_models()
                 extracted = self._extract_with_llm(cv_text)
                 if extracted.get("full_name") or extracted.get("work_experience") or extracted.get("technical_skills"):
                     return extracted
@@ -96,9 +96,9 @@ Rules:
 3. Preserve bullet achievements under the correct role or project.
 4. Use empty strings or empty lists when a field is missing.
 """
-        content = self.ollama.generate_json(
+        content = self.llm.generate_json(
             prompt,
-            model=self.ollama.fast_model,
+            model=self.llm.fast_model,
             system=EXTRACT_SYSTEM_PROMPT,
             temperature=0.1,
             max_attempts=2,

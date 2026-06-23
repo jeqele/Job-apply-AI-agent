@@ -9,7 +9,7 @@ from typing import Any
 from job_apply_ai.cv_modifier.chat_context import build_job_context, build_profile_context
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ CHAT_SYSTEM_PROMPT = (
 class CoverLetterChatEditor:
     """Modify cover letter content through conversational instructions."""
 
-    def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or get_ollama_client()
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or get_llm_client()
 
     def modify(
         self,
@@ -37,11 +37,11 @@ class CoverLetterChatEditor:
         tailored_cv_content: dict[str, Any] | None = None,
         chat_history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        if not self.ollama.is_available():
+        if not self.llm.is_available():
             raise RuntimeError(
-                "Ollama is not reachable. Start Ollama locally to use the cover letter chat editor."
+                f"{self.llm.provider_label} is not reachable. Check your LLM settings to use the cover letter chat editor."
             )
-        self.ollama.validate_models()
+        self.llm.validate_models()
 
         cv_summary = CoverLetterGenerator._summarize_cv(tailored_cv_content or {})
         history_text = self._format_history(chat_history or [])
@@ -90,9 +90,9 @@ Return JSON with this exact shape:
   }}
 }}
 """
-        result = self.ollama.generate_json(
+        result = self.llm.generate_json(
             prompt,
-            model=self.ollama.main_model,
+            model=self.llm.main_model,
             system=CHAT_SYSTEM_PROMPT,
             temperature=0.2,
             max_attempts=2,

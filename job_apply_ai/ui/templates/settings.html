@@ -60,13 +60,16 @@
         .model-preset {
             font-size: 0.8rem;
         }
+        .provider-panel.d-none {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="page-header">
             <h1 class="display-6 fw-bold mb-2"><i class="fas fa-sliders-h me-2"></i>Settings</h1>
-            <p class="lead mb-0">Configure Ollama models used for CV generation, job matching, and AI editing.</p>
+            <p class="lead mb-0">Choose Ollama (local) or Alibaba Cloud Model Studio for CV generation, job matching, and AI editing.</p>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -83,100 +86,174 @@
         <form method="POST" action="{{ url_for('app_settings') }}" id="settingsForm">
             <div class="card">
                 <div class="card-header py-3">
-                    <i class="fas fa-robot section-icon"></i>Ollama connection
+                    <i class="fas fa-plug section-icon"></i>LLM provider
                 </div>
                 <div class="card-body">
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
                         <div>
+                            {% if llm_available %}
+                                <span class="status-pill online"><i class="fas fa-circle"></i> {{ active_provider_label }} reachable</span>
+                            {% else %}
+                                <span class="status-pill offline"><i class="fas fa-circle"></i> {{ active_provider_label }} not reachable</span>
+                            {% endif %}
+                        </div>
+                        {% if installed_models %}
+                            <span class="hint">{{ installed_models|length }} model{{ 's' if installed_models|length != 1 else '' }} available</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="mb-0">
+                        <label for="llm_provider" class="form-label">Active provider</label>
+                        <select class="form-select" id="llm_provider" name="llm_provider">
+                            <option value="ollama" {% if llm_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
+                            <option value="alibaba" {% if llm_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud Model Studio (Qwen)</option>
+                        </select>
+                        <div class="hint mt-2">
+                            Alibaba uses the <a href="https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions" target="_blank" rel="noopener">OpenAI-compatible DashScope API</a>.
+                            Create an API key in the <a href="https://modelstudio.console.alibabacloud.com/" target="_blank" rel="noopener">Model Studio console</a> (Singapore / international region).
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="ollamaPanel" class="provider-panel {% if llm_provider != 'ollama' %}d-none{% endif %}">
+                <div class="card">
+                    <div class="card-header py-3">
+                        <i class="fas fa-robot section-icon"></i>Ollama connection
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
                             {% if ollama_available %}
                                 <span class="status-pill online"><i class="fas fa-circle"></i> Ollama reachable</span>
                             {% else %}
                                 <span class="status-pill offline"><i class="fas fa-circle"></i> Ollama not reachable</span>
                             {% endif %}
                         </div>
-                        {% if installed_models %}
-                            <span class="hint">{{ installed_models|length }} model{{ 's' if installed_models|length != 1 else '' }} installed</span>
-                        {% endif %}
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="ollama_base_url" class="form-label">Ollama base URL</label>
-                        <input type="url" class="form-control" id="ollama_base_url" name="ollama_base_url"
-                               value="{{ settings.base_url }}" placeholder="http://localhost:11434" required>
-                        <div class="hint mt-1">Default local install: <code>http://localhost:11434</code></div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header py-3">
-                    <i class="fas fa-microchip section-icon"></i>Model selection
-                </div>
-                <div class="card-body">
-                    <p class="hint mb-4">
-                        Choose which Ollama models to use. <strong>Fast model</strong> handles quick tasks like job-match scoring.
-                        <strong>Main model</strong> writes tailored CVs, cover letters, and longer edits.
-                    </p>
-
-                    <div class="row g-4">
-                        <div class="col-md-6">
-                            <label for="ollama_fast_model" class="form-label">Fast model</label>
-                            <input type="text" class="form-control" id="ollama_fast_model" name="ollama_fast_model"
-                                   list="ollama-model-options" value="{{ settings.fast_model }}" required
-                                   placeholder="gemma4:e4b">
-                            <div class="hint mt-1">Suggested: <code>gemma4:e4b</code> (lighter, faster)</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="ollama_main_model" class="form-label">Main model</label>
-                            <input type="text" class="form-control" id="ollama_main_model" name="ollama_main_model"
-                                   list="ollama-model-options" value="{{ settings.main_model }}" required
-                                   placeholder="gemma4:12b">
-                            <div class="hint mt-1">Suggested: <code>gemma4:12b</code> (higher quality)</div>
+                        <div class="mb-0">
+                            <label for="ollama_base_url" class="form-label">Ollama base URL</label>
+                            <input type="url" class="form-control" id="ollama_base_url" name="ollama_base_url"
+                                   value="{{ ollama_settings.base_url }}" placeholder="http://localhost:11434">
+                            <div class="hint mt-1">Default local install: <code>http://localhost:11434</code></div>
                         </div>
                     </div>
+                </div>
 
-                    <datalist id="ollama-model-options">
-                        {% for model in installed_models %}
-                            <option value="{{ model }}"></option>
-                        {% endfor %}
-                        <option value="gemma4:e4b"></option>
-                        <option value="gemma4:12b"></option>
-                    </datalist>
-
-                    {% if installed_models %}
-                        <div class="mt-4">
-                            <div class="small fw-semibold mb-2">Installed models (click to apply)</div>
-                            <div class="d-flex flex-wrap gap-2">
-                                {% for model in installed_models %}
-                                    <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
-                                            data-model="{{ model }}">{{ model }}</button>
-                                {% endfor %}
+                <div class="card">
+                    <div class="card-header py-3">
+                        <i class="fas fa-microchip section-icon"></i>Ollama models
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-4">
+                            <div class="col-md-6">
+                                <label for="ollama_fast_model" class="form-label">Fast model</label>
+                                <input type="text" class="form-control model-input" id="ollama_fast_model" name="ollama_fast_model"
+                                       list="ollama-model-options" value="{{ ollama_settings.fast_model }}"
+                                       placeholder="gemma4:e4b">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="ollama_main_model" class="form-label">Main model</label>
+                                <input type="text" class="form-control model-input" id="ollama_main_model" name="ollama_main_model"
+                                       list="ollama-model-options" value="{{ ollama_settings.main_model }}"
+                                       placeholder="gemma4:12b">
                             </div>
                         </div>
-                    {% else %}
-                        <div class="alert alert-warning mt-4 mb-0">
-                            <i class="fas fa-exclamation-triangle me-1"></i>
-                            Could not load installed models. Start Ollama and pull models with
-                            <code>ollama pull gemma4:e4b</code> or <code>ollama pull gemma4:12b</code>,
-                            then refresh this page.
+                        <datalist id="ollama-model-options">
+                            {% for model in ollama_models %}
+                                <option value="{{ model }}"></option>
+                            {% endfor %}
+                            <option value="gemma4:e4b"></option>
+                            <option value="gemma4:12b"></option>
+                        </datalist>
+                        <div class="mb-0 mt-4">
+                            <label for="ollama_num_predict" class="form-label">Max tokens per response</label>
+                            <input type="number" class="form-control" id="ollama_num_predict" name="ollama_num_predict"
+                                   value="{{ ollama_settings.num_predict }}" min="256" max="32768" step="256">
                         </div>
-                    {% endif %}
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header py-3">
-                    <i class="fas fa-cog section-icon"></i>Generation limits
-                </div>
-                <div class="card-body">
-                    <div class="mb-0">
-                        <label for="ollama_num_predict" class="form-label">Max tokens per response</label>
-                        <input type="number" class="form-control" id="ollama_num_predict" name="ollama_num_predict"
-                               value="{{ settings.num_predict }}" min="256" max="32768" step="256" required>
-                        <div class="hint mt-1">Higher values allow longer CV sections but use more memory and time.</div>
                     </div>
                 </div>
             </div>
+
+            <div id="alibabaPanel" class="provider-panel {% if llm_provider != 'alibaba' %}d-none{% endif %}">
+                <div class="card">
+                    <div class="card-header py-3">
+                        <i class="fas fa-cloud section-icon"></i>Alibaba Cloud Model Studio
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            {% if alibaba_available %}
+                                <span class="status-pill online"><i class="fas fa-circle"></i> API reachable</span>
+                            {% else %}
+                                <span class="status-pill offline"><i class="fas fa-circle"></i> API not reachable</span>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label for="alibaba_api_key" class="form-label">DashScope API key</label>
+                            <input type="password" class="form-control" id="alibaba_api_key" name="alibaba_api_key"
+                                   value="" placeholder="{% if has_alibaba_api_key %}•••••••• (saved — leave blank to keep){% else %}sk-...{% endif %}"
+                                   autocomplete="off">
+                            <div class="hint mt-1">Or set <code>DASHSCOPE_API_KEY</code> in your <code>.env</code> file.</div>
+                        </div>
+                        <div class="mb-0">
+                            <label for="alibaba_base_url" class="form-label">API base URL</label>
+                            <input type="url" class="form-control" id="alibaba_base_url" name="alibaba_base_url"
+                                   value="{{ alibaba_settings.base_url }}"
+                                   placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1">
+                            <div class="hint mt-1">
+                                International (Singapore): <code>https://dashscope-intl.aliyuncs.com/compatible-mode/v1</code><br>
+                                China (Beijing): <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header py-3">
+                        <i class="fas fa-microchip section-icon"></i>Qwen models
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-4">
+                            <div class="col-md-6">
+                                <label for="alibaba_fast_model" class="form-label">Fast model</label>
+                                <input type="text" class="form-control model-input" id="alibaba_fast_model" name="alibaba_fast_model"
+                                       list="alibaba-model-options" value="{{ alibaba_settings.fast_model }}"
+                                       placeholder="qwen-turbo">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="alibaba_main_model" class="form-label">Main model</label>
+                                <input type="text" class="form-control model-input" id="alibaba_main_model" name="alibaba_main_model"
+                                       list="alibaba-model-options" value="{{ alibaba_settings.main_model }}"
+                                       placeholder="qwen-plus">
+                            </div>
+                        </div>
+                        <datalist id="alibaba-model-options">
+                            {% for model in known_alibaba_models %}
+                                <option value="{{ model }}"></option>
+                            {% endfor %}
+                        </datalist>
+                        <div class="mb-0 mt-4">
+                            <label for="alibaba_num_predict" class="form-label">Max tokens per response</label>
+                            <input type="number" class="form-control" id="alibaba_num_predict" name="alibaba_num_predict"
+                                   value="{{ alibaba_settings.num_predict }}" min="256" max="32768" step="256">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% if installed_models %}
+                <div class="card">
+                    <div class="card-header py-3">
+                        <i class="fas fa-list section-icon"></i>Available models
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex flex-wrap gap-2">
+                            {% for model in installed_models %}
+                                <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
+                                        data-model="{{ model }}">{{ model }}</button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
 
             <div class="d-flex flex-wrap gap-2">
                 <button type="submit" class="btn btn-primary btn-lg">
@@ -194,13 +271,23 @@
 
     <script>
         (function () {
-            let lastFocusedModelInput = document.getElementById('ollama_main_model');
+            const providerSelect = document.getElementById('llm_provider');
+            const ollamaPanel = document.getElementById('ollamaPanel');
+            const alibabaPanel = document.getElementById('alibabaPanel');
+            let lastFocusedModelInput = document.querySelector('.model-input');
 
-            document.getElementById('ollama_fast_model').addEventListener('focus', function () {
-                lastFocusedModelInput = this;
-            });
-            document.getElementById('ollama_main_model').addEventListener('focus', function () {
-                lastFocusedModelInput = this;
+            function togglePanels() {
+                const provider = providerSelect.value;
+                ollamaPanel.classList.toggle('d-none', provider !== 'ollama');
+                alibabaPanel.classList.toggle('d-none', provider !== 'alibaba');
+            }
+
+            providerSelect.addEventListener('change', togglePanels);
+
+            document.querySelectorAll('.model-input').forEach(function (input) {
+                input.addEventListener('focus', function () {
+                    lastFocusedModelInput = this;
+                });
             });
 
             document.querySelectorAll('.model-preset').forEach(function (button) {

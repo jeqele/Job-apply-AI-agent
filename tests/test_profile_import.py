@@ -85,9 +85,9 @@ class ProfileImporterTests(unittest.TestCase):
         if not os.path.exists(sample_path):
             self.skipTest("Sample CV not available")
 
-        importer = ProfileImporter(ollama=object())
-        importer.ollama = type(
-            "UnavailableOllama",
+        importer = ProfileImporter(llm=object())
+        importer.llm = type(
+            "UnavailableLLM",
             (),
             {"is_available": lambda self: False},
         )()

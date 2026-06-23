@@ -38,6 +38,8 @@ def get_ollama_client() -> OllamaClient:
 class OllamaClient:
     """Thin wrapper around the Ollama HTTP API."""
 
+    provider_label = "Ollama"
+
     def __init__(
         self,
         base_url: str | None = None,

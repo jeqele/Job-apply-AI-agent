@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any, Callable
 
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.storage.user_profile import (
     format_skills_line,
     normalize_profile,
@@ -186,7 +186,7 @@ def _disqualifying_tokens(profile: dict[str, Any] | None) -> list[str]:
 
 
 def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
-    """Keyword-based fallback when Ollama is unavailable."""
+    """Keyword-based fallback when the LLM provider is unavailable."""
     skills = collect_positive_profile_skills(profile)
     entries = _skill_entries(skills)
     haystack = _job_text(job)
@@ -260,7 +260,7 @@ def heuristic_job_match(job: dict[str, Any], profile: dict[str, Any] | None) -> 
 def analyze_job_match(
     job: dict[str, Any],
     profile: dict[str, Any] | None,
-    ollama: OllamaClient | None = None,
+    llm: LLMClient | None = None,
 ) -> dict[str, Any]:
     """Return match analysis for a single job against the stored profile."""
     skills = collect_positive_profile_skills(profile)
@@ -275,7 +275,7 @@ def analyze_job_match(
     ):
         return heuristic_job_match(job, profile)
 
-    client = ollama or get_ollama_client()
+    client = llm or get_llm_client()
     if not client.is_available():
         return heuristic_job_match(job, profile)
 
@@ -395,11 +395,11 @@ def apply_profile_match_to_job(
     profile: dict[str, Any] | None,
     *,
     min_match_score: float = DEFAULT_MIN_MATCH_SCORE,
-    ollama: OllamaClient | None = None,
+    llm: LLMClient | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Analyze one job, store fit metadata, and set workflow status from the threshold."""
     updated = dict(job)
-    analysis = analyze_job_match(updated, profile, ollama=ollama)
+    analysis = analyze_job_match(updated, profile, llm=llm)
     analysis["min_match_score"] = min_match_score
     meets = job_meets_threshold(analysis, min_match_score)
     analysis["is_match"] = meets
@@ -422,7 +422,7 @@ def classify_jobs_by_profile_match(
     profile: dict[str, Any] | None,
     *,
     min_match_score: float = DEFAULT_MIN_MATCH_SCORE,
-    ollama: OllamaClient | None = None,
+    llm: LLMClient | None = None,
 ) -> list[dict[str, Any]]:
     """Annotate jobs with fit analysis and route non-matches to the not_match folder."""
     if not jobs or not profile_has_matchable_skills(profile):
@@ -435,7 +435,7 @@ def classify_jobs_by_profile_match(
             job,
             profile,
             min_match_score=threshold,
-            ollama=ollama,
+            llm=llm,
         )
         classified.append(updated)
     return classified
@@ -446,7 +446,7 @@ def analyze_jobs_with_threshold(
     profile: dict[str, Any] | None,
     min_match_score: float,
     *,
-    ollama: OllamaClient | None = None,
+    llm: LLMClient | None = None,
     on_progress: Callable[[int, int, dict[str, Any]], None] | None = None,
     should_continue: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -474,7 +474,7 @@ def analyze_jobs_with_threshold(
             job,
             profile,
             min_match_score=threshold,
-            ollama=ollama,
+            llm=llm,
         )
         updated_jobs.append(updated)
         stats["analyzed"] += 1

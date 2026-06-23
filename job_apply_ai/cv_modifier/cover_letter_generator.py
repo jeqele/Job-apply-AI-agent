@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,8 @@ GENERATION_SYSTEM_PROMPT = (
 class CoverLetterGenerator:
     """Generate structured cover letter content with Ollama."""
 
-    def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or get_ollama_client()
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or get_llm_client()
 
     def generate(
         self,
@@ -30,11 +30,11 @@ class CoverLetterGenerator:
         profile: dict[str, Any],
         tailored_cv_content: dict[str, Any],
     ) -> dict[str, Any]:
-        if not self.ollama.is_available():
+        if not self.llm.is_available():
             raise RuntimeError(
-                "Ollama is not reachable. Start Ollama locally to generate cover letters."
+                f"{self.llm.provider_label} is not reachable. Check your LLM settings to generate cover letters."
             )
-        self.ollama.validate_models()
+        self.llm.validate_models()
 
         job_context = self._build_job_context(job)
         cv_summary = self._summarize_cv(tailored_cv_content)
@@ -72,9 +72,9 @@ Return JSON with this exact shape:
   "signature_name": "candidate full name"
 }}
 """
-        result = self.ollama.generate_json(
+        result = self.llm.generate_json(
             prompt,
-            model=self.ollama.main_model,
+            model=self.llm.main_model,
             system=GENERATION_SYSTEM_PROMPT,
             temperature=0.3,
             max_attempts=2,

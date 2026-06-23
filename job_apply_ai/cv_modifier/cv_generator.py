@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
-from job_apply_ai.cv_modifier.ollama_client import get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.cv_modifier.rag_system import CVRAGSystem
 from job_apply_ai.storage.user_profile import (
     get_default_cv_template_path,
@@ -45,10 +45,10 @@ class RAGCVGenerator:
     def __init__(
         self,
         rag: CVRAGSystem | None = None,
-        ollama: OllamaClient | None = None,
+        llm: LLMClient | None = None,
     ):
         self.rag = rag or CVRAGSystem(chunking_strategy="document_aware", chunk_size=300)
-        self.ollama = ollama or get_ollama_client()
+        self.llm = llm or get_llm_client()
 
     def prepare_profile_index(self, profile: dict[str, Any]) -> int:
         """Index stored profile data once for batch generation."""
@@ -93,14 +93,14 @@ class RAGCVGenerator:
 
         report("starting", "Preparing AI CV generation…", 2)
 
-        if not self.ollama.is_available():
+        if not self.llm.is_available():
             raise RuntimeError(
-                "Ollama is not reachable. Start Ollama locally and pull the configured models "
-                f"({self.ollama.fast_model}, {self.ollama.main_model})."
+                f"{self.llm.provider_label} is not reachable. Check your LLM settings "
+                f"({self.llm.fast_model}, {self.llm.main_model})."
             )
 
-        report("validating_ollama", "Checking Ollama and installed models…", 8)
-        resolved_models = self.ollama.validate_models()
+        report("validating_ollama", f"Checking {self.llm.provider_label} and models…", 8)
+        resolved_models = self.llm.validate_models()
 
         report("indexing_cv", "Indexing your profile with RAG…", 18)
         if reindex:
@@ -200,9 +200,9 @@ Rules for job_skills_in_cv and job_skills_not_in_cv:
 - When the profile lists familiarity percentages, treat low-familiarity overlaps as weaker evidence than high-familiarity matches.
 - Use concise labels; generalize when only a parent skill is truthful (Android, not Kotlin).
 """
-        return self.ollama.generate_json(
+        return self.llm.generate_json(
             prompt,
-            model=self.ollama.fast_model,
+            model=self.llm.fast_model,
             system=ANALYSIS_SYSTEM_PROMPT,
             temperature=0.1,
             max_attempts=2,
@@ -288,9 +288,9 @@ Return JSON with this exact shape:
   "languages": ["language and level"]
 }}
 """
-        content = self.ollama.generate_json(
+        content = self.llm.generate_json(
             prompt,
-            model=self.ollama.main_model,
+            model=self.llm.main_model,
             system=GENERATION_SYSTEM_PROMPT,
             temperature=0.25,
             max_attempts=3,

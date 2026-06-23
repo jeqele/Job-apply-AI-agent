@@ -112,7 +112,8 @@ from job_apply_ai.storage.user_profile import (
     update_smtp_account_tokens,
     upsert_oauth_smtp_account,
 )
-from job_apply_ai.storage.app_settings import AppSettingsRepository, ollama_settings_from_form
+from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form
+from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient, KNOWN_MODELS
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 from job_apply_ai.storage.exports import export_jobs
 from job_apply_ai.email.application_mailer import (
@@ -1137,11 +1138,11 @@ def _run_batch_cv_task(task_id: str, profile: dict, jobs: list[dict]) -> None:
     def on_progress(step: str, message: str, percent: int) -> None:
         update_task(task_id, status='running', step=step, message=message, percent=percent)
 
-    on_progress('validating_ollama', 'Checking Ollama and installed models…', 5)
-    if not generator.ollama.is_available():
-        raise RuntimeError('Ollama is not reachable.')
+    on_progress('validating_ollama', f'Checking {generator.llm.provider_label} and models…', 5)
+    if not generator.llm.is_available():
+        raise RuntimeError(f'{generator.llm.provider_label} is not reachable.')
 
-    generator.ollama.validate_models()
+    generator.llm.validate_models()
     on_progress('indexing_cv', 'Indexing your profile with RAG…', 12)
     generator.prepare_profile_index(profile)
 
@@ -1642,43 +1643,78 @@ def _profile_form_data() -> dict:
     return defaults
 
 
-def _ollama_settings_context() -> dict:
+def _llm_settings_context() -> dict:
     """Build template context for the settings page."""
-    settings = app_settings_repo.get_ollama_settings()
-    client = OllamaClient(
-        base_url=settings["base_url"],
-        fast_model=settings["fast_model"],
-        main_model=settings["main_model"],
-        num_predict=settings["num_predict"],
+    all_settings = app_settings_repo.get_settings()
+    provider = all_settings["llm_provider"]
+    ollama_settings = all_settings["ollama"]
+    alibaba_settings = all_settings["alibaba"]
+
+    ollama_client = OllamaClient(
+        base_url=ollama_settings["base_url"],
+        fast_model=ollama_settings["fast_model"],
+        main_model=ollama_settings["main_model"],
+        num_predict=ollama_settings["num_predict"],
     )
-    ollama_available = client.is_available()
-    installed_models = client.list_models(refresh=True) if ollama_available else []
+    ollama_available = ollama_client.is_available()
+    ollama_models = ollama_client.list_models(refresh=True) if ollama_available else []
+
+    alibaba_client = AlibabaClient(
+        api_key=alibaba_settings["api_key"],
+        base_url=alibaba_settings["base_url"],
+        fast_model=alibaba_settings["fast_model"],
+        main_model=alibaba_settings["main_model"],
+        num_predict=alibaba_settings["num_predict"],
+    )
+    alibaba_available = alibaba_client.is_available()
+    alibaba_models = alibaba_client.list_models(refresh=True) if alibaba_available else list(KNOWN_MODELS)
+
+    active_client = alibaba_client if provider == "alibaba" else ollama_client
+    llm_available = alibaba_available if provider == "alibaba" else ollama_available
+    installed_models = alibaba_models if provider == "alibaba" else ollama_models
+
     return {
-        "settings": settings,
+        "llm_provider": provider,
+        "ollama_settings": ollama_settings,
+        "alibaba_settings": alibaba_settings,
+        "has_alibaba_api_key": bool(alibaba_settings.get("api_key")),
         "ollama_available": ollama_available,
+        "alibaba_available": alibaba_available,
+        "llm_available": llm_available,
         "installed_models": installed_models,
+        "ollama_models": ollama_models,
+        "alibaba_models": alibaba_models,
+        "active_provider_label": active_client.provider_label,
+        "known_alibaba_models": list(KNOWN_MODELS),
+        # Backward-compatible keys used by older template fragments
+        "settings": ollama_settings if provider == "ollama" else alibaba_settings,
     }
 
 
 @app.route('/settings', methods=['GET', 'POST'], endpoint='app_settings')
 def app_settings():
-    """Configure Ollama models and generation settings."""
+    """Configure LLM provider, models, and generation settings."""
     if request.method == 'POST':
-        ollama_settings = ollama_settings_from_form(request.form)
-        if not ollama_settings["fast_model"] or not ollama_settings["main_model"]:
+        current = app_settings_repo.get_settings()
+        llm_settings = llm_settings_from_form(
+            request.form,
+            existing_alibaba_api_key=current["alibaba"].get("api_key", ""),
+        )
+        provider = llm_settings["llm_provider"]
+        provider_settings = llm_settings[provider]
+        if not provider_settings.get("fast_model") or not provider_settings.get("main_model"):
             flash('Fast model and main model are required.', 'error')
-            return render_template(
-                'settings.html',
-                settings=ollama_settings,
-                ollama_available=False,
-                installed_models=[],
-            )
+            return render_template('settings.html', **_llm_settings_context())
 
-        app_settings_repo.save_ollama_settings(ollama_settings)
+        if provider == "alibaba" and not llm_settings["alibaba"].get("api_key"):
+            flash('Alibaba Cloud API key is required when using Model Studio.', 'error')
+            return render_template('settings.html', **_llm_settings_context())
+
+        app_settings_repo.save_llm_settings(llm_settings)
         flash('Settings saved. New model choices apply to the next AI task.', 'success')
         return redirect(url_for('app_settings'))
 
-    return render_template('settings.html', **_ollama_settings_context())
+    return render_template('settings.html', **_llm_settings_context())
 
 
 @app.route('/profile/oauth/google/start')
@@ -2583,7 +2619,7 @@ def make_cv_complete(task_id):
     session['current_cv'] = result.get('output_path')
     session['current_cv_filename'] = result.get('cv_filename')
 
-    flash('Professional CV and cover letter generated successfully with RAG + Ollama', 'success')
+    flash('Professional CV and cover letter generated successfully with RAG + AI', 'success')
     return_from_manage = result.get('return_from_manage', False)
     return_folder = result.get('return_folder', 'all')
     return_search = result.get('return_search', '')
@@ -3271,7 +3307,7 @@ def make_all_cvs_complete(task_id):
     session['successful_jobs'] = result.get('successful_jobs', [])
     session['failed_jobs'] = result.get('failed_jobs', [])
 
-    flash(f"Successfully generated {result.get('generated_count', 0)} tailored CVs with RAG + Ollama", 'success')
+    flash(f"Successfully generated {result.get('generated_count', 0)} tailored CVs with RAG + AI", 'success')
     if result.get('failed_jobs'):
         flash(f"Failed to generate {len(result['failed_jobs'])} CVs", 'warning')
 

@@ -11,7 +11,7 @@ from typing import Any
 from job_apply_ai.cv_modifier.chat_context import build_job_context, cv_content_to_preview_lines
 from job_apply_ai.cv_modifier.cv_chat_editor import CONTENT_CHANGE_KEYS, CVChatEditor
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.storage.user_profile import profile_to_text
 
 logger = logging.getLogger(__name__)
@@ -223,8 +223,8 @@ Return JSON with this exact shape:
 class ATSFriendlyAnalyzer:
     """Analyze CV ATS compatibility and produce actionable suggestions."""
 
-    def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or get_ollama_client()
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or get_llm_client()
 
     def analyze(
         self,
@@ -233,16 +233,16 @@ class ATSFriendlyAnalyzer:
         cv_content: dict[str, Any],
         profile: dict[str, Any],
     ) -> dict[str, Any]:
-        if not self.ollama.is_available():
+        if not self.llm.is_available():
             raise RuntimeError(
-                "Ollama is not reachable. Start Ollama locally to run ATS analysis."
+                f"{self.llm.provider_label} is not reachable. Check your LLM settings to run ATS analysis."
             )
-        self.ollama.validate_models()
+        self.llm.validate_models()
 
         prompt = _build_analysis_prompt(job=job, cv_content=cv_content, profile=profile)
-        result = self.ollama.generate_json(
+        result = self.llm.generate_json(
             prompt,
-            model=self.ollama.main_model,
+            model=self.llm.main_model,
             system=ATS_SYSTEM_PROMPT,
             temperature=0.2,
             max_attempts=3,
@@ -261,11 +261,11 @@ class ATSFriendlyAnalyzer:
         suggestion: dict[str, Any],
     ) -> dict[str, Any]:
         """Regenerate a single suggestion when a prior apply failed due to LLM issues."""
-        if not self.ollama.is_available():
+        if not self.llm.is_available():
             raise RuntimeError(
-                "Ollama is not reachable. Start Ollama locally to retry this suggestion."
+                f"{self.llm.provider_label} is not reachable. Check your LLM settings to retry this suggestion."
             )
-        self.ollama.validate_models()
+        self.llm.validate_models()
 
         job_context = build_job_context(job)
         compact_cv = json.dumps(cv_content, separators=(",", ":"), ensure_ascii=False)
@@ -296,9 +296,9 @@ Rules:
 - Only modify fields present in changes; use the same CONTENT_CHANGE_KEYS as the CV JSON.
 - Never invent facts beyond the profile and current CV content.
 """
-        result = self.ollama.generate_json(
+        result = self.llm.generate_json(
             prompt,
-            model=self.ollama.main_model,
+            model=self.llm.main_model,
             system=ATS_SYSTEM_PROMPT,
             temperature=0.25,
             max_attempts=3,

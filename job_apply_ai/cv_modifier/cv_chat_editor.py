@@ -17,7 +17,7 @@ from job_apply_ai.cv_modifier.chat_context import (
 )
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
-from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
+from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.storage.user_profile import get_default_cv_template_path
 
 logger = logging.getLogger(__name__)
@@ -58,8 +58,8 @@ CONTENT_CHANGE_KEYS = frozenset({
 class CVChatEditor:
     """Modify tailored CV content through conversational instructions."""
 
-    def __init__(self, ollama: OllamaClient | None = None):
-        self.ollama = ollama or get_ollama_client()
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or get_llm_client()
 
     def modify(
         self,
@@ -73,11 +73,11 @@ class CVChatEditor:
         preview_customized: bool = False,
     ) -> dict[str, Any]:
         """Apply a user edit request and return updated content plus assistant reply."""
-        if not self.ollama.is_available():
+        if not self.llm.is_available():
             raise RuntimeError(
-                "Ollama is not reachable. Start Ollama locally to use the CV chat editor."
+                f"{self.llm.provider_label} is not reachable. Check your LLM settings to use the CV chat editor."
             )
-        self.ollama.validate_models()
+        self.llm.validate_models()
 
         history_text = self._format_history(chat_history or [])
         job_context = build_job_context(job)
@@ -124,9 +124,9 @@ Return JSON with this exact shape:
   }}
 }}
 """
-        result = self.ollama.generate_json(
+        result = self.llm.generate_json(
             prompt,
-            model=self.ollama.main_model,
+            model=self.llm.main_model,
             system=CHAT_SYSTEM_PROMPT,
             temperature=0.2,
             max_attempts=3,
