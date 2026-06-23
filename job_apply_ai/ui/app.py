@@ -144,6 +144,7 @@ profile_repo = UserProfileRepository()
 BACKGROUND_TASK_STALE_SECONDS = 900
 BACKGROUND_TASK_SESSION_KEYS = (
     'cv_generation_active',
+    'single_search_active',
     'batch_search_active',
     'job_match_analyze_active',
 )
@@ -195,6 +196,7 @@ def _sync_cv_generation_lock() -> str | None:
 
 def _background_task_progress_label(task: dict) -> str:
     labels = {
+        'single_search': 'Job search',
         'batch_search': 'Batch job search',
         'job_match_analyze': 'Analyzing Profile Match',
         'single_cv': 'Generating AI CV',
@@ -205,6 +207,8 @@ def _background_task_progress_label(task: dict) -> str:
 
 def _background_task_progress_url(task_id: str, task: dict) -> str | None:
     task_type = task.get('task_type')
+    if task_type == 'single_search':
+        return url_for('single_search_progress', task_id=task_id)
     if task_type == 'batch_search':
         return url_for('batch_search_progress', task_id=task_id)
     if task_type == 'job_match_analyze':
@@ -261,6 +265,10 @@ def _inject_cv_generation_lock():
         'microsoft_oauth_configured': microsoft_oauth_configured(),
         'job_sort_options': JOB_SORT_OPTIONS,
         'default_job_sort': DEFAULT_JOB_SORT,
+        'job_statuses': JOB_WORKFLOW_STATUSES,
+        'status_labels': JOB_STATUS_LABELS,
+        'status_icons': JOB_STATUS_ICONS,
+        'status_badges': JOB_STATUS_BADGE_CLASSES,
     }
 
 
@@ -652,7 +660,107 @@ def _run_single_cv_task(
     )
 
 
-CONTROLLABLE_TASK_TYPES = frozenset({'batch_search', 'job_match_analyze'})
+CONTROLLABLE_TASK_TYPES = frozenset({'single_search', 'batch_search', 'job_match_analyze'})
+
+
+def _run_single_search_task(
+    task_id: str,
+    keyword: str,
+    location: str,
+    max_jobs: int,
+    sources: str,
+    source_list: list[str],
+    mode: str,
+    profile: dict,
+    search_filters: SearchFilters | None = None,
+) -> None:
+    update_task(
+        task_id,
+        status='running',
+        step='searching',
+        message=f'Searching for {keyword} in {location}…',
+        percent=5,
+        meta={'keyword': keyword, 'location': location},
+    )
+
+    try:
+        task_control_checkpoint(task_id)
+    except TaskStopped:
+        fail_task(task_id, 'Job search stopped before fetching results.')
+        return
+
+    search_run_id = job_repo.create_search_run(keyword, location, sources, mode)
+
+    update_task(
+        task_id,
+        status='running',
+        step='fetching',
+        message='Fetching jobs from sources…',
+        percent=20,
+        meta={'keyword': keyword, 'location': location},
+    )
+
+    try:
+        jobs = aggregate_search_jobs(
+            keyword,
+            location,
+            max_jobs=max_jobs,
+            sources=source_list,
+            mode=mode,
+            enrich_details=True,
+            search_filters=search_filters,
+        )
+    except Exception as exc:
+        logger.error('Single search failed for %r in %r: %s', keyword, location, exc)
+        fail_task(task_id, f'Job search failed: {exc}')
+        return
+
+    try:
+        task_control_checkpoint(task_id)
+    except TaskStopped:
+        if not jobs:
+            fail_task(task_id, 'Job search stopped before saving any jobs.')
+            return
+
+        processed_jobs = _enrich_jobs_with_skills(jobs)
+        processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
+        job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
+        complete_task(
+            task_id,
+            {
+                'search_run_id': search_run_id,
+                'total_jobs': len(processed_jobs),
+                'stopped': True,
+            },
+            message=f'Search stopped — saved {len(processed_jobs)} jobs',
+        )
+        return
+
+    if not jobs:
+        fail_task(task_id, 'No jobs found. Try different search terms or adjust filters.')
+        return
+
+    update_task(
+        task_id,
+        status='running',
+        step='processing',
+        message='Matching skills and profile…',
+        percent=75,
+        meta={'keyword': keyword, 'location': location},
+    )
+
+    processed_jobs = _enrich_jobs_with_skills(jobs)
+    processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
+    job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
+
+    complete_task(
+        task_id,
+        {
+            'search_run_id': search_run_id,
+            'total_jobs': len(processed_jobs),
+        },
+        message=f'Search complete — saved {len(processed_jobs)} jobs',
+    )
 
 
 def _run_batch_search_task(
@@ -978,66 +1086,45 @@ def index():
 
 @app.route('/search', methods=['GET', 'POST'])
 def search_jobs():
-    """Handle job search form and display results."""
+    """Queue a single job search and show progress while it runs."""
     if request.method == 'POST':
-        keyword = request.form.get('keyword', '')
-        location = request.form.get('location', '')
+        keyword = (request.form.get('keyword') or '').strip()
+        location = (request.form.get('location') or '').strip()
         max_jobs = int(request.form.get('max_jobs', 10))
         sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
         mode = request.form.get('mode', 'both')
         search_filters = SearchFilters.from_mapping(request.form)
-        
+
         if not keyword or not location:
             flash('Please enter both job title and location', 'error')
             return redirect(url_for('index'))
-        
-        try:
-            source_list = [source.strip() for source in sources.split(',') if source.strip()]
-            jobs = aggregate_search_jobs(
-                keyword,
-                location,
-                max_jobs=max_jobs,
-                sources=source_list,
-                mode=mode,
-                enrich_details=True,
-                search_filters=search_filters,
-            )
-            
-            if not jobs:
-                flash('No jobs found. Try different search terms or adjust filters.', 'warning')
-                return redirect(url_for('index'))
 
-            search_run_id = job_repo.create_search_run(
+        source_list = [source.strip() for source in sources.split(',') if source.strip()]
+        profile = profile_repo.get_profile()
+
+        task_id = create_task(
+            'single_search',
+            meta={'keyword': keyword, 'location': location},
+        )
+        session['single_search_active'] = task_id
+        start_background_task(
+            task_id,
+            lambda: _run_single_search_task(
+                task_id,
                 keyword,
                 location,
+                max_jobs,
                 sources,
+                source_list,
                 mode,
-            )
-            processed_jobs = _enrich_jobs_with_skills(jobs)
-            profile = profile_repo.get_profile()
-            processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
-            job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
-            processed_jobs = sort_jobs(
-                job_repo.list_jobs(search_run_id=search_run_id),
-                'match_desc',
-            )
+                profile,
+                search_filters,
+            ),
+        )
+        return redirect(url_for('single_search_progress', task_id=task_id))
 
-            session['search_run_id'] = search_run_id
-
-            return render_template(
-                'job_list.html',
-                jobs=processed_jobs,
-                search_run_id=search_run_id,
-                current_sort='match_desc',
-                job_sort_options=JOB_SORT_OPTIONS,
-            )
-            
-        except Exception as e:
-            logger.error(f"Error during job search: {str(e)}")
-            flash(f'An error occurred: {str(e)}', 'error')
-            return redirect(url_for('index'))
-    
     return redirect(url_for('index'))
+
 
 @app.route('/search/batch', methods=['POST'])
 def batch_search_jobs():
@@ -1133,6 +1220,62 @@ def batch_search_complete(task_id):
 
     if not processed_jobs:
         flash('Batch search completed but no jobs were saved.', 'warning')
+        return redirect(url_for('index'))
+
+    return render_template(
+        'job_list.html',
+        jobs=processed_jobs,
+        search_run_id=search_run_id,
+        current_sort='match_desc',
+        job_sort_options=JOB_SORT_OPTIONS,
+    )
+
+
+@app.route('/search/<task_id>')
+def single_search_progress(task_id):
+    """Show progress while a single job search runs."""
+    task = get_task(task_id)
+    if not task:
+        flash('Job search task not found', 'error')
+        return redirect(url_for('index'))
+
+    meta = task.get('meta', {})
+    return render_template(
+        'single_search_progress.html',
+        task_id=task_id,
+        keyword=meta.get('keyword', ''),
+        location=meta.get('location', ''),
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=url_for('single_search_complete', task_id=task_id),
+        control_url=url_for('control_background_task', task_id=task_id),
+        back_url=f"{url_for('index')}#search-jobs",
+        back_label='Back to home',
+    )
+
+
+@app.route('/search/complete/<task_id>')
+def single_search_complete(task_id):
+    """Show jobs found by a completed single search."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Job search result not found', 'error')
+        return redirect(url_for('index'))
+
+    result = task['result']
+    search_run_id = result.get('search_run_id')
+    processed_jobs = sort_jobs(
+        job_repo.list_jobs(search_run_id=search_run_id),
+        'match_desc',
+    )
+    session['search_run_id'] = search_run_id
+
+    if result.get('stopped'):
+        flash(task.get('message', 'Job search stopped.'), 'warning')
+
+    session.pop('single_search_active', None)
+
+    if not processed_jobs:
+        flash('Search completed but no jobs were saved.', 'warning')
         return redirect(url_for('index'))
 
     return render_template(
@@ -1822,6 +1965,50 @@ def update_job_status(job_id):
         flash(f'Job moved to {job_status_label(workflow_status)}', 'success')
     else:
         flash('Job not found', 'error')
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+
+@app.route('/jobs/batch/status', methods=['POST'])
+def batch_update_job_status():
+    """Move multiple selected jobs to another workflow folder."""
+    raw_job_ids = request.form.getlist('job_ids')
+    workflow_status = request.form.get('workflow_status', '')
+    return_view = request.form.get('return_view', 'manage')
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '')
+    return_sort = request.form.get('return_sort', '')
+
+    if not raw_job_ids:
+        flash('No jobs selected', 'warning')
+        if return_view == 'list':
+            return redirect(url_for('job_list', sort=return_sort or None))
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    if not is_valid_job_status(workflow_status):
+        flash('Invalid job status', 'error')
+        if return_view == 'list':
+            return redirect(url_for('job_list', sort=return_sort or None))
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    try:
+        job_ids = [int(job_id) for job_id in raw_job_ids]
+    except ValueError:
+        flash('Invalid job selection', 'error')
+        if return_view == 'list':
+            return redirect(url_for('job_list', sort=return_sort or None))
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    updated = job_repo.update_jobs_status(job_ids, workflow_status)
+    if updated:
+        flash(
+            f'Moved {updated} job{"s" if updated != 1 else ""} to {job_status_label(workflow_status)}',
+            'success',
+        )
+    else:
+        flash('No jobs were updated', 'warning')
+
+    if return_view == 'list':
+        return redirect(url_for('job_list', sort=return_sort or None))
     return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
 

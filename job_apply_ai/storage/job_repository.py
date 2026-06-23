@@ -256,24 +256,25 @@ class JobRepository:
         return True
 
     def update_job_status(self, job_id: int, workflow_status: str) -> bool:
-        if not is_valid_job_status(workflow_status):
-            return False
+        return self.update_jobs_status([job_id], workflow_status) == 1
 
-        existing = self.get_job(job_id)
-        if not existing:
-            return False
+    def update_jobs_status(self, job_ids: list[int], workflow_status: str) -> int:
+        if not job_ids or not is_valid_job_status(workflow_status):
+            return 0
 
+        unique_ids = sorted({int(job_id) for job_id in job_ids})
         now = datetime.utcnow().isoformat(timespec="seconds")
+        placeholders = ", ".join("?" for _ in unique_ids)
         with get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE jobs
                 SET workflow_status = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id IN ({placeholders})
                 """,
-                (workflow_status, now, job_id),
+                (workflow_status, now, *unique_ids),
             )
-        return True
+        return int(cursor.rowcount)
 
     def count_jobs(
         self,

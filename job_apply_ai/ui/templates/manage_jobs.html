@@ -288,8 +288,21 @@
 
                     <div class="job-list-area">
                         {% if jobs %}
+                            <div class="px-3 pt-3">
+                                <div class="d-flex align-items-center gap-2 mb-3">
+                                    <input type="checkbox"
+                                           class="form-check-input"
+                                           id="job-select-all"
+                                           aria-label="Select all jobs in this folder">
+                                    <label for="job-select-all" class="form-check-label text-muted small mb-0">
+                                        Select all on this page
+                                    </label>
+                                </div>
+                                {% set return_view = 'manage' %}
+                                {% include '_job_bulk_actions.html' %}
+                            </div>
                             {% for job in jobs %}
-                                {% with manage_mode=true, current_folder=current_folder, search_query=search_query, sort_query=sort_query %}
+                                {% with manage_mode=true, current_folder=current_folder, search_query=search_query, sort_query=sort_query, bulk_select=true %}
                                     {% include '_job_card.html' %}
                                 {% endwith %}
                             {% endfor %}

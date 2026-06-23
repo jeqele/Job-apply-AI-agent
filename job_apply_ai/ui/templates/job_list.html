@@ -186,6 +186,20 @@
             </div>
         </div>
         
+        {% if jobs %}
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <input type="checkbox"
+                       class="form-check-input"
+                       id="job-select-all"
+                       aria-label="Select all jobs">
+                <label for="job-select-all" class="form-check-label text-muted small mb-0">
+                    Select all on this page
+                </label>
+            </div>
+            {% set return_view = 'list' %}
+            {% include '_job_bulk_actions.html' %}
+        {% endif %}
+
         <div class="alert alert-info" role="alert">
             <div class="d-flex">
                 <div class="me-3">
@@ -199,7 +213,9 @@
         </div>
         
         {% for job in jobs %}
-            {% include '_job_card.html' %}
+            {% with bulk_select=true %}
+                {% include '_job_card.html' %}
+            {% endwith %}
         {% endfor %}
         
         <div class="text-center mt-4">

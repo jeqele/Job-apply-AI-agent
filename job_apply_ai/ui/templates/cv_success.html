@@ -6,8 +6,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8f9fa; padding-top: 30px; padding-bottom: 50px; color: #343a40; }
-        .success-header { background: linear-gradient(135deg, #198754 0%, #20c997 100%); padding: 2.5rem; border-radius: 1rem; margin-bottom: 2rem; color: white; box-shadow: 0 10px 20px rgba(0,0,0,0.1); text-align: center; }
-        .success-icon { font-size: 4rem; margin-bottom: 1rem; }
+        .success-header { background: linear-gradient(135deg, #198754 0%, #20c997 100%); padding: 1.25rem 1.5rem; border-radius: 0.75rem; margin-bottom: 1.25rem; color: white; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .success-icon { font-size: 1.75rem; }
         .card { border: none; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 1.5rem; overflow: hidden; }
         .card-header { background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%); color: white; font-weight: 600; padding: 1rem 1.25rem; border-bottom: none; }
         .preview-pane { background: white; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); min-height: 520px; max-height: 72vh; overflow-y: auto; }
@@ -46,8 +46,30 @@
         .chat-empty { color: #6c757d; text-align: center; padding: 2rem 1rem; }
         .chat-session-bar { background: rgba(255,255,255,0.12); padding: 0.65rem 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.15); }
         .chat-session-bar .form-select { min-width: 0; }
-        .job-sidebar .job-title { font-size: 1.2rem; font-weight: 600; }
-        .job-sidebar .company-name { color: #6c757d; }
+        .job-preview-panel { background: white; border-radius: 0.75rem; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; margin-bottom: 1rem; }
+        .job-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; }
+        .job-preview-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; }
+        .job-match-badge { font-size: 0.68rem; font-weight: 600; }
+        .job-preview-body { padding: 0.85rem; max-height: calc(72vh - 2rem); overflow-y: auto; }
+        .job-preview-title { font-size: 0.95rem; font-weight: 700; line-height: 1.35; color: #1e293b; margin-bottom: 0.45rem; }
+        .job-preview-meta-line { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; color: #64748b; margin-bottom: 0.65rem; }
+        .job-preview-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+        .job-chip { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.68rem; font-weight: 600; background: #e7f1ff; color: #084298; border: 1px solid #cfe2ff; }
+        .job-chip-success { background: #d1e7dd; color: #0f5132; border-color: #badbcc; }
+        .job-chip-danger { background: #f8d7da; color: #842029; border-color: #f5c2c7; }
+        .job-preview-section { margin-bottom: 0.75rem; padding-top: 0.65rem; border-top: 1px solid #f1f5f9; }
+        .job-preview-section:first-of-type { border-top: none; padding-top: 0; }
+        .job-preview-section-label { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin-bottom: 0.35rem; }
+        .job-preview-text { font-size: 0.78rem; line-height: 1.45; color: #475569; }
+        .job-preview-desc { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+        .job-preview-skills { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+        .job-skill-tag { display: inline-block; padding: 0.12rem 0.45rem; border-radius: 999px; font-size: 0.68rem; background: #f8fafc; color: #334155; border: 1px solid #e2e8f0; }
+        .job-skill-more { color: #64748b; font-style: italic; }
+        .job-preview-link { font-size: 0.78rem; word-break: break-all; }
+        .job-preview-footer { margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 0.5rem; }
+        .job-preview-status { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .job-doc-status { font-size: 0.72rem; font-weight: 600; color: #198754; }
+        .job-preview-gen { font-size: 0.68rem; }
         .typing-indicator { color: #6c757d; font-size: 0.9rem; padding: 0.5rem 1rem; }
         .doc-tabs .nav-link { border-radius: 0.75rem 0.75rem 0 0; font-weight: 600; }
         .empty-cover-letter { text-align: center; padding: 4rem 2rem; color: #6c757d; }
@@ -56,9 +78,17 @@
 <body>
     <div class="container-fluid px-4">
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-            <a href="{{ back_url }}" class="btn btn-secondary btn-sm">
-                <i class="fas fa-arrow-left me-2"></i>{{ back_label }}
-            </a>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <a href="{{ back_url }}" class="btn btn-secondary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>{{ back_label }}
+                </a>
+                {% if not show_success_banner %}
+                <div class="border-start ps-2 ms-1">
+                    <h1 class="h6 fw-bold mb-0"><i class="fas fa-file-lines me-1 text-primary"></i>CV & Cover Letter Editor</h1>
+                    <p class="text-muted small mb-0">Review documents and chat to refine.</p>
+                </div>
+                {% endif %}
+            </div>
             <div class="d-flex gap-2 flex-wrap">
                 <a href="{{ download_url }}" class="btn btn-primary btn-sm">
                     <i class="fas fa-download me-2"></i>Download CV
@@ -97,15 +127,12 @@
         </div>
 
         {% if show_success_banner %}
-        <div class="success-header">
-            <div class="success-icon"><i class="fas fa-check-circle"></i></div>
-            <h1 class="display-6 fw-bold mb-2">CV Generated Successfully!</h1>
-            <p class="lead mb-0">Preview your CV and cover letter, then chat with the AI to refine either document before downloading.</p>
-        </div>
-        {% else %}
-        <div class="mb-3">
-            <h1 class="h3 fw-bold mb-1"><i class="fas fa-file-lines me-2 text-primary"></i>CV & Cover Letter Editor</h1>
-            <p class="text-muted mb-0">Review your application documents and ask the AI to make changes.</p>
+        <div class="success-header d-flex align-items-center gap-3">
+            <div class="success-icon flex-shrink-0"><i class="fas fa-check-circle"></i></div>
+            <div>
+                <h1 class="h5 fw-bold mb-1">CV Generated Successfully</h1>
+                <p class="small mb-0 opacity-90">Preview your CV and cover letter, then chat with the AI to refine either document before downloading.</p>
+            </div>
         </div>
         {% endif %}
 
@@ -122,27 +149,7 @@
 
         <div class="row g-4">
             <div class="col-lg-3">
-                <div class="card job-sidebar">
-                    <div class="card-header"><i class="fas fa-briefcase me-2"></i>Job</div>
-                    <div class="card-body">
-                        <div class="job-title">{{ job.title }}</div>
-                        <div class="company-name mb-3"><i class="fas fa-building me-2"></i>{{ job.company }}</div>
-                        {% if job.link %}
-                            <a href="{{ job.link }}" target="_blank" class="btn btn-outline-primary btn-sm w-100">
-                                <i class="fas fa-external-link-alt me-2"></i>View Job
-                            </a>
-                        {% endif %}
-                    </div>
-                </div>
-                {% if generation_meta %}
-                <div class="card">
-                    <div class="card-header"><i class="fas fa-robot me-2"></i>Generation</div>
-                    <div class="card-body small text-muted">
-                        Models: {{ generation_meta.get('fast', 'fast') }} / {{ generation_meta.get('main', 'main') }}
-                        {% if rag_chunk_count %}<br>{{ rag_chunk_count }} profile chunks indexed{% endif %}
-                    </div>
-                </div>
-                {% endif %}
+                {% include '_job_preview_panel.html' %}
             </div>
 
             <div class="col-lg-5">

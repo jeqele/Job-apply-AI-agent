@@ -1,0 +1,139 @@
+{# Compact job context panel for CV preview / editor pages. #}
+{% set match_analysis = job|profile_match_analysis %}
+{% set match_score = job|profile_match_score %}
+
+<div class="job-preview-panel">
+    <div class="job-preview-head">
+        <span class="job-preview-label"><i class="fas fa-briefcase me-1"></i>Job</span>
+        <div class="d-flex flex-wrap gap-1 align-items-center">
+            {% if match_score is not none %}
+                <span class="badge job-match-badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}"
+                      title="{{ match_analysis.reason if match_analysis else 'Profile match' }}">
+                    {{ match_score|round(0)|int }}% fit
+                </span>
+            {% endif %}
+            {% if job.source %}
+                <span class="badge bg-secondary">{{ job.source }}</span>
+            {% endif %}
+            {% if job.posted_days_ago is not none %}
+                <span class="badge bg-light text-dark">{{ job.posted_days_ago }}d ago</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="job-preview-body">
+        <h2 class="job-preview-title">{{ job.title }}</h2>
+
+        {% if job.company or job.location %}
+            <div class="job-preview-meta-line">
+                {% if job.company %}
+                    <span><i class="fas fa-building me-1"></i>{{ job.company }}</span>
+                {% endif %}
+                {% if job.location %}
+                    <span><i class="fas fa-location-dot me-1"></i>{{ job.location }}</span>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        {% if job.work_type or job.salary or job.employment_type or job.seniority_level or job.visa_sponsorship or job.relocation_support %}
+            <div class="job-preview-chips">
+                {% if job.work_type %}
+                    <span class="job-chip">{{ job.work_type }}</span>
+                {% endif %}
+                {% if job.salary %}
+                    <span class="job-chip job-chip-success">{{ job.salary }}</span>
+                {% endif %}
+                {% if job.employment_type %}
+                    <span class="job-chip">{{ job.employment_type }}</span>
+                {% endif %}
+                {% if job.seniority_level %}
+                    <span class="job-chip">{{ job.seniority_level }}</span>
+                {% endif %}
+                {% if job.visa_sponsorship %}
+                    <span class="job-chip {% if job.visa_sponsorship == 'Yes' %}job-chip-success{% elif job.visa_sponsorship == 'No' %}job-chip-danger{% endif %}">
+                        Visa: {{ job.visa_sponsorship }}
+                    </span>
+                {% endif %}
+                {% if job.relocation_support %}
+                    <span class="job-chip {% if job.relocation_support in ['Yes', 'Mentioned'] %}job-chip-success{% elif job.relocation_support == 'No' %}job-chip-danger{% endif %}">
+                        Relocation: {{ job.relocation_support }}
+                    </span>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        {% if match_analysis and match_analysis.reason %}
+            <div class="job-preview-section">
+                <div class="job-preview-section-label">Why it matches</div>
+                <p class="job-preview-text mb-0">{{ match_analysis.reason }}</p>
+            </div>
+        {% endif %}
+
+        {% if job.matched_skills %}
+            <div class="job-preview-section">
+                <div class="job-preview-section-label">Matched skills</div>
+                <div class="job-preview-skills">
+                    {% for skill in job.matched_skills[:12] %}
+                        <span class="job-skill-tag">{{ skill }}</span>
+                    {% endfor %}
+                    {% if job.matched_skills|length > 12 %}
+                        <span class="job-skill-tag job-skill-more">+{{ job.matched_skills|length - 12 }} more</span>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
+        {% if job.description %}
+            <div class="job-preview-section">
+                <div class="job-preview-section-label">Description</div>
+                <p class="job-preview-text job-preview-desc mb-0">
+                    {{ job.description[:320] }}{% if job.description|length > 320 %}…{% endif %}
+                </p>
+            </div>
+        {% endif %}
+
+        {% if job.emails %}
+            <div class="job-preview-section">
+                <div class="job-preview-section-label">Contact</div>
+                <a href="mailto:{{ job.emails.split(',')[0].strip() }}" class="job-preview-link">{{ job.emails }}</a>
+            </div>
+        {% elif job.application_method %}
+            <div class="job-preview-section">
+                <div class="job-preview-section-label">Apply via</div>
+                <p class="job-preview-text mb-0">{{ job.application_method }}</p>
+            </div>
+        {% endif %}
+
+        {% if job.relocation_info %}
+            <div class="job-preview-section">
+                <div class="job-preview-section-label">Relocation note</div>
+                <p class="job-preview-text mb-0">{{ job.relocation_info }}</p>
+            </div>
+        {% endif %}
+
+        <div class="job-preview-footer">
+            <div class="job-preview-status">
+                {% if job.cv_filename or cv_filename|default('') %}
+                    <span class="job-doc-status"><i class="fas fa-file-lines me-1"></i>CV ready</span>
+                {% endif %}
+                {% if has_cover_letter|default(false) %}
+                    <span class="job-doc-status"><i class="fas fa-envelope me-1"></i>Cover letter</span>
+                {% endif %}
+            </div>
+            {% if generation_meta %}
+                <div class="job-preview-gen text-muted">
+                    {% if rag_chunk_count %}<span>{{ rag_chunk_count }} profile chunks</span>{% endif %}
+                    {% if generation_meta.get('fast') or generation_meta.get('main') %}
+                        {% if rag_chunk_count %} · {% endif %}
+                        <span>{{ generation_meta.get('fast', 'fast') }} / {{ generation_meta.get('main', 'main') }}</span>
+                    {% endif %}
+                </div>
+            {% endif %}
+            {% if job.link %}
+                <a href="{{ job.link }}" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm w-100">
+                    <i class="fas fa-external-link-alt me-1"></i>View Job Posting
+                </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
