@@ -247,6 +247,24 @@
                         <i class="fas fa-file-circle-check {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>ATS Friendly
                     </a>
                     {% endif %}
+                    <form method="post"
+                          action="{{ url_for('clear_job_cv', job_id=job.id) }}"
+                          class="d-inline"
+                          onsubmit="return confirm('Clear the generated CV, cover letter, chat history, and ATS analysis for this job? You can regenerate fresh from your base profile with Make AI CV.');">
+                        <input type="hidden" name="return_view" value="{{ 'manage' if manage_mode else 'list' }}">
+                        {% if manage_mode %}
+                        <input type="hidden" name="return_folder" value="{{ current_folder }}">
+                        <input type="hidden" name="return_search" value="{{ search_query }}">
+                        {% if sort_query %}
+                        <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                        {% endif %}
+                        {% elif sort_query|default('') %}
+                        <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                        {% endif %}
+                        <button type="submit" class="btn btn-outline-danger {{ btn_size }}" title="Remove generated CV and regenerate from base profile">
+                            <i class="fas fa-eraser {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Clear CV
+                        </button>
+                    </form>
                 {% endif %}
             </div>
         </div>

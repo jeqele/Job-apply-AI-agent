@@ -21,6 +21,8 @@ DEFAULT_STORE: dict[str, Any] = {
     "cover_letter_chat_sessions": [],
     "cover_letter_chat_active_session_id": "",
     "ats_analysis": {},
+    "cv_preview_lines": [],
+    "cv_preview_customized": False,
     "updated_at": "",
 }
 
@@ -38,6 +40,26 @@ def cv_content_path(output_dir: str, cv_filename: str) -> str:
     """Return the sidecar JSON path for a generated CV file."""
     base, _ = os.path.splitext(cv_filename)
     return os.path.join(output_dir, f"{base}.content.json")
+
+
+def delete_cv_artifacts(
+    output_dir: str,
+    cv_filename: str = "",
+    *,
+    cover_letter_filename: str = "",
+) -> None:
+    """Remove generated CV, cover letter, and sidecar content files from disk."""
+    if cv_filename:
+        cv_path = os.path.join(output_dir, cv_filename)
+        if os.path.isfile(cv_path):
+            os.remove(cv_path)
+        content_path = cv_content_path(output_dir, cv_filename)
+        if os.path.isfile(content_path):
+            os.remove(content_path)
+    if cover_letter_filename:
+        cl_path = os.path.join(output_dir, cover_letter_filename)
+        if os.path.isfile(cl_path):
+            os.remove(cl_path)
 
 
 def _utc_now() -> str:
@@ -249,6 +271,8 @@ def save_cv_content(
         "cover_letter_chat_sessions": deepcopy(existing.get("cover_letter_chat_sessions", [])),
         "cover_letter_chat_active_session_id": existing.get("cover_letter_chat_active_session_id", ""),
         "ats_analysis": deepcopy(existing.get("ats_analysis", {})),
+        "cv_preview_lines": deepcopy(existing.get("cv_preview_lines", [])),
+        "cv_preview_customized": bool(existing.get("cv_preview_customized")),
         "updated_at": _utc_now(),
     }
     path = cv_content_path(output_dir, cv_filename)

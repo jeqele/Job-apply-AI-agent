@@ -52,7 +52,13 @@ from job_apply_ai.cv_modifier.job_match_analyzer import (
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
-from job_apply_ai.cv_modifier.chat_context import cv_content_to_preview_lines
+from job_apply_ai.cv_modifier.chat_context import (
+    cv_content_to_preview_lines,
+    normalize_preview_lines,
+    preview_lines_to_content,
+    resolve_cv_preview_lines,
+)
+from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
 from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
     ATSFriendlyAnalyzer,
     apply_suggestion_to_content,
@@ -64,6 +70,7 @@ from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
 from job_apply_ai.cv_modifier.cv_content_store import (
     append_active_chat_messages,
+    delete_cv_artifacts,
     get_active_chat_messages,
     get_active_chat_session_id,
     get_chat_sessions,
@@ -364,6 +371,63 @@ def _load_job_cv_store(cv_filename: str) -> dict | None:
     return load_cv_content(app.config['CV_OUTPUT_DIR'], cv_filename)
 
 
+def _clear_job_cv(job: dict, job_id: int) -> bool:
+    """Remove generated CV artifacts and reset job CV fields."""
+    cv_filename = job.get('cv_filename', '')
+    cover_letter_filename = job.get('cover_letter_filename', '')
+    if not cv_filename and not cover_letter_filename:
+        return False
+
+    delete_cv_artifacts(
+        app.config['CV_OUTPUT_DIR'],
+        cv_filename,
+        cover_letter_filename=cover_letter_filename,
+    )
+
+    job['cv_filename'] = ''
+    job['cover_letter_filename'] = ''
+    job['matched_categories'] = {}
+    job_repo.update_job(job_id, job)
+
+    if session.get('current_cv_filename') == cv_filename:
+        session.pop('current_cv', None)
+        session.pop('current_cv_filename', None)
+
+    return True
+
+
+def _sync_job_cv_docx_from_preview(
+    cv_filename: str,
+    store: dict,
+    profile: dict,
+    *,
+    persist_store: bool = True,
+) -> dict:
+    """Rebuild the Word CV and structured content from preview lines."""
+    content = store.get('tailored_content') or {}
+    profile_name = profile.get('full_name', '')
+    preview_lines = resolve_cv_preview_lines(
+        content,
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
+    if not preview_lines:
+        return store
+
+    updated_content = preview_lines_to_content(content, preview_lines, profile_name)
+    store['tailored_content'] = updated_content
+
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    builder = CVDocumentBuilder(get_default_cv_template_path())
+    builder.build_from_preview_lines(cv_path, preview_lines, profile, updated_content)
+
+    if persist_store:
+        _save_job_cv_content(cv_filename, updated_content, store=store)
+
+    return store
+
+
 def get_job_ats_analysis(job: dict) -> dict | None:
     """Return stored ATS analysis for a job's generated CV, if any."""
     cv_filename = job.get('cv_filename', '')
@@ -521,7 +585,12 @@ def _cv_preview_context(
     profile = profile_repo.get_profile()
     content = tailored_content or store.get('tailored_content', {})
     profile_name = profile.get('full_name', '')
-    cv_preview_lines = cv_content_to_preview_lines(content, profile_name)
+    cv_preview_lines = resolve_cv_preview_lines(
+        content,
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
     chat_history = get_active_chat_messages(store, 'cv')
     cover_letter = store.get('cover_letter', {})
     cover_letter_chat_history = get_active_chat_messages(store, 'cover_letter')
@@ -579,6 +648,9 @@ def _cv_preview_context(
             else None
         ),
         'chat_api_url': url_for('document_chat', job_id=job_id) if job_id else None,
+        'preview_lines_api_url': (
+            url_for('cv_preview_lines_update', job_id=job_id) if job_id else None
+        ),
         'generate_cover_letter_url': (
             url_for('generate_job_cover_letter', job_id=job_id) if job_id else None
         ),
@@ -1219,6 +1291,21 @@ def _redirect_after_job_status_update(
             kwargs['sort'] = return_sort
         return redirect(url_for('preview_job_cv', job_id=job_id, **kwargs))
 
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+
+def _redirect_after_clear_cv(
+    return_view: str,
+    return_folder: str,
+    return_search: str,
+    return_sort: str,
+):
+    """Redirect after clearing a job's generated CV."""
+    if return_view == 'list':
+        kwargs = {}
+        if return_sort and return_sort != DEFAULT_JOB_SORT:
+            kwargs['sort'] = return_sort
+        return redirect(url_for('job_list', **kwargs))
     return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
 
@@ -2215,6 +2302,49 @@ def update_job_status(job_id):
     )
 
 
+@app.route('/jobs/<int:job_id>/clear_cv', methods=['POST'])
+def clear_job_cv(job_id):
+    """Remove a job's generated CV so it can be regenerated from the base profile."""
+    job = job_repo.get_job(job_id)
+    return_view = request.form.get('return_view', 'list')
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '')
+    return_sort = request.form.get('return_sort', '')
+
+    if not job:
+        flash('Job not found', 'error')
+        return _redirect_after_clear_cv(
+            return_view,
+            return_folder,
+            return_search,
+            return_sort,
+        )
+
+    if not job.get('cv_filename') and not job.get('cover_letter_filename'):
+        flash('This job has no generated CV to clear', 'info')
+        return _redirect_after_clear_cv(
+            return_view,
+            return_folder,
+            return_search,
+            return_sort,
+        )
+
+    if _clear_job_cv(job, job_id):
+        flash(
+            'CV cleared. Use Make AI CV to regenerate from your base profile.',
+            'success',
+        )
+    else:
+        flash('Could not clear CV for this job', 'error')
+
+    return _redirect_after_clear_cv(
+        return_view,
+        return_folder,
+        return_search,
+        return_sort,
+    )
+
+
 @app.route('/jobs/batch/status', methods=['POST'])
 def batch_update_job_status():
     """Move multiple selected jobs to another workflow folder."""
@@ -2458,6 +2588,20 @@ def make_cv_complete(task_id):
     return_folder = result.get('return_folder', 'all')
     return_search = result.get('return_search', '')
     return_sort = result.get('return_sort', '')
+
+    cv_filename = result.get('cv_filename', '')
+    if cv_filename:
+        store = normalize_store(_load_job_cv_store(cv_filename) or {})
+        if store.get('tailored_content'):
+            try:
+                _sync_job_cv_docx_from_preview(
+                    cv_filename,
+                    store,
+                    profile_repo.get_profile(),
+                )
+            except Exception as exc:
+                logger.warning('Failed to rebuild CV docx after generation for job preview: %s', exc)
+
     context = _cv_preview_context(
         result.get('job') or {},
         tailored_content=result.get('tailored_content', {}),
@@ -2497,12 +2641,19 @@ def preview_job_cv(job_id):
             return _manage_jobs_redirect(return_folder, return_search, return_sort)
         return redirect(url_for('job_list', sort=return_sort or None))
 
-    store = _load_job_cv_store(cv_filename)
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
     if not store or not store.get('tailored_content'):
         flash('CV preview data not found. Regenerate the CV to enable preview and chat editing.', 'warning')
         if return_from_manage:
             return _manage_jobs_redirect(return_folder, return_search, return_sort)
         return redirect(url_for('job_list', sort=return_sort or None))
+
+    profile = profile_repo.get_profile()
+    try:
+        store = _sync_job_cv_docx_from_preview(cv_filename, store, profile, persist_store=True)
+    except Exception as exc:
+        logger.error('Failed to rebuild CV docx for job %s preview: %s', job_id, exc)
+        flash('Could not rebuild the CV document for preview.', 'warning')
 
     context = _cv_preview_context(
         job,
@@ -2801,6 +2952,14 @@ def document_chat(job_id):
 
         chat_history = get_active_chat_messages(store, 'cv')
         current_content = store['tailored_content']
+        profile_name = profile.get('full_name', '')
+        current_preview_lines = resolve_cv_preview_lines(
+            current_content,
+            profile_name,
+            stored_lines=store.get('cv_preview_lines'),
+            customized=bool(store.get('cv_preview_customized')),
+        )
+
         editor = CVChatEditor()
         result = editor.modify(
             current_content=current_content,
@@ -2808,6 +2967,8 @@ def document_chat(job_id):
             job=job,
             profile=profile,
             chat_history=chat_history,
+            preview_lines=current_preview_lines,
+            preview_customized=bool(store.get('cv_preview_customized')),
         )
         updated_content = result['content']
         reply = result['reply']
@@ -2825,6 +2986,8 @@ def document_chat(job_id):
                 {'role': 'assistant', 'content': reply},
             ],
         )
+        store['cv_preview_lines'] = []
+        store['cv_preview_customized'] = False
         _save_job_cv_content(
             cv_filename,
             updated_content,
@@ -2851,6 +3014,54 @@ def document_chat(job_id):
     except Exception as exc:
         logger.error('Document chat edit failed for job %s: %s', job_id, exc)
         return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/jobs/<int:job_id>/cv/preview-lines', methods=['POST'])
+@app.route('/api/jobs/<int:job_id>/cv/preview-lines/reorder', methods=['POST'])
+def cv_preview_lines_update(job_id):
+    """Persist user-edited numbered CV preview lines."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return jsonify({'error': 'No CV file found for this job'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    lines = payload.get('lines')
+    if not isinstance(lines, list):
+        return jsonify({'error': 'lines must be an array'}), 400
+
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    content = store.get('tailored_content', {})
+    if not content:
+        return jsonify({'error': 'CV content not available for editing'}), 404
+
+    normalized = normalize_preview_lines(lines)
+    store['cv_preview_lines'] = normalized
+    store['cv_preview_customized'] = True
+
+    profile = profile_repo.get_profile()
+    try:
+        store = _sync_job_cv_docx_from_preview(
+            cv_filename,
+            store,
+            profile,
+            persist_store=True,
+        )
+        normalized = store.get('cv_preview_lines', normalized)
+    except Exception as exc:
+        logger.error('Failed to rebuild CV docx after preview edit for job %s: %s', job_id, exc)
+        _save_job_cv_content(cv_filename, content, store=store)
+        return jsonify({'error': f'Could not rebuild CV document: {exc}'}), 500
+
+    return jsonify({
+        'ok': True,
+        'cv_preview_lines': normalized,
+        'cv_preview_customized': True,
+        'content': store.get('tailored_content', content),
+    })
 
 
 @app.route('/api/jobs/<int:job_id>/documents/chat/sessions', methods=['POST'])

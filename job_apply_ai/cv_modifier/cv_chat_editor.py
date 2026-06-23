@@ -8,9 +8,12 @@ from copy import deepcopy
 from typing import Any
 
 from job_apply_ai.cv_modifier.chat_context import (
+    PreviewLine,
     build_job_context,
     cv_content_to_preview_lines,
     format_numbered_cv_preview,
+    preview_lines_to_content,
+    resolve_cv_preview_lines,
 )
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
@@ -66,6 +69,8 @@ class CVChatEditor:
         job: dict[str, Any],
         profile: dict[str, Any],
         chat_history: list[dict[str, str]] | None = None,
+        preview_lines: list[PreviewLine] | None = None,
+        preview_customized: bool = False,
     ) -> dict[str, Any]:
         """Apply a user edit request and return updated content plus assistant reply."""
         if not self.ollama.is_available():
@@ -76,11 +81,14 @@ class CVChatEditor:
 
         history_text = self._format_history(chat_history or [])
         job_context = build_job_context(job)
-        preview_lines = cv_content_to_preview_lines(
+        profile_name = str(profile.get("full_name", "") or "")
+        resolved_preview_lines = resolve_cv_preview_lines(
             current_content,
-            profile_name=str(profile.get("full_name", "") or ""),
+            profile_name,
+            stored_lines=preview_lines,
+            customized=preview_customized,
         )
-        numbered_preview = format_numbered_cv_preview(preview_lines)
+        numbered_preview = format_numbered_cv_preview(resolved_preview_lines)
         compact_content = json.dumps(current_content, separators=(",", ":"), ensure_ascii=False)
         prompt = f"""
 The user wants to refine their tailored CV for a job application.
@@ -164,9 +172,23 @@ Return JSON with this exact shape:
         profile: dict[str, Any],
         *,
         template_path: str | None = None,
+        preview_lines: list[PreviewLine] | None = None,
     ) -> None:
-        """Rebuild the Word document from updated structured content."""
+        """Rebuild the Word document from preview lines or structured content."""
         builder = CVDocumentBuilder(template_path or get_default_cv_template_path())
+        if preview_lines:
+            synced_content = preview_lines_to_content(
+                content,
+                preview_lines,
+                profile_name=str(profile.get("full_name", "") or ""),
+            )
+            builder.build_from_preview_lines(
+                output_path,
+                preview_lines,
+                profile,
+                synced_content,
+            )
+            return
         builder.build(output_path, content, profile=profile)
 
     @staticmethod

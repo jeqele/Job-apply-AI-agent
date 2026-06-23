@@ -10,6 +10,7 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.text.paragraph import Paragraph
 
+from job_apply_ai.cv_modifier.chat_context import PreviewLine, PREVIEW_ONLY_SECTION_LABELS
 from job_apply_ai.storage.user_profile import parse_professional_titles
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,94 @@ class CVDocumentBuilder:
 
         doc.save(output_path)
         return True
+
+    def build_from_preview_lines(
+        self,
+        output_path: str,
+        preview_lines: list[PreviewLine],
+        profile: dict[str, Any] | None = None,
+        content: dict[str, Any] | None = None,
+    ) -> bool:
+        """Rebuild a CV document so the Word file matches the numbered preview panel."""
+        shutil.copy2(self.template_path, output_path)
+        doc = Document(output_path)
+
+        header_content = dict(content or {})
+        title_from_preview = ""
+        for line in preview_lines:
+            if str(line.get("kind", "") or "") == "title":
+                title_from_preview = str(line.get("text", "") or "").strip()
+                if title_from_preview:
+                    header_content["professional_title"] = title_from_preview
+                break
+
+        if profile:
+            self._fill_header(doc, profile, header_content)
+
+        self._remove_preview_only_sections(doc)
+        self._clear_document_body(doc, keep_paragraphs=2)
+
+        anchor = doc.paragraphs[-1] if doc.paragraphs else doc.add_paragraph("")
+        skip_section = False
+        title_used_in_header = bool(title_from_preview)
+
+        for line in preview_lines:
+            kind = str(line.get("kind", "text") or "text")
+            text = str(line.get("text", "") or "").strip()
+            if not text:
+                continue
+
+            if kind == "name":
+                continue
+
+            if kind == "section":
+                skip_section = text.lower() in PREVIEW_ONLY_SECTION_LABELS
+                if skip_section:
+                    continue
+                anchor = self._insert_paragraph_after(anchor, text)
+                if anchor.style.name.startswith("Heading") or text.isupper():
+                    anchor.style = "Heading 1"
+                continue
+
+            if skip_section:
+                continue
+
+            if kind == "title":
+                if title_used_in_header:
+                    title_used_in_header = False
+                    continue
+
+            if kind == "skills":
+                anchor = self._insert_paragraph_after(anchor, text)
+                anchor.style = "Normal"
+                continue
+
+            if kind == "bullet" or text.startswith("•"):
+                anchor = self._insert_paragraph_after(anchor, text.lstrip("•").strip())
+                anchor.style = "List Bullet"
+                continue
+
+            if kind == "role":
+                anchor = self._insert_paragraph_after(anchor, text)
+                for run in anchor.runs:
+                    run.bold = True
+                continue
+
+            anchor = self._insert_paragraph_after(anchor, text)
+            if kind == "meta":
+                anchor.style = "Normal"
+
+        doc.save(output_path)
+        return True
+
+    @staticmethod
+    def _clear_document_body(doc: Document, *, keep_paragraphs: int = 2) -> None:
+        while len(doc.paragraphs) > keep_paragraphs:
+            start = keep_paragraphs
+            end = len(doc.paragraphs)
+            for index in reversed(range(start, end)):
+                element = doc.paragraphs[index]._element
+                element.getparent().remove(element)
 
     def _remove_preview_only_sections(self, doc: Document) -> None:
         """Drop preview-only job skill sections from the exported document."""

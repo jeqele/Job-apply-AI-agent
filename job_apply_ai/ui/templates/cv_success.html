@@ -12,10 +12,28 @@
         .card-header { background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%); color: white; font-weight: 600; padding: 1rem 1.25rem; border-bottom: none; }
         .preview-pane { background: white; border-radius: 1rem; box-shadow: 0 5px 15px rgba(0,0,0,0.05); min-height: 520px; max-height: 72vh; overflow-y: auto; }
         .preview-numbered { padding: 0.75rem 0; }
-        .preview-line { display: flex; gap: 0.75rem; padding: 0.2rem 1rem; line-height: 1.45; }
+        .preview-line { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.2rem 0.75rem 0.2rem 0.5rem; line-height: 1.45; cursor: grab; }
         .preview-line:hover { background: #f8fbff; }
-        .line-number { flex: 0 0 2.25rem; text-align: right; color: #adb5bd; font-size: 0.78rem; font-variant-numeric: tabular-nums; user-select: none; padding-top: 0.05rem; }
-        .line-content { flex: 1; min-width: 0; }
+        .preview-line.editing { cursor: default; background: #fffef5; }
+        .preview-line.dragging { opacity: 0.45; cursor: grabbing; background: #eef4ff; }
+        .preview-line.drag-over { background: #e7f1ff; box-shadow: inset 0 2px 0 #0d6efd; }
+        .line-drag-handle { flex: 0 0 0.85rem; color: #ced4da; cursor: grab; padding-top: 0.1rem; }
+        .preview-line:hover .line-drag-handle { color: #adb5bd; }
+        .line-number { flex: 0 0 2rem; text-align: right; color: #adb5bd; font-size: 0.78rem; font-variant-numeric: tabular-nums; user-select: none; padding-top: 0.05rem; }
+        .line-body { flex: 1; min-width: 0; }
+        .line-actions { flex: 0 0 auto; display: flex; gap: 0.1rem; opacity: 0; transition: opacity 0.15s; padding-top: 0.05rem; }
+        .preview-line:hover .line-actions, .preview-line.editing .line-actions { opacity: 1; }
+        .line-actions .btn { color: #6c757d; padding: 0.1rem 0.35rem; line-height: 1; }
+        .line-actions .btn:hover { color: #0d6efd; }
+        .line-actions .btn-delete:hover { color: #dc3545; }
+        .line-edit-input { width: 100%; min-height: 2.2rem; resize: vertical; font: inherit; line-height: 1.45; border: 1px solid #cfe2ff; border-radius: 0.35rem; padding: 0.25rem 0.5rem; background: #fff; }
+        .line-edit-input:focus { outline: none; border-color: #0d6efd; box-shadow: 0 0 0 0.15rem rgba(13,110,253,0.15); }
+        .preview-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.5rem 1rem; border-bottom: 1px solid #eef2f7; background: #fafbfc; font-size: 0.78rem; color: #6c757d; flex-wrap: wrap; }
+        .preview-history-actions .btn { font-size: 0.75rem; padding: 0.15rem 0.5rem; }
+        .preview-save-status { min-height: 1rem; }
+        .preview-save-status.saving { color: #0d6efd; }
+        .preview-save-status.saved { color: #198754; }
+        .preview-save-status.error { color: #dc3545; }
         .line-content.kind-name { font-size: 1.75rem; font-weight: 700; color: #212529; padding-top: 0.5rem; }
         .line-content.kind-title { font-size: 1.1rem; color: #0d6efd; font-weight: 600; margin-bottom: 0.35rem; }
         .line-content.kind-section { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.78rem; color: #6c757d; font-weight: 700; margin-top: 0.65rem; padding-top: 0.5rem; border-top: 1px solid #eef2f7; }
@@ -236,6 +254,7 @@
     <script id="coverLetterChatActiveSessionData" type="application/json">{{ cover_letter_chat_active_session_id | tojson }}</script>
     <script>
         const chatApiUrl = {{ chat_api_url | tojson }};
+        const previewLinesApiUrl = {{ preview_lines_api_url | tojson }};
         const chatSessionsApiUrl = {{ chat_sessions_api_url | tojson }};
         const generateCoverLetterUrl = {{ generate_cover_letter_url | tojson }};
         const sendApplicationUrl = {{ send_application_url | tojson }};
@@ -359,22 +378,390 @@
             return `<span class="line-content kind-${escapeHtml(kind)}">${escapeHtml(text)}</span>`;
         }
 
-        function renderCvPreview() {
-            const preview = document.getElementById('cvPreview');
-            if (!cvPreviewLines.length) {
-                preview.innerHTML = '<div class="p-4 text-muted">No CV content to preview.</div>';
-                return;
+        let editingLineIndex = null;
+        let previewSaveTimer = null;
+        let previewSaveStatusTimer = null;
+        let previewUndoStack = [];
+        let previewRedoStack = [];
+        let previewInteractionsBound = false;
+        const PREVIEW_HISTORY_LIMIT = 50;
+
+        function clonePreviewLine(line) {
+            const copy = { text: line.text || '', kind: line.kind || 'text' };
+            if (line.variant) copy.variant = line.variant;
+            return copy;
+        }
+
+        function clonePreviewLines(lines) {
+            return (lines || []).map(clonePreviewLine);
+        }
+
+        function snapshotPreviewState() {
+            return {
+                lines: clonePreviewLines(cvPreviewLines),
+                editingLineIndex,
+            };
+        }
+
+        function previewStatesEqual(a, b) {
+            if (!a || !b) return false;
+            if (a.editingLineIndex !== b.editingLineIndex) return false;
+            return JSON.stringify(a.lines) === JSON.stringify(b.lines);
+        }
+
+        function updateUndoRedoButtons() {
+            const undoBtn = document.getElementById('previewUndoBtn');
+            const redoBtn = document.getElementById('previewRedoBtn');
+            if (undoBtn) undoBtn.disabled = previewUndoStack.length === 0;
+            if (redoBtn) redoBtn.disabled = previewRedoStack.length === 0;
+        }
+
+        function resetPreviewHistory() {
+            previewUndoStack = [];
+            previewRedoStack = [];
+            updateUndoRedoButtons();
+        }
+
+        function recordPreviewHistoryBeforeChange() {
+            const snapshot = snapshotPreviewState();
+            const last = previewUndoStack[previewUndoStack.length - 1];
+            if (!last || !previewStatesEqual(last, snapshot)) {
+                previewUndoStack.push(snapshot);
+                if (previewUndoStack.length > PREVIEW_HISTORY_LIMIT) {
+                    previewUndoStack.shift();
+                }
             }
-            preview.innerHTML = `
-                <div class="preview-numbered">
-                    ${cvPreviewLines.map((line, index) => `
-                        <div class="preview-line" data-line="${index + 1}">
-                            <span class="line-number" aria-hidden="true">${index + 1}</span>
-                            ${renderLineContent(line)}
-                        </div>
-                    `).join('')}
+            previewRedoStack = [];
+            updateUndoRedoButtons();
+        }
+
+        function undoPreview() {
+            if (!previewUndoStack.length) return;
+            editingLineIndex = null;
+            previewRedoStack.push(snapshotPreviewState());
+            const previous = previewUndoStack.pop();
+            cvPreviewLines = clonePreviewLines(previous.lines);
+            editingLineIndex = previous.editingLineIndex;
+            renderCvPreview();
+            persistPreviewLines();
+            updateUndoRedoButtons();
+        }
+
+        function redoPreview() {
+            if (!previewRedoStack.length) return;
+            editingLineIndex = null;
+            previewUndoStack.push(snapshotPreviewState());
+            const next = previewRedoStack.pop();
+            cvPreviewLines = clonePreviewLines(next.lines);
+            editingLineIndex = next.editingLineIndex;
+            renderCvPreview();
+            persistPreviewLines();
+            updateUndoRedoButtons();
+        }
+
+        function handlePreviewHistoryShortcut(event) {
+            const cvPanel = document.getElementById('cvPanel');
+            if (!cvPanel || !cvPanel.classList.contains('active')) return;
+            if (event.target.id === 'chatInput') return;
+            if (event.target.classList?.contains('line-edit-input')) return;
+
+            const mod = event.ctrlKey || event.metaKey;
+            if (!mod) return;
+
+            if (event.key === 'z' || event.key === 'Z') {
+                event.preventDefault();
+                if (event.shiftKey) redoPreview();
+                else undoPreview();
+            } else if (event.key === 'y' || event.key === 'Y') {
+                event.preventDefault();
+                redoPreview();
+            }
+        }
+
+        function setPreviewSaveStatus(state, message) {
+            const el = document.getElementById('previewSaveStatus');
+            if (!el) return;
+            el.className = `preview-save-status ${state || ''}`.trim();
+            el.textContent = message || '';
+            clearTimeout(previewSaveStatusTimer);
+            if (state === 'saved') {
+                previewSaveStatusTimer = setTimeout(() => {
+                    el.textContent = '';
+                    el.className = 'preview-save-status';
+                }, 2000);
+            }
+        }
+
+        function persistPreviewLines() {
+            if (!previewLinesApiUrl) return;
+            clearTimeout(previewSaveTimer);
+            setPreviewSaveStatus('saving', 'Saving…');
+            previewSaveTimer = setTimeout(async () => {
+                try {
+                    const response = await fetch(previewLinesApiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lines: cvPreviewLines }),
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Could not save preview');
+                    if (data.cv_preview_lines) {
+                        cvPreviewLines = data.cv_preview_lines;
+                    }
+                    if (data.content) {
+                        cvContent = data.content;
+                    }
+                    setPreviewSaveStatus('saved', 'Saved');
+                } catch (error) {
+                    setPreviewSaveStatus('error', error.message || 'Save failed');
+                }
+            }, 350);
+        }
+
+        function renderLineEditor(line, index) {
+            const text = line.text || '';
+            return `
+                <textarea class="line-edit-input" data-edit-index="${index}" rows="${Math.max(2, Math.ceil(text.length / 70))}">${escapeHtml(text)}</textarea>
+            `;
+        }
+
+        function renderPreviewLineRow(line, index) {
+            const isEditing = editingLineIndex === index;
+            return `
+                <div class="preview-line${isEditing ? ' editing' : ''}" draggable="${isEditing ? 'false' : 'true'}" data-index="${index}">
+                    <span class="line-drag-handle" aria-hidden="true" title="Drag to reorder">
+                        <i class="fas fa-grip-vertical"></i>
+                    </span>
+                    <span class="line-number" aria-hidden="true">${index + 1}</span>
+                    <div class="line-body">
+                        ${isEditing ? renderLineEditor(line, index) : renderLineContent(line)}
+                    </div>
+                    <div class="line-actions">
+                        <button type="button" class="btn btn-link btn-sm line-action-edit" data-action="edit" data-index="${index}" title="Edit line">
+                            <i class="fas fa-pencil"></i>
+                        </button>
+                        <button type="button" class="btn btn-link btn-sm line-action-duplicate" data-action="duplicate" data-index="${index}" title="Duplicate line">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                        <button type="button" class="btn btn-link btn-sm btn-delete line-action-delete" data-action="delete" data-index="${index}" title="Delete line">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
                 </div>
             `;
+        }
+
+        function renderCvPreview() {
+            const preview = document.getElementById('cvPreview');
+            preview.innerHTML = `
+                <div class="preview-toolbar">
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <span>Drag to reorder · edit, duplicate, or delete lines</span>
+                        <div class="preview-history-actions btn-group btn-group-sm" role="group" aria-label="Preview history">
+                            <button type="button" class="btn btn-outline-secondary" id="previewUndoBtn" title="Undo (Ctrl+Z)" disabled>
+                                <i class="fas fa-rotate-left me-1"></i>Undo
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" id="previewRedoBtn" title="Redo (Ctrl+Y)" disabled>
+                                <i class="fas fa-rotate-right me-1"></i>Redo
+                            </button>
+                        </div>
+                    </div>
+                    <span class="preview-save-status" id="previewSaveStatus"></span>
+                </div>
+                ${cvPreviewLines.length ? `
+                    <div class="preview-numbered">
+                        ${cvPreviewLines.map((line, index) => renderPreviewLineRow(line, index)).join('')}
+                    </div>
+                ` : `
+                    <div class="p-4 text-muted text-center">No CV lines yet.</div>
+                `}
+                <div class="p-3 border-top">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="addPreviewLineBtn">
+                        <i class="fas fa-plus me-1"></i>Add line
+                    </button>
+                </div>
+            `;
+            bindCvPreviewInteractions();
+            updateUndoRedoButtons();
+        }
+
+        function commitLineEdit(index, text, rerender = true) {
+            if (index < 0 || index >= cvPreviewLines.length) return;
+            const previous = cvPreviewLines[index].text || '';
+            if (previous !== text) {
+                recordPreviewHistoryBeforeChange();
+            }
+            cvPreviewLines[index].text = text;
+            editingLineIndex = null;
+            if (rerender) renderCvPreview();
+            persistPreviewLines();
+        }
+
+        function flushActiveLineEdit() {
+            if (editingLineIndex === null) return;
+            const input = document.querySelector(`textarea[data-edit-index="${editingLineIndex}"]`);
+            const text = input ? input.value.trim() : cvPreviewLines[editingLineIndex].text || '';
+            commitLineEdit(editingLineIndex, text, false);
+        }
+
+        function cancelLineEdit() {
+            editingLineIndex = null;
+            renderCvPreview();
+        }
+
+        function bindCvPreviewInteractions() {
+            const container = document.querySelector('#cvPreview .preview-numbered');
+            const previewRoot = document.getElementById('cvPreview');
+
+            if (!previewInteractionsBound) {
+                previewInteractionsBound = true;
+                document.addEventListener('keydown', handlePreviewHistoryShortcut);
+
+                previewRoot.addEventListener('click', (event) => {
+                    if (event.target.closest('#previewUndoBtn')) {
+                        event.preventDefault();
+                        undoPreview();
+                        return;
+                    }
+                    if (event.target.closest('#previewRedoBtn')) {
+                        event.preventDefault();
+                        redoPreview();
+                        return;
+                    }
+                    if (event.target.closest('#addPreviewLineBtn')) {
+                        event.preventDefault();
+                        flushActiveLineEdit();
+                        recordPreviewHistoryBeforeChange();
+                        cvPreviewLines.push({ text: 'New line', kind: 'text' });
+                        editingLineIndex = cvPreviewLines.length - 1;
+                        renderCvPreview();
+                        const input = document.querySelector(`textarea[data-edit-index="${editingLineIndex}"]`);
+                        if (input) {
+                            input.focus();
+                            input.select();
+                        }
+                        persistPreviewLines();
+                        return;
+                    }
+
+                    const button = event.target.closest('button[data-action]');
+                    if (!button) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const index = Number(button.dataset.index);
+                    if (Number.isNaN(index)) return;
+
+                    if (button.dataset.action === 'edit') {
+                        if (editingLineIndex !== null && editingLineIndex !== index) {
+                            flushActiveLineEdit();
+                        }
+                        editingLineIndex = index;
+                        renderCvPreview();
+                        const input = document.querySelector(`textarea[data-edit-index="${index}"]`);
+                        if (input) {
+                            input.focus();
+                            input.select();
+                        }
+                        return;
+                    }
+
+                    flushActiveLineEdit();
+                    recordPreviewHistoryBeforeChange();
+
+                    if (button.dataset.action === 'duplicate') {
+                        cvPreviewLines.splice(index + 1, 0, clonePreviewLine(cvPreviewLines[index]));
+                        renderCvPreview();
+                        persistPreviewLines();
+                        return;
+                    }
+
+                    if (button.dataset.action === 'delete') {
+                        cvPreviewLines.splice(index, 1);
+                        if (editingLineIndex === index) editingLineIndex = null;
+                        else if (editingLineIndex !== null && editingLineIndex > index) editingLineIndex -= 1;
+                        renderCvPreview();
+                        persistPreviewLines();
+                    }
+                });
+
+                previewRoot.addEventListener('keydown', (event) => {
+                    const input = event.target.closest('textarea[data-edit-index]');
+                    if (!input) return;
+                    const index = Number(input.dataset.editIndex);
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        cancelLineEdit();
+                        return;
+                    }
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        commitLineEdit(index, input.value.trim());
+                    }
+                });
+
+                previewRoot.addEventListener('focusout', (event) => {
+                    const input = event.target.closest('textarea[data-edit-index]');
+                    if (!input) return;
+                    const related = event.relatedTarget;
+                    if (related && related.closest('#cvPreview')) return;
+                    const index = Number(input.dataset.editIndex);
+                    commitLineEdit(index, input.value.trim());
+                }, true);
+            }
+
+            if (!container) return;
+
+            let dragIndex = null;
+
+            container.querySelectorAll('.preview-line[draggable="true"]').forEach((el) => {
+                el.addEventListener('dragstart', (event) => {
+                    if (editingLineIndex !== null) {
+                        event.preventDefault();
+                        return;
+                    }
+                    dragIndex = Number(el.dataset.index);
+                    el.classList.add('dragging');
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', el.dataset.index);
+                });
+
+                el.addEventListener('dragend', () => {
+                    el.classList.remove('dragging');
+                    container.querySelectorAll('.preview-line').forEach(line => line.classList.remove('drag-over'));
+                    dragIndex = null;
+                });
+
+                el.addEventListener('dragover', (event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    container.querySelectorAll('.preview-line').forEach(line => line.classList.remove('drag-over'));
+                    el.classList.add('drag-over');
+                });
+
+                el.addEventListener('dragleave', (event) => {
+                    if (!el.contains(event.relatedTarget)) {
+                        el.classList.remove('drag-over');
+                    }
+                });
+
+                el.addEventListener('drop', (event) => {
+                    event.preventDefault();
+                    el.classList.remove('drag-over');
+                    const dropIndex = Number(el.dataset.index);
+                    if (dragIndex === null || Number.isNaN(dropIndex) || dragIndex === dropIndex) return;
+
+                    recordPreviewHistoryBeforeChange();
+                    const [moved] = cvPreviewLines.splice(dragIndex, 1);
+                    cvPreviewLines.splice(dropIndex, 0, moved);
+                    if (editingLineIndex === dragIndex) editingLineIndex = dropIndex;
+                    else if (editingLineIndex !== null) {
+                        if (dragIndex < editingLineIndex && dropIndex >= editingLineIndex) editingLineIndex -= 1;
+                        else if (dragIndex > editingLineIndex && dropIndex <= editingLineIndex) editingLineIndex += 1;
+                    }
+                    renderCvPreview();
+                    persistPreviewLines();
+                });
+            });
         }
 
         function renderCoverLetterPreview() {
@@ -563,6 +950,8 @@
                     } else {
                         cvContent = data.content || cvContent;
                         cvPreviewLines = data.cv_preview_lines || cvPreviewLines;
+                        editingLineIndex = null;
+                        resetPreviewHistory();
                         renderCvPreview();
                     }
                     applyChatSessionPayload(data);

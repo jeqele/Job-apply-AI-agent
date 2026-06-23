@@ -51,6 +51,45 @@ class DocxBuilderJobSkillsTests(unittest.TestCase):
         )
         self.assertEqual(merged, ["REST APIs", "Python", "Java", "Flask"])
 
+    def test_build_from_preview_lines_writes_body_and_skips_preview_only_sections(self):
+        template_path = get_default_cv_template_path()
+        preview_lines = [
+            {"text": "Jane Doe", "kind": "name"},
+            {"text": "Backend Engineer", "kind": "title"},
+            {"text": "Professional Summary", "kind": "section"},
+            {"text": "Builds APIs with Python.", "kind": "text"},
+            {"text": "Skills Matching Job", "kind": "section"},
+            {"text": "• Python • GraphQL", "kind": "skills", "variant": "matched"},
+            {"text": "Technical Skills", "kind": "section"},
+            {"text": "• Python • Flask", "kind": "skills"},
+            {"text": "Experience Highlights", "kind": "section"},
+            {"text": "Developer", "kind": "role"},
+            {"text": "Acme · 2020-2024", "kind": "meta"},
+            {"text": "• Built APIs", "kind": "bullet"},
+        ]
+        profile = {
+            "full_name": "Jane Doe",
+            "email": "jane@example.com",
+            "phone": "555-0100",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = os.path.join(tmpdir, "preview_cv.docx")
+            builder = CVDocumentBuilder(template_path)
+            builder.build_from_preview_lines(output_path, preview_lines, profile, {})
+
+            from docx import Document
+
+            doc = Document(output_path)
+            paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+
+            self.assertIn("Builds APIs with Python.", paragraphs)
+            self.assertIn("Technical Skills", paragraphs)
+            self.assertIn("Developer", paragraphs)
+            self.assertIn("Built APIs", paragraphs)
+            self.assertNotIn("Skills Matching Job", paragraphs)
+            self.assertNotIn("GraphQL", " ".join(paragraphs))
+
 
 if __name__ == "__main__":
     unittest.main()

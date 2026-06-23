@@ -5,6 +5,10 @@ from job_apply_ai.cv_modifier.chat_context import (
     build_profile_context,
     cv_content_to_preview_lines,
     format_numbered_cv_preview,
+    normalize_preview_line,
+    normalize_preview_lines,
+    preview_lines_to_content,
+    resolve_cv_preview_lines,
 )
 from job_apply_ai.storage.user_profile import normalize_profile
 
@@ -65,3 +69,96 @@ def test_cv_content_to_preview_lines_assigns_stable_line_numbers():
     assert " 1 | Jane Doe" in numbered
     assert numbered.strip().endswith("22 | None")
     assert any(line["kind"] == "bullet" and "Built APIs" in line["text"] for line in lines)
+
+
+def test_resolve_cv_preview_lines_keeps_custom_order_when_content_matches():
+    content = {
+        "professional_title": "Backend Engineer",
+        "professional_summary": "Builds APIs with Python.",
+    }
+    generated = cv_content_to_preview_lines(content, "Jane Doe")
+    reordered = list(reversed(generated))
+    resolved = resolve_cv_preview_lines(content, "Jane Doe", stored_lines=reordered)
+    assert resolved == reordered
+
+
+def test_resolve_cv_preview_lines_falls_back_when_lines_change():
+    content = {
+        "professional_title": "Backend Engineer",
+        "professional_summary": "Builds APIs with Python.",
+    }
+    generated = cv_content_to_preview_lines(content, "Jane Doe")
+    stale = generated + [{"text": "Extra line", "kind": "text"}]
+    resolved = resolve_cv_preview_lines(content, "Jane Doe", stored_lines=stale)
+    assert resolved == generated
+
+
+def test_resolve_cv_preview_lines_uses_customized_lines():
+    content = {
+        "professional_title": "Backend Engineer",
+        "professional_summary": "Builds APIs with Python.",
+    }
+    custom = [
+        {"text": "Custom Name", "kind": "name"},
+        {"text": "Edited summary only.", "kind": "text"},
+    ]
+    resolved = resolve_cv_preview_lines(
+        content,
+        "Jane Doe",
+        stored_lines=custom,
+        customized=True,
+    )
+    assert resolved == custom
+
+
+def test_normalize_preview_line_sanitizes_kind_and_variant():
+    line = normalize_preview_line({
+        "text": "Python",
+        "kind": "skills",
+        "variant": "matched",
+        "extra": "ignored",
+    })
+    assert line == {"text": "Python", "kind": "skills", "variant": "matched"}
+
+    invalid = normalize_preview_line({"text": "X", "kind": "unknown"})
+    assert invalid == {"text": "X", "kind": "text"}
+
+
+def test_normalize_preview_lines_skips_invalid_entries():
+    lines = normalize_preview_lines([
+        {"text": "Valid", "kind": "text"},
+        None,
+        "bad",
+        {"text": "Also valid", "kind": "bullet"},
+    ])
+    assert lines == [
+        {"text": "Valid", "kind": "text"},
+        {"text": "Also valid", "kind": "bullet"},
+    ]
+
+
+def test_preview_lines_to_content_updates_summary_and_skills():
+    content = {
+        "professional_title": "Old Title",
+        "professional_summary": "Old summary.",
+        "technical_skills": ["Java"],
+        "experience_highlights": [],
+    }
+    preview_lines = [
+        {"text": "Jane Doe", "kind": "name"},
+        {"text": "Backend Engineer", "kind": "title"},
+        {"text": "Professional Summary", "kind": "section"},
+        {"text": "New summary text.", "kind": "text"},
+        {"text": "Technical Skills", "kind": "section"},
+        {"text": "• Python • Flask", "kind": "skills"},
+        {"text": "Experience Highlights", "kind": "section"},
+        {"text": "Developer", "kind": "role"},
+        {"text": "Acme · 2020-2024", "kind": "meta"},
+        {"text": "• Built APIs", "kind": "bullet"},
+    ]
+    updated = preview_lines_to_content(content, preview_lines, "Jane Doe")
+    assert updated["professional_title"] == "Backend Engineer"
+    assert updated["professional_summary"] == "New summary text."
+    assert updated["technical_skills"] == ["Python", "Flask"]
+    assert updated["experience_highlights"][0]["role"] == "Developer"
+    assert updated["experience_highlights"][0]["bullets"] == ["Built APIs"]
