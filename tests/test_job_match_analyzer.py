@@ -26,8 +26,8 @@ def test_profile_from_form_parses_minor_skills_and_stacks():
     assert profile["stacks"] == ["Python/Django/PostgreSQL", "MERN"]
 
     form = profile_to_form_fields(profile)
-    assert "Redis" in form["minor_skills"]
-    assert "MERN" in form["stacks"]
+    assert "Redis" in form["minor_skills_list"]
+    assert "MERN" in form["stacks_list"]
 
 
 def test_profile_has_matchable_skills():

@@ -118,6 +118,36 @@ def test_parse_smtp_accounts_from_form_preserves_existing_password():
     assert accounts[0]["password"] == "stored-secret"
 
 
+def test_profile_from_form_parses_json_fields():
+    profile = profile_from_form(
+        {
+            "full_name": "Jane Doe",
+            "technical_skills_json": '["Python", "Flask"]',
+            "minor_skills_json": '["Redis", "Celery"]',
+            "work_experience_json": '[{"role": "Developer", "company": "Acme", "period": "2020", "bullets": ["Built APIs"]}]',
+            "personal_projects_json": '[{"name": "Side Project", "description": "A demo", "bullets": ["Used Flask"]}]',
+        }
+    )
+    assert profile["technical_skills"] == ["Python", "Flask"]
+    assert profile["minor_skills"] == ["Redis", "Celery"]
+    assert profile["work_experience"][0]["role"] == "Developer"
+    assert profile["work_experience"][0]["bullets"] == ["Built APIs"]
+    assert profile["personal_projects"][0]["name"] == "Side Project"
+
+
+def test_profile_to_form_fields_returns_lists():
+    profile = profile_from_form(
+        {
+            "full_name": "Jane Doe",
+            "technical_skills_json": '["Python"]',
+            "work_experience_json": '[{"role": "Dev", "company": "", "period": "", "bullets": []}]',
+        }
+    )
+    form = profile_to_form_fields(profile)
+    assert form["technical_skills_list"] == ["Python"]
+    assert form["work_experience_list"][0]["role"] == "Dev"
+
+
 def test_profile_from_form_saves_multiple_smtp_accounts():
     class FakeForm(dict):
         def getlist(self, key):

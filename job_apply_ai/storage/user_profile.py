@@ -548,25 +548,9 @@ def parse_projects_text(text: str) -> list[dict[str, Any]]:
     return _normalize_project_entries(entries)
 
 
-def profile_to_form_fields(profile: dict[str, Any]) -> dict[str, str]:
-    """Convert stored profile data into form-friendly strings."""
+def profile_to_form_fields(profile: dict[str, Any]) -> dict[str, Any]:
+    """Convert stored profile data into form-friendly structures."""
     profile = normalize_profile(profile)
-
-    work_lines: list[str] = []
-    for entry in profile["work_experience"]:
-        header = " | ".join(part for part in [entry["role"], entry["company"], entry["period"]] if part)
-        if header:
-            work_lines.append(header)
-        work_lines.extend(f"- {bullet}" for bullet in entry.get("bullets", []))
-        work_lines.append("")
-
-    project_lines: list[str] = []
-    for entry in profile["personal_projects"]:
-        header = " | ".join(part for part in [entry["name"], entry["description"]] if part)
-        if header:
-            project_lines.append(header)
-        project_lines.extend(f"- {bullet}" for bullet in entry.get("bullets", []))
-        project_lines.append("")
 
     return {
         "full_name": profile["full_name"],
@@ -576,14 +560,14 @@ def profile_to_form_fields(profile: dict[str, Any]) -> dict[str, str]:
         "phone": profile["phone"],
         "linkedin": profile["linkedin"],
         "personal_summary": profile["personal_summary"],
-        "technical_skills": "\n".join(profile["technical_skills"]),
-        "minor_skills": "\n".join(profile["minor_skills"]),
-        "stacks": "\n".join(profile["stacks"]),
-        "tools_platforms": "\n".join(profile["tools_platforms"]),
-        "soft_skills": "\n".join(profile["soft_skills"]),
-        "languages": "\n".join(profile["languages"]),
-        "work_experience_text": "\n".join(work_lines).strip(),
-        "personal_projects_text": "\n".join(project_lines).strip(),
+        "technical_skills_list": profile["technical_skills"],
+        "minor_skills_list": profile["minor_skills"],
+        "stacks_list": profile["stacks"],
+        "tools_platforms_list": profile["tools_platforms"],
+        "soft_skills_list": profile["soft_skills"],
+        "languages_list": profile["languages"],
+        "work_experience_list": profile["work_experience"],
+        "personal_projects_list": profile["personal_projects"],
         "smtp_accounts": [
             {
                 "id": account["id"],
@@ -624,6 +608,30 @@ def profile_from_form(
     else:
         scalar_data = dict(form_data)
 
+    # Parse JSON fields from new UI (tag inputs and structured entries)
+    technical_skills = _parse_json_list(scalar_data.get("technical_skills_json"))
+    minor_skills = _parse_json_list(scalar_data.get("minor_skills_json"))
+    stacks = _parse_json_list(scalar_data.get("stacks_json"))
+    tools_platforms = _parse_json_list(scalar_data.get("tools_platforms_json"))
+    soft_skills = _parse_json_list(scalar_data.get("soft_skills_json"))
+    languages = _parse_json_list(scalar_data.get("languages_json"))
+    
+    work_experience = _parse_experience_json(scalar_data.get("work_experience_json"))
+    personal_projects = _parse_projects_json(scalar_data.get("personal_projects_json"))
+
+    # Fallback to old text format if JSON fields are not present
+    if not technical_skills and not minor_skills and not stacks:
+        technical_skills = parse_multiline_list(scalar_data.get("technical_skills", ""))
+        minor_skills = parse_multiline_list(scalar_data.get("minor_skills", ""))
+        stacks = parse_multiline_list(scalar_data.get("stacks", ""))
+        tools_platforms = parse_multiline_list(scalar_data.get("tools_platforms", ""))
+        soft_skills = parse_multiline_list(scalar_data.get("soft_skills", ""))
+        languages = parse_multiline_list(scalar_data.get("languages", ""))
+    
+    if not work_experience and not personal_projects:
+        work_experience = parse_work_experience_text(scalar_data.get("work_experience_text", ""))
+        personal_projects = parse_projects_text(scalar_data.get("personal_projects_text", ""))
+
     return normalize_profile(
         {
             "full_name": scalar_data.get("full_name", ""),
@@ -633,17 +641,83 @@ def profile_from_form(
             "phone": scalar_data.get("phone", ""),
             "linkedin": scalar_data.get("linkedin", ""),
             "personal_summary": scalar_data.get("personal_summary", ""),
-            "technical_skills": parse_multiline_list(scalar_data.get("technical_skills", "")),
-            "minor_skills": parse_multiline_list(scalar_data.get("minor_skills", "")),
-            "stacks": parse_multiline_list(scalar_data.get("stacks", "")),
-            "tools_platforms": parse_multiline_list(scalar_data.get("tools_platforms", "")),
-            "soft_skills": parse_multiline_list(scalar_data.get("soft_skills", "")),
-            "languages": parse_multiline_list(scalar_data.get("languages", "")),
-            "work_experience": parse_work_experience_text(scalar_data.get("work_experience_text", "")),
-            "personal_projects": parse_projects_text(scalar_data.get("personal_projects_text", "")),
+            "technical_skills": technical_skills,
+            "minor_skills": minor_skills,
+            "stacks": stacks,
+            "tools_platforms": tools_platforms,
+            "soft_skills": soft_skills,
+            "languages": languages,
+            "work_experience": work_experience,
+            "personal_projects": personal_projects,
             "smtp_accounts": parse_smtp_accounts_from_form(form_data, existing_profile),
         }
     )
+
+
+def _parse_json_list(value: Any) -> list[str]:
+    """Parse a JSON array of strings from form data."""
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        if isinstance(data, list):
+            return [str(item).strip() for item in data if str(item).strip()]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _parse_experience_json(value: Any) -> list[dict[str, Any]]:
+    """Parse work experience JSON array from form data."""
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        if isinstance(data, list):
+            entries = []
+            for item in data:
+                if isinstance(item, dict):
+                    bullets = item.get("bullets", [])
+                    if isinstance(bullets, list):
+                        bullets = [str(b).strip() for b in bullets if str(b).strip()]
+                    else:
+                        bullets = []
+                    entries.append({
+                        "role": str(item.get("role", "")).strip(),
+                        "company": str(item.get("company", "")).strip(),
+                        "period": str(item.get("period", "")).strip(),
+                        "bullets": bullets,
+                    })
+            return _normalize_experience_entries(entries)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _parse_projects_json(value: Any) -> list[dict[str, Any]]:
+    """Parse personal projects JSON array from form data."""
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        if isinstance(data, list):
+            entries = []
+            for item in data:
+                if isinstance(item, dict):
+                    bullets = item.get("bullets", [])
+                    if isinstance(bullets, list):
+                        bullets = [str(b).strip() for b in bullets if str(b).strip()]
+                    else:
+                        bullets = []
+                    entries.append({
+                        "name": str(item.get("name", "")).strip(),
+                        "description": str(item.get("description", "")).strip(),
+                        "bullets": bullets,
+                    })
+            return _normalize_project_entries(entries)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
 
 
 def _normalize_key(value: str) -> str:
