@@ -586,8 +586,14 @@
                                                 <label for="titles_file" class="form-label fw-semibold">Job titles file (.txt)</label>
                                                 <input type="file" class="form-control" id="titles_file" name="titles_file" accept=".txt,text/plain">
                                                 <div class="form-text">One job title per line. Lines starting with <code>#</code> are ignored.</div>
-                                                <label for="titles_text" class="form-label mt-3 small text-muted">Or paste titles here</label>
+                                                <div class="d-flex align-items-center gap-2 mt-3 flex-wrap">
+                                                    <label for="titles_text" class="form-label mb-0 small text-muted">Or paste titles here</label>
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" id="suggest-titles-btn" {% if not profile_ready %}disabled title="Complete your profile first"{% endif %}>
+                                                        <i class="fas fa-wand-magic-sparkles me-1"></i>Suggest from profile
+                                                    </button>
+                                                </div>
                                                 <textarea class="form-control font-monospace" id="titles_text" name="titles_text" rows="5" placeholder="Software Engineer&#10;Data Scientist"></textarea>
+                                                <div class="form-text" id="suggest-titles-status"></div>
                                             </div>
                                             <div class="col-md-6">
                                                 <label for="locations_file" class="form-label fw-semibold">Locations file (.txt)</label>
@@ -613,6 +619,15 @@
                                             <div class="col-12">
                                                 <label for="batch_sources" class="form-label">Job sources</label>
                                                 <input type="text" class="form-control" id="batch_sources" name="sources" value="linkedin,adzuna,reed,indeed" placeholder="linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok">
+                                            </div>
+                                            <div class="col-12">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" id="shuffle_queue" name="shuffle_queue">
+                                                    <label class="form-check-label" for="shuffle_queue">
+                                                        Randomize search order
+                                                    </label>
+                                                    <div class="form-text">Shuffle title × location pairs before running the batch.</div>
+                                                </div>
                                             </div>
                                         </div>
                                         <button type="submit" class="btn btn-brand w-100 w-sm-auto mt-3">
@@ -698,6 +713,47 @@
                     showBatchSearchTab();
                 }
             });
+
+            const suggestTitlesBtn = document.getElementById('suggest-titles-btn');
+            const titlesTextarea = document.getElementById('titles_text');
+            const suggestTitlesStatus = document.getElementById('suggest-titles-status');
+            if (suggestTitlesBtn && titlesTextarea) {
+                suggestTitlesBtn.addEventListener('click', async function () {
+                    const originalHtml = suggestTitlesBtn.innerHTML;
+                    suggestTitlesBtn.disabled = true;
+                    suggestTitlesBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Suggesting…';
+                    if (suggestTitlesStatus) {
+                        suggestTitlesStatus.textContent = '';
+                        suggestTitlesStatus.className = 'form-text';
+                    }
+
+                    try {
+                        const response = await fetch('{{ url_for("suggest_search_titles") }}', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ max_titles: 10 }),
+                        });
+                        const data = await response.json();
+                        if (!response.ok || !Array.isArray(data.titles) || !data.titles.length) {
+                            throw new Error(data.error || 'Could not suggest job titles.');
+                        }
+                        titlesTextarea.value = data.titles.join('\n');
+                        const methodLabel = data.method === 'ai' ? 'AI' : 'profile';
+                        if (suggestTitlesStatus) {
+                            suggestTitlesStatus.textContent = `Filled ${data.titles.length} title(s) from your ${methodLabel}.`;
+                            suggestTitlesStatus.className = 'form-text text-success';
+                        }
+                    } catch (error) {
+                        if (suggestTitlesStatus) {
+                            suggestTitlesStatus.textContent = error.message || 'Could not suggest job titles.';
+                            suggestTitlesStatus.className = 'form-text text-danger';
+                        }
+                    } finally {
+                        suggestTitlesBtn.disabled = {% if not profile_ready %}true{% else %}false{% endif %};
+                        suggestTitlesBtn.innerHTML = originalHtml;
+                    }
+                });
+            }
         })();
     </script>
 </body>

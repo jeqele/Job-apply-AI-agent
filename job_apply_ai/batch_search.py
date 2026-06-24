@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 from itertools import product
 from pathlib import Path
 
@@ -57,6 +58,13 @@ def build_search_queue(titles: list[str], locations: list[str]) -> list[tuple[st
     if not titles or not locations:
         return []
     return [(title, location) for title, location in product(titles, locations)]
+
+
+def shuffle_search_queue(queue: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Return a randomly shuffled copy of the search queue."""
+    shuffled = list(queue)
+    random.shuffle(shuffled)
+    return shuffled
 
 
 def validate_batch_queue(queue: list[tuple[str, str]]) -> str | None:

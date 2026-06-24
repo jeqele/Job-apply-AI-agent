@@ -107,6 +107,11 @@ def main():
     batch_search_parser.add_argument('--remote', action='store_true', help='Prefer remote jobs')
     batch_search_parser.add_argument('--relocation', action='store_true', help='Prefer relocation support')
     batch_search_parser.add_argument('--visa-sponsorship', action='store_true', help='Prefer visa sponsorship')
+    batch_search_parser.add_argument(
+        '--shuffle',
+        action='store_true',
+        help='Randomize the order of title × location searches',
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -228,6 +233,7 @@ def main():
         from job_apply_ai.batch_search import (
             build_search_queue,
             parse_lines_from_path,
+            shuffle_search_queue,
             validate_batch_queue,
         )
         from job_apply_ai.scraper.aggregator import search_jobs
@@ -240,6 +246,8 @@ def main():
         titles = parse_lines_from_path(args.titles_file)
         locations = parse_lines_from_path(args.locations_file)
         queue = build_search_queue(titles, locations)
+        if args.shuffle:
+            queue = shuffle_search_queue(queue)
         queue_error = validate_batch_queue(queue)
         if queue_error:
             logger.error(queue_error)

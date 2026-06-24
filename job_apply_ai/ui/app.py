@@ -20,6 +20,7 @@ from job_apply_ai.batch_search import (
     build_search_queue,
     decode_uploaded_text,
     parse_lines,
+    shuffle_search_queue,
     validate_batch_queue,
 )
 from job_apply_ai.job_schema import JOB_COLUMNS
@@ -50,6 +51,7 @@ from job_apply_ai.cv_modifier.job_match_analyzer import (
     normalize_min_match_score,
     profile_has_matchable_skills,
 )
+from job_apply_ai.cv_modifier.job_title_suggester import suggest_job_titles
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
 from job_apply_ai.cv_modifier.cover_letter_chat_editor import CoverLetterChatEditor
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
@@ -1480,6 +1482,8 @@ def batch_search_jobs():
     titles = _read_batch_lines_from_request('titles_file', 'titles_text')
     locations = _read_batch_lines_from_request('locations_file', 'locations_text')
     queue = build_search_queue(titles, locations)
+    if request.form.get('shuffle_queue') == 'on':
+        queue = shuffle_search_queue(queue)
     queue_error = validate_batch_queue(queue)
 
     if queue_error:
@@ -1516,6 +1520,21 @@ def batch_search_jobs():
         ),
     )
     return redirect(url_for('batch_search_progress', task_id=task_id))
+
+
+@app.route('/api/search/suggest-titles', methods=['POST'])
+def suggest_search_titles():
+    """Suggest job board search titles from the stored profile."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        max_titles = int(payload.get('max_titles', 10))
+    except (TypeError, ValueError):
+        max_titles = 10
+
+    profile = profile_repo.get_profile()
+    result = suggest_job_titles(profile, max_titles=max_titles)
+    status = 200 if result.get('titles') else 400
+    return jsonify(result), status
 
 
 @app.route('/search/batch/<task_id>')

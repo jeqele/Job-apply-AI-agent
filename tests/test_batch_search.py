@@ -9,6 +9,7 @@ from job_apply_ai.batch_search import (
     get_max_batch_search_combinations,
     parse_lines,
     parse_lines_from_path,
+    shuffle_search_queue,
     validate_batch_queue,
 )
 
@@ -64,6 +65,12 @@ class BatchSearchTests(unittest.TestCase):
         self.assertEqual(len(queue), 110)
         self.assertGreater(len(queue), limit)
         self.assertIn("Too many search combinations", validate_batch_queue(queue))
+
+    def test_shuffle_search_queue_preserves_items(self):
+        queue = build_search_queue(["Engineer", "Analyst"], ["Berlin", "Remote"])
+        shuffled = shuffle_search_queue(queue)
+        self.assertEqual(sorted(shuffled), sorted(queue))
+        self.assertEqual(len(shuffled), len(queue))
 
 
 if __name__ == "__main__":
