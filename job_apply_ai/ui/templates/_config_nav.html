@@ -1,0 +1,30 @@
+<nav class="top-nav py-2 mb-3 mb-md-4">
+    <div class="container">
+        <div class="d-flex align-items-center justify-content-between gap-2">
+            <a href="{{ url_for('index') }}" class="d-flex align-items-center gap-2 min-w-0 text-decoration-none text-body">
+                <span class="brand-mark"><i class="fas fa-briefcase"></i></span>
+                <div class="min-w-0">
+                    <div class="fw-bold text-truncate">HermesHire</div>
+                    <div class="small text-muted d-none d-sm-block">Job Application AI Agent</div>
+                </div>
+            </a>
+            <div class="nav-actions d-flex gap-1 gap-sm-2 flex-shrink-0">
+                <a href="{{ url_for('index') }}"
+                   class="btn btn-sm {{ 'btn-primary' if request.endpoint == 'index' else 'btn-outline-secondary' }}">
+                    <i class="fas fa-home d-sm-none"></i>
+                    <span class="d-none d-sm-inline"><i class="fas fa-home me-1"></i>Home</span>
+                </a>
+                <a href="{{ url_for('user_profile') }}"
+                   class="btn btn-sm {{ 'btn-primary' if request.endpoint in ('user_profile', 'upload_cv', 'start_profile_import') else 'btn-outline-secondary' }}">
+                    <i class="fas fa-user d-sm-none"></i>
+                    <span class="d-none d-sm-inline"><i class="fas fa-user me-1"></i>Profile</span>
+                </a>
+                <a href="{{ url_for('app_settings') }}"
+                   class="btn btn-sm {{ 'btn-primary' if request.endpoint == 'app_settings' else 'btn-outline-secondary' }}">
+                    <i class="fas fa-sliders-h d-sm-none"></i>
+                    <span class="d-none d-sm-inline"><i class="fas fa-sliders-h me-1"></i>Settings</span>
+                </a>
+            </div>
+        </div>
+    </div>
+</nav>

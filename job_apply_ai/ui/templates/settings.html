@@ -6,76 +6,21 @@
     <title>Settings — HermesHire</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            padding-top: 30px;
-            padding-bottom: 50px;
-            color: #343a40;
-        }
-        .page-header {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            padding: 2.5rem;
-            border-radius: 1rem;
-            margin-bottom: 2rem;
-            color: white;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-        }
-        .card {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-            margin-bottom: 1.5rem;
-        }
-        .card-header {
-            background: #fff;
-            border-bottom: 1px solid #eef2f7;
-            font-weight: 600;
-        }
-        .hint {
-            font-size: 0.875rem;
-            color: #6c757d;
-        }
-        .section-icon {
-            color: #0d6efd;
-            margin-right: 0.5rem;
-        }
-        .status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            font-size: 0.85rem;
-            padding: 0.25rem 0.65rem;
-            border-radius: 999px;
-        }
-        .status-pill.online {
-            background: #d1e7dd;
-            color: #0f5132;
-        }
-        .status-pill.offline {
-            background: #f8d7da;
-            color: #842029;
-        }
-        .model-preset {
-            font-size: 0.8rem;
-        }
-        .provider-panel.d-none {
-            display: none !important;
-        }
-    </style>
+    {% include '_config_styles.html' %}
 </head>
 <body>
-    <div class="container">
-        <div class="page-header">
-            <h1 class="display-6 fw-bold mb-2"><i class="fas fa-sliders-h me-2"></i>Settings</h1>
-            <p class="lead mb-0">Mix Ollama (local) and Alibaba Cloud Model Studio — e.g. a fast local model for analysis and a cloud model for CV writing.</p>
+    {% include '_config_nav.html' %}
+
+    <div class="container config-page">
+        <div class="page-intro">
+            <h1>Settings</h1>
+            <p>Configure AI models and developer options. Mix local Ollama with cloud Qwen models.</p>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show mb-4" role="alert">
+                    <div class="alert alert-{{ category }} alert-dismissible fade show mb-3" role="alert">
                         {{ message }}
                         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                     </div>
@@ -84,268 +29,283 @@
         {% endwith %}
 
         <form method="POST" action="{{ url_for('app_settings') }}" id="settingsForm">
-            <div class="card">
-                <div class="card-header py-3">
-                    <i class="fas fa-plug section-icon"></i>Model providers
-                </div>
-                <div class="card-body">
-                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-                        <div>
-                            {% if llm_available %}
-                                <span class="status-pill online"><i class="fas fa-circle"></i> {{ active_provider_label }} reachable</span>
-                            {% else %}
-                                <span class="status-pill offline"><i class="fas fa-circle"></i> {{ active_provider_label }} not reachable</span>
-                            {% endif %}
-                        </div>
-                    </div>
+            <div class="settings-layout">
+                <nav class="settings-sidebar nav flex-column" id="settingsNav" role="tablist">
+                    <button type="button" class="nav-link active" data-section="models">
+                        <i class="fas fa-robot me-2"></i>AI Models
+                    </button>
+                    <button type="button" class="nav-link" data-section="developer">
+                        <i class="fas fa-code me-2"></i>Developer
+                    </button>
+                </nav>
 
-                    <div class="row g-4">
-                        <div class="col-md-6">
-                            <label for="fast_model_provider" class="form-label">Fast model provider</label>
-                            <select class="form-select" id="fast_model_provider" name="fast_model_provider">
-                                <option value="ollama" {% if fast_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
-                                <option value="alibaba" {% if fast_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud Model Studio (Qwen)</option>
-                            </select>
-                            <div class="hint mt-2">Used for quick tasks: job analysis, profile import, RAG prep.</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="main_model_provider" class="form-label">Main model provider</label>
-                            <select class="form-select" id="main_model_provider" name="main_model_provider">
-                                <option value="ollama" {% if main_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
-                                <option value="alibaba" {% if main_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud Model Studio (Qwen)</option>
-                            </select>
-                            <div class="hint mt-2">Used for quality tasks: CV generation, cover letters, chat editing.</div>
-                        </div>
-                    </div>
-                    <div class="hint mt-3 mb-0">
-                        Example: fast = Ollama <code>gemma4:e4b</code>, main = Alibaba <code>qwen-plus</code>.
-                        Alibaba uses the <a href="https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions" target="_blank" rel="noopener">OpenAI-compatible DashScope API</a>.
-                        Create an API key in the <a href="https://modelstudio.console.alibabacloud.com/" target="_blank" rel="noopener">Model Studio console</a> (Singapore / international region).
-                    </div>
-                </div>
-            </div>
-
-            <div id="ollamaPanel" class="provider-panel">
-                <div class="card">
-                    <div class="card-header py-3">
-                        <i class="fas fa-robot section-icon"></i>Ollama connection
-                    </div>
-                    <div class="card-body">
-                        <div class="mb-3">
-                            {% if ollama_available %}
-                                <span class="status-pill online"><i class="fas fa-circle"></i> Ollama reachable</span>
-                            {% else %}
-                                <span class="status-pill offline"><i class="fas fa-circle"></i> Ollama not reachable</span>
-                            {% endif %}
-                        </div>
-                        <div class="mb-0">
-                            <label for="ollama_base_url" class="form-label">Ollama base URL</label>
-                            <input type="url" class="form-control" id="ollama_base_url" name="ollama_base_url"
-                                   value="{{ ollama_settings.base_url }}" placeholder="http://localhost:11434">
-                            <div class="hint mt-1">Default local install: <code>http://localhost:11434</code></div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header py-3">
-                        <i class="fas fa-microchip section-icon"></i>Ollama models
-                    </div>
-                    <div class="card-body">
-                        <div class="row g-4">
-                            <div class="col-md-6">
-                                <label for="ollama_fast_model" class="form-label">Fast model</label>
-                                <input type="text" class="form-control model-input" id="ollama_fast_model" name="ollama_fast_model"
-                                       list="ollama-model-options" value="{{ ollama_settings.fast_model }}"
-                                       placeholder="gemma4:e4b">
-                            </div>
-                            <div class="col-md-6">
-                                <label for="ollama_main_model" class="form-label">Main model</label>
-                                <input type="text" class="form-control model-input" id="ollama_main_model" name="ollama_main_model"
-                                       list="ollama-model-options" value="{{ ollama_settings.main_model }}"
-                                       placeholder="gemma4:12b">
-                            </div>
-                        </div>
-                        <datalist id="ollama-model-options">
-                            {% for model in ollama_models %}
-                                <option value="{{ model }}"></option>
-                            {% endfor %}
-                            <option value="gemma4:e4b"></option>
-                            <option value="gemma4:12b"></option>
-                        </datalist>
-                        <div class="mb-0 mt-4">
-                            <label for="ollama_num_predict" class="form-label">Max tokens per response</label>
-                            <input type="number" class="form-control" id="ollama_num_predict" name="ollama_num_predict"
-                                   value="{{ ollama_settings.num_predict }}" min="256" max="32768" step="256">
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="alibabaPanel" class="provider-panel">
-                <div class="card">
-                    <div class="card-header py-3">
-                        <i class="fas fa-cloud section-icon"></i>Alibaba Cloud Model Studio
-                    </div>
-                    <div class="card-body">
-                        <div class="mb-3">
-                            {% if alibaba_available %}
-                                <span class="status-pill online"><i class="fas fa-circle"></i> API reachable</span>
-                            {% else %}
-                                <span class="status-pill offline"><i class="fas fa-circle"></i> API not reachable</span>
-                            {% endif %}
-                        </div>
-                        <div class="mb-3">
-                            <label for="alibaba_api_key" class="form-label">DashScope API key</label>
-                            <input type="password" class="form-control" id="alibaba_api_key" name="alibaba_api_key"
-                                   value="" placeholder="{% if has_alibaba_api_key %}•••••••• (saved — leave blank to keep){% else %}sk-...{% endif %}"
-                                   autocomplete="off">
-                            <div class="hint mt-1">Or set <code>DASHSCOPE_API_KEY</code> in your <code>.env</code> file.</div>
-                        </div>
-                        <div class="mb-0">
-                            <label for="alibaba_base_url" class="form-label">API base URL</label>
-                            <input type="url" class="form-control" id="alibaba_base_url" name="alibaba_base_url"
-                                   value="{{ alibaba_settings.base_url }}"
-                                   placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1">
-                            <div class="hint mt-1">
-                                International (Singapore): <code>https://dashscope-intl.aliyuncs.com/compatible-mode/v1</code><br>
-                                China (Beijing): <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header py-3">
-                        <i class="fas fa-microchip section-icon"></i>Qwen models
-                    </div>
-                    <div class="card-body">
-                        <div class="row g-4">
-                            <div class="col-md-6">
-                                <label for="alibaba_model_mode" class="form-label">Model selection mode</label>
-                                <select class="form-select" id="alibaba_model_mode" name="alibaba_model_mode">
-                                    <option value="fixed" {% if alibaba_settings.model_mode == 'fixed' %}selected{% endif %}>Fixed — use configured models only</option>
-                                    <option value="round_robin" {% if alibaba_settings.model_mode == 'round_robin' %}selected{% endif %}>Round robin — rotate model each request</option>
-                                    <option value="auto" {% if alibaba_settings.model_mode == 'auto' %}selected{% endif %}>Auto — stick with current model until it errors</option>
-                                </select>
-                                <div class="hint mt-2">
-                                    For round robin or auto, list multiple models separated by commas.
-                                    On API errors (403, 500, etc.) the client tries the next model in the list.
-                                </div>
-                            </div>
-                        </div>
-                        <div class="row g-4 mt-1">
-                            <div class="col-md-6">
-                                <label for="alibaba_fast_model" class="form-label">Fast model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
-                                <input type="text" class="form-control model-input" id="alibaba_fast_model" name="alibaba_fast_model"
-                                       list="alibaba-model-options" value="{{ alibaba_settings.fast_model }}"
-                                       placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-turbo{% else %}qwen-turbo, qwen-plus{% endif %}">
-                                {% if alibaba_settings.model_mode != 'fixed' %}
-                                <div class="hint mt-1">
-                                    Pool: {{ alibaba_fast_pool|length }} configured{% if alibaba_fast_rotating_count != alibaba_fast_pool|length %}, {{ alibaba_fast_rotating_count }} unique after alias resolution{% endif %}.
-                                    {% if alibaba_fast_rotating_count < 2 %}<strong class="text-warning">Add at least 2 distinct models for rotation.</strong>{% endif %}
-                                </div>
+                <div class="settings-content">
+                    <section class="tab-panel active" data-section="models">
+                        <div class="section-card">
+                            <div class="section-card-header">
+                                <span><i class="fas fa-plug me-2 text-primary"></i>Model routing</span>
+                                {% if llm_available %}
+                                    <span class="status-pill online"><i class="fas fa-circle"></i>{{ active_provider_label }}</span>
+                                {% else %}
+                                    <span class="status-pill offline"><i class="fas fa-circle"></i>{{ active_provider_label }}</span>
                                 {% endif %}
                             </div>
-                            <div class="col-md-6">
-                                <label for="alibaba_main_model" class="form-label">Main model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
-                                <input type="text" class="form-control model-input" id="alibaba_main_model" name="alibaba_main_model"
-                                       list="alibaba-model-options" value="{{ alibaba_settings.main_model }}"
-                                       placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-plus{% else %}qwen-plus, qwen-max{% endif %}">
-                                {% if alibaba_settings.model_mode != 'fixed' %}
-                                <div class="hint mt-1">
-                                    Pool: {{ alibaba_main_pool|length }} configured{% if alibaba_main_rotating_count != alibaba_main_pool|length %}, {{ alibaba_main_rotating_count }} unique after alias resolution{% endif %}.
-                                    {% if alibaba_main_rotating_count < 2 %}<strong class="text-warning">Add at least 2 distinct models for rotation.</strong>{% endif %}
-                                    {% if alibaba_settings.model_state.active_main_model %}
-                                    Current main model: <code>{{ alibaba_settings.model_state.active_main_model }}</code>
+                            <div class="section-card-body">
+                                <p class="section-lead">
+                                    Pick a provider for quick tasks (analysis, import) and quality tasks (CV writing).
+                                    Example: fast = Ollama <code>gemma4:e4b</code>, main = Alibaba <code>qwen-plus</code>.
+                                </p>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <label for="fast_model_provider" class="form-label">Fast model</label>
+                                        <select class="form-select" id="fast_model_provider" name="fast_model_provider">
+                                            <option value="ollama" {% if fast_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
+                                            <option value="alibaba" {% if fast_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud (Qwen)</option>
+                                        </select>
+                                        <div class="field-hint">Job analysis, profile import, RAG prep</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="main_model_provider" class="form-label">Main model</label>
+                                        <select class="form-select" id="main_model_provider" name="main_model_provider">
+                                            <option value="ollama" {% if main_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
+                                            <option value="alibaba" {% if main_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud (Qwen)</option>
+                                        </select>
+                                        <div class="field-hint">CV generation, cover letters, chat editing</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="ollamaPanel" class="provider-panel">
+                            <div class="section-card">
+                                <div class="section-card-header">
+                                    <span><i class="fas fa-server me-2 text-primary"></i>Ollama</span>
+                                    {% if ollama_available %}
+                                        <span class="status-pill online"><i class="fas fa-circle"></i>Reachable</span>
+                                    {% else %}
+                                        <span class="status-pill offline"><i class="fas fa-circle"></i>Not reachable</span>
                                     {% endif %}
                                 </div>
-                                {% endif %}
+                                <div class="section-card-body">
+                                    <div class="mb-3">
+                                        <label for="ollama_base_url" class="form-label">Base URL</label>
+                                        <input type="url" class="form-control" id="ollama_base_url" name="ollama_base_url"
+                                               value="{{ ollama_settings.base_url }}" placeholder="http://localhost:11434">
+                                    </div>
+                                    <div class="row g-3 mb-3">
+                                        <div class="col-md-6">
+                                            <label for="ollama_fast_model" class="form-label">Fast model</label>
+                                            <input type="text" class="form-control model-input" id="ollama_fast_model" name="ollama_fast_model"
+                                                   list="ollama-model-options" value="{{ ollama_settings.fast_model }}" placeholder="gemma4:e4b">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="ollama_main_model" class="form-label">Main model</label>
+                                            <input type="text" class="form-control model-input" id="ollama_main_model" name="ollama_main_model"
+                                                   list="ollama-model-options" value="{{ ollama_settings.main_model }}" placeholder="gemma4:12b">
+                                        </div>
+                                    </div>
+                                    <datalist id="ollama-model-options">
+                                        {% for model in ollama_models %}
+                                            <option value="{{ model }}"></option>
+                                        {% endfor %}
+                                        <option value="gemma4:e4b"></option>
+                                        <option value="gemma4:12b"></option>
+                                    </datalist>
+                                    <div>
+                                        <label for="ollama_num_predict" class="form-label">Max tokens per response</label>
+                                        <input type="number" class="form-control" id="ollama_num_predict" name="ollama_num_predict"
+                                               value="{{ ollama_settings.num_predict }}" min="256" max="32768" step="256">
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <datalist id="alibaba-model-options">
-                            {% for model in known_alibaba_models %}
-                                <option value="{{ model }}"></option>
-                            {% endfor %}
-                        </datalist>
-                        <div class="mb-0 mt-4">
-                            <label for="alibaba_num_predict" class="form-label">Max tokens per response</label>
-                            <input type="number" class="form-control" id="alibaba_num_predict" name="alibaba_num_predict"
-                                   value="{{ alibaba_settings.num_predict }}" min="256" max="32768" step="256">
+
+                        <div id="alibabaPanel" class="provider-panel">
+                            <div class="section-card">
+                                <div class="section-card-header">
+                                    <span><i class="fas fa-cloud me-2 text-primary"></i>Alibaba Cloud</span>
+                                    {% if alibaba_available %}
+                                        <span class="status-pill online"><i class="fas fa-circle"></i>API reachable</span>
+                                    {% else %}
+                                        <span class="status-pill offline"><i class="fas fa-circle"></i>API not reachable</span>
+                                    {% endif %}
+                                </div>
+                                <div class="section-card-body">
+                                    <p class="section-lead mb-3">
+                                        Uses the <a href="https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions" target="_blank" rel="noopener">OpenAI-compatible DashScope API</a>.
+                                        Get a key from the <a href="https://modelstudio.console.alibabacloud.com/" target="_blank" rel="noopener">Model Studio console</a>.
+                                    </p>
+                                    <div class="mb-3">
+                                        <label for="alibaba_api_key" class="form-label">API key</label>
+                                        <input type="password" class="form-control" id="alibaba_api_key" name="alibaba_api_key"
+                                               value="" placeholder="{% if has_alibaba_api_key %}•••••••• (saved — leave blank to keep){% else %}sk-...{% endif %}"
+                                               autocomplete="off">
+                                        <div class="field-hint">Or set <code>DASHSCOPE_API_KEY</code> in <code>.env</code></div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="alibaba_base_url" class="form-label">API base URL</label>
+                                        <input type="url" class="form-control" id="alibaba_base_url" name="alibaba_base_url"
+                                               value="{{ alibaba_settings.base_url }}"
+                                               placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="alibaba_model_mode" class="form-label">Model selection mode</label>
+                                        <select class="form-select" id="alibaba_model_mode" name="alibaba_model_mode">
+                                            <option value="fixed" {% if alibaba_settings.model_mode == 'fixed' %}selected{% endif %}>Fixed — use configured models only</option>
+                                            <option value="round_robin" {% if alibaba_settings.model_mode == 'round_robin' %}selected{% endif %}>Round robin — rotate each request</option>
+                                            <option value="auto" {% if alibaba_settings.model_mode == 'auto' %}selected{% endif %}>Auto — switch on errors</option>
+                                        </select>
+                                    </div>
+                                    <div class="row g-3 mb-3">
+                                        <div class="col-md-6">
+                                            <label for="alibaba_fast_model" class="form-label">Fast model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
+                                            <input type="text" class="form-control model-input" id="alibaba_fast_model" name="alibaba_fast_model"
+                                                   list="alibaba-model-options" value="{{ alibaba_settings.fast_model }}"
+                                                   placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-turbo{% else %}qwen-turbo, qwen-plus{% endif %}">
+                                            {% if alibaba_settings.model_mode != 'fixed' %}
+                                            <div class="field-hint">
+                                                Pool: {{ alibaba_fast_pool|length }} configured
+                                                {% if alibaba_fast_rotating_count < 2 %}<span class="text-warning">— add 2+ models for rotation</span>{% endif %}
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="alibaba_main_model" class="form-label">Main model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
+                                            <input type="text" class="form-control model-input" id="alibaba_main_model" name="alibaba_main_model"
+                                                   list="alibaba-model-options" value="{{ alibaba_settings.main_model }}"
+                                                   placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-plus{% else %}qwen-plus, qwen-max{% endif %}">
+                                            {% if alibaba_settings.model_mode != 'fixed' %}
+                                            <div class="field-hint">
+                                                Pool: {{ alibaba_main_pool|length }} configured
+                                                {% if alibaba_main_rotating_count < 2 %}<span class="text-warning">— add 2+ models for rotation</span>{% endif %}
+                                                {% if alibaba_settings.model_state.active_main_model %}
+                                                · Active: <code>{{ alibaba_settings.model_state.active_main_model }}</code>
+                                                {% endif %}
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <datalist id="alibaba-model-options">
+                                        {% for model in known_alibaba_models %}
+                                            <option value="{{ model }}"></option>
+                                        {% endfor %}
+                                    </datalist>
+                                    <div>
+                                        <label for="alibaba_num_predict" class="form-label">Max tokens per response</label>
+                                        <input type="number" class="form-control" id="alibaba_num_predict" name="alibaba_num_predict"
+                                               value="{{ alibaba_settings.num_predict }}" min="256" max="32768" step="256">
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+
+                        {% if ollama_models or alibaba_models %}
+                        <div class="section-card">
+                            <div class="section-card-header">
+                                <a class="collapse-toggle text-decoration-none" data-bs-toggle="collapse" href="#modelPresets" role="button">
+                                    <i class="fas fa-list me-2"></i>Quick model picker
+                                    <i class="fas fa-chevron-down ms-1 small"></i>
+                                </a>
+                            </div>
+                            <div class="collapse" id="modelPresets">
+                                <div class="section-card-body pt-0">
+                                    {% if ollama_models %}
+                                    <div class="mb-3">
+                                        <div class="field-hint mb-2">Ollama — click to fill the focused field</div>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            {% for model in ollama_models %}
+                                                <button type="button" class="btn btn-sm btn-outline-secondary model-preset model-chip"
+                                                        data-model="{{ model }}" data-provider="ollama">{{ model }}</button>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                    {% if alibaba_models %}
+                                    <div>
+                                        <div class="field-hint mb-2">Alibaba Cloud</div>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            {% for model in alibaba_models %}
+                                                <button type="button" class="btn btn-sm btn-outline-secondary model-preset model-chip"
+                                                        data-model="{{ model }}" data-provider="alibaba">{{ model }}</button>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </section>
+
+                    <section class="tab-panel" data-section="developer">
+                        <div class="section-card">
+                            <div class="section-card-header">
+                                <span><i class="fas fa-terminal me-2 text-primary"></i>Developer mode</span>
+                            </div>
+                            <div class="section-card-body">
+                                <div class="form-check form-switch mb-3">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="dev_mode" name="dev_mode" value="on"
+                                           {% if dev_mode %}checked{% endif %}>
+                                    <label class="form-check-label" for="dev_mode">Enable developer logging</label>
+                                </div>
+                                <p class="field-hint mb-0">
+                                    Records agent activity and full LLM conversations.
+                                    View logs on the <a href="{{ url_for('dev_logs_page') }}">developer logs</a> page.
+                                    Progress screens also show a live log panel during background tasks.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
                 </div>
             </div>
 
-            {% if ollama_models or alibaba_models %}
-                <div class="card">
-                    <div class="card-header py-3">
-                        <i class="fas fa-list section-icon"></i>Available models
-                    </div>
-                    <div class="card-body">
-                        {% if ollama_models %}
-                            <div class="mb-3">
-                                <div class="hint mb-2">Ollama</div>
-                                <div class="d-flex flex-wrap gap-2">
-                                    {% for model in ollama_models %}
-                                        <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
-                                                data-model="{{ model }}" data-provider="ollama">{{ model }}</button>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                        {% endif %}
-                        {% if alibaba_models %}
-                            <div class="{% if ollama_models %}mb-0{% else %}mb-0{% endif %}">
-                                <div class="hint mb-2">Alibaba Cloud</div>
-                                <div class="d-flex flex-wrap gap-2">
-                                    {% for model in alibaba_models %}
-                                        <button type="button" class="btn btn-sm btn-outline-secondary model-preset"
-                                                data-model="{{ model }}" data-provider="alibaba">{{ model }}</button>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                        {% endif %}
+            <div class="config-save-bar">
+                <div class="container config-page">
+                    <div class="d-flex justify-content-between align-items-center gap-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-arrow-left me-1"></i>Dashboard
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save me-2"></i>Save settings
+                        </button>
                     </div>
                 </div>
-            {% endif %}
-
-            <div class="card">
-                <div class="card-header py-3">
-                    <i class="fas fa-code section-icon"></i>Developer mode
-                </div>
-                <div class="card-body">
-                    <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" role="switch" id="dev_mode" name="dev_mode" value="on"
-                               {% if dev_mode %}checked{% endif %}>
-                        <label class="form-check-label" for="dev_mode">Enable developer logging</label>
-                    </div>
-                    <div class="hint mb-0">
-                        When enabled, agent activity and full LLM conversations are recorded.
-                        View, search, filter, and download logs on the
-                        <a href="{{ url_for('dev_logs_page') }}">developer logs</a> page.
-                        Progress screens also show a live log panel during background tasks.
-                    </div>
-                </div>
-            </div>
-
-            <div class="d-flex flex-wrap gap-2">
-                <button type="submit" class="btn btn-primary btn-lg">
-                    <i class="fas fa-save me-2"></i>Save settings
-                </button>
-                <a href="{{ url_for('index') }}" class="btn btn-secondary btn-lg">
-                    <i class="fas fa-arrow-left me-2"></i>Back to dashboard
-                </a>
-                <a href="{{ url_for('user_profile') }}" class="btn btn-outline-primary btn-lg">
-                    <i class="fas fa-user me-2"></i>Profile
-                </a>
             </div>
         </form>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         (function () {
-            let lastFocusedModelInput = document.querySelector('.model-input');
+            const fastProvider = document.getElementById('fast_model_provider');
+            const mainProvider = document.getElementById('main_model_provider');
+            const ollamaPanel = document.getElementById('ollamaPanel');
+            const alibabaPanel = document.getElementById('alibabaPanel');
 
+            function updateProviderPanels() {
+                const usesOllama = fastProvider.value === 'ollama' || mainProvider.value === 'ollama';
+                const usesAlibaba = fastProvider.value === 'alibaba' || mainProvider.value === 'alibaba';
+                ollamaPanel.classList.toggle('d-none', !usesOllama);
+                alibabaPanel.classList.toggle('d-none', !usesAlibaba);
+            }
+
+            fastProvider.addEventListener('change', updateProviderPanels);
+            mainProvider.addEventListener('change', updateProviderPanels);
+            updateProviderPanels();
+
+            document.querySelectorAll('#settingsNav .nav-link').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    const section = btn.dataset.section;
+                    document.querySelectorAll('#settingsNav .nav-link').forEach(function (b) {
+                        b.classList.toggle('active', b === btn);
+                    });
+                    document.querySelectorAll('.settings-content .tab-panel').forEach(function (panel) {
+                        panel.classList.toggle('active', panel.dataset.section === section);
+                    });
+                });
+            });
+
+            let lastFocusedModelInput = document.querySelector('.model-input');
             document.querySelectorAll('.model-input').forEach(function (input) {
                 input.addEventListener('focus', function () {
                     lastFocusedModelInput = this;
