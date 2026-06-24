@@ -9,6 +9,7 @@ from job_apply_ai.cv_modifier.chat_context import (
     normalize_preview_lines,
     preview_lines_to_content,
     resolve_cv_preview_lines,
+    resolve_effective_tailored_content,
 )
 from job_apply_ai.storage.user_profile import normalize_profile
 
@@ -109,6 +110,41 @@ def test_resolve_cv_preview_lines_uses_customized_lines():
         customized=True,
     )
     assert resolved == custom
+
+
+def test_resolve_effective_tailored_content_uses_customized_preview():
+    content = {
+        "professional_title": "Backend Engineer",
+        "professional_summary": "Original summary.",
+        "technical_skills": ["Python"],
+        "tools_platforms": [],
+        "experience_highlights": [],
+        "personal_projects": [],
+        "soft_skills": [],
+        "languages": [],
+        "job_matched_skills": [],
+        "job_skills_not_in_cv": [],
+    }
+    customized_lines = cv_content_to_preview_lines(content, "Jane Doe")
+    for line in customized_lines:
+        if line.get("kind") == "text" and "Original summary" in line.get("text", ""):
+            line["text"] = "Customized summary from preview."
+            break
+
+    effective = resolve_effective_tailored_content(
+        content,
+        "Jane Doe",
+        stored_lines=customized_lines,
+        customized=True,
+    )
+    assert effective["professional_summary"] == "Customized summary from preview."
+
+
+def test_resolve_effective_tailored_content_returns_copy_when_not_customized():
+    content = {"professional_summary": "Same summary."}
+    effective = resolve_effective_tailored_content(content, "Jane Doe")
+    assert effective == content
+    assert effective is not content
 
 
 def test_normalize_preview_line_sanitizes_kind_and_variant():

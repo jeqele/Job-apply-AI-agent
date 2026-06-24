@@ -9,7 +9,11 @@ from copy import deepcopy
 from typing import Any
 
 from job_apply_ai.cv_modifier.chat_context import build_job_context, cv_content_to_preview_lines
-from job_apply_ai.cv_modifier.cv_chat_editor import CONTENT_CHANGE_KEYS, CVChatEditor
+from job_apply_ai.cv_modifier.cv_chat_editor import (
+    CONTENT_CHANGE_KEYS,
+    CV_CHAT_RESPONSE_SCHEMA,
+    CVChatEditor,
+)
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.dev_logging import dev_llm_context
@@ -330,6 +334,102 @@ Rules:
             }
         )
         return refreshed
+
+    def apply_suggestion(
+        self,
+        *,
+        job: dict[str, Any],
+        cv_content: dict[str, Any],
+        profile: dict[str, Any],
+        suggestion: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Rewrite the current CV by applying one ATS suggestion via the LLM."""
+        if not self.llm.is_available():
+            raise RuntimeError(
+                f"{self.llm.provider_label} is not reachable. "
+                "Check your LLM settings to apply ATS suggestions."
+            )
+        self.llm.validate_models()
+
+        job_context = build_job_context(job)
+        profile_name = str(profile.get("full_name", "") or "")
+        cv_text = _cv_content_as_text(cv_content, profile_name)
+        compact_cv = json.dumps(cv_content, separators=(",", ":"), ensure_ascii=False)
+        profile_text = profile_to_text(profile).strip()
+        prior_changes = suggestion.get("changes") or {}
+        hint_block = ""
+        if isinstance(prior_changes, dict) and prior_changes:
+            hint_block = (
+                "\nORIGINAL SUGGESTED CHANGES (hint only — always match the current CV state above):\n"
+                f"{json.dumps(prior_changes, separators=(',', ':'), ensure_ascii=False)}"
+            )
+
+        prompt = f"""
+Apply one ATS improvement suggestion to the candidate's current CV for this job application.
+
+TARGET JOB:
+{job_context}
+
+CURRENT CV (plain-text preview):
+{cv_text}
+
+CURRENT CV CONTENT (JSON — source of truth; do not invent facts beyond this and the profile):
+{compact_cv}
+
+FULL CANDIDATE PROFILE (factual grounding only):
+{profile_text}
+
+ATS SUGGESTION TO IMPLEMENT:
+- Title: {suggestion.get("title", "")}
+- Category: {suggestion.get("category", "general")}
+- What to change: {suggestion.get("description", "")}
+- ATS rationale: {suggestion.get("rationale", "")}
+{hint_block}
+
+Instructions:
+1. Implement the suggestion against the CURRENT CV content above, not a stale snapshot.
+2. Put only modified top-level fields inside "changes". Omit unchanged fields.
+3. Allowed change keys: {", ".join(sorted(CONTENT_CHANGE_KEYS))}
+4. When experience or project bullets change, include the full updated array in "changes".
+5. Never invent employers, dates, degrees, certifications, achievements, or skills.
+6. Keep edits minimal — change only what this suggestion requires.
+
+Return JSON with this exact shape:
+{{
+  "reply": "brief note on what you changed",
+  "changes": {{
+    "professional_summary": "only when changed"
+  }}
+}}
+"""
+        with dev_llm_context(
+            operation="ats_suggestion_apply",
+            context={
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "suggestion_id": suggestion.get("id", ""),
+                "suggestion_title": suggestion.get("title", ""),
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=ATS_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_attempts=3,
+                schema=CV_CHAT_RESPONSE_SCHEMA,
+            )
+
+        changes = result.get("changes") if isinstance(result.get("changes"), dict) else {}
+        if not changes:
+            raise ValueError("The AI did not return applicable CV changes for this suggestion.")
+
+        updated = CVChatEditor._apply_content_changes(cv_content, changes)
+        return RAGCVGenerator._normalize_generated_content(
+            updated,
+            profile=profile,
+            job=job,
+        )
 
 
 def apply_suggestion_to_content(

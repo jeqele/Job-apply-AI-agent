@@ -60,11 +60,11 @@ from job_apply_ai.cv_modifier.chat_context import (
     normalize_preview_lines,
     preview_lines_to_content,
     resolve_cv_preview_lines,
+    resolve_effective_tailored_content,
 )
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
 from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
     ATSFriendlyAnalyzer,
-    apply_suggestion_to_content,
     get_suggestion,
     normalize_ats_analysis,
     replace_suggestion,
@@ -446,6 +446,13 @@ def _sync_job_cv_docx_from_preview(
     return store
 
 
+def _clear_cv_preview_customization(store: dict, content: dict) -> None:
+    """Drop stale preview-line overrides after structured CV content changes."""
+    store['tailored_content'] = content
+    store['cv_preview_lines'] = []
+    store['cv_preview_customized'] = False
+
+
 def get_job_ats_analysis(job: dict) -> dict | None:
     """Return stored ATS analysis for a job's generated CV, if any."""
     cv_filename = job.get('cv_filename', '')
@@ -818,7 +825,13 @@ def _run_ats_friendly_task(
         percent=10,
     )
     store = normalize_store(_load_job_cv_store(cv_filename) or {})
-    cv_content = store.get('tailored_content', {})
+    profile_name = profile.get('full_name', '')
+    cv_content = resolve_effective_tailored_content(
+        store.get('tailored_content', {}),
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
     if not cv_content:
         fail_task(task_id, 'CV content not found. Regenerate the CV first.')
         return
@@ -878,12 +891,18 @@ def _ats_friendly_results_context(
     cv_filename = job.get('cv_filename', '')
     store = normalize_store(_load_job_cv_store(cv_filename) if cv_filename else None)
     profile = profile_repo.get_profile()
-    content = store.get('tailored_content', {})
+    profile_name = profile.get('full_name', '')
+    content = resolve_effective_tailored_content(
+        store.get('tailored_content', {}),
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
     return {
         'job': job,
         'job_id': job_id,
         'ats_analysis': normalize_ats_analysis(ats_analysis),
-        'cv_preview_lines': cv_content_to_preview_lines(content, profile.get('full_name', '')),
+        'cv_preview_lines': cv_content_to_preview_lines(content, profile_name),
         'suggestions_api_url': url_for('ats_suggestion_action', job_id=job_id) if job_id else None,
         'reanalyze_url': url_for(
             'ats_friendly_progress',
@@ -3213,7 +3232,15 @@ def ats_suggestion_action(job_id):
         return jsonify({'error': 'No ATS suggestions found. Run ATS analysis first.'}), 404
 
     profile = profile_repo.get_profile()
-    current_content = store.get('tailored_content', {})
+    profile_name = profile.get('full_name', '')
+    current_content = resolve_effective_tailored_content(
+        store.get('tailored_content', {}),
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
+    if action in {'apply', 'reapply'} and not current_content:
+        return jsonify({'error': 'CV content not available for editing'}), 404
 
     try:
         if action == 'deny':
@@ -3238,12 +3265,14 @@ def ats_suggestion_action(job_id):
             _save_job_cv_content(cv_filename, current_content, store=store)
             return jsonify({'ok': True, 'ats_analysis': analysis, 'suggestion': refreshed})
 
-        updated_content = apply_suggestion_to_content(
-            current_content,
-            suggestion,
-            profile=profile,
-            job=job,
-        )
+        analyzer = ATSFriendlyAnalyzer()
+        with dev_agent("ATSFriendlyAnalyzer", job_id=job_id):
+            updated_content = analyzer.apply_suggestion(
+                job=job,
+                cv_content=current_content,
+                profile=profile,
+                suggestion=suggestion,
+            )
         editor = CVChatEditor()
         editor.rebuild_document(cv_path, updated_content, profile)
         matched_categories = CVChatEditor.content_to_matched_categories(updated_content)
@@ -3252,8 +3281,11 @@ def ats_suggestion_action(job_id):
 
         analysis = update_suggestion_status(analysis, suggestion_id, status='applied')
         store['ats_analysis'] = analysis
-        store['tailored_content'] = updated_content
+        _clear_cv_preview_customization(store, updated_content)
         _save_job_cv_content(cv_filename, updated_content, store=store)
+
+        session['current_cv'] = cv_path
+        session['current_cv_filename'] = cv_filename
 
         return jsonify({
             'ok': True,
@@ -3261,7 +3293,7 @@ def ats_suggestion_action(job_id):
             'content': updated_content,
             'cv_preview_lines': cv_content_to_preview_lines(
                 updated_content,
-                profile.get('full_name', ''),
+                profile_name,
             ),
             'matched_categories': matched_categories,
         })

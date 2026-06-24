@@ -264,7 +264,12 @@
             if (!suggestionsApiUrl) return;
             const suggestionId = card.dataset.suggestionId;
             const buttons = card.querySelectorAll('button');
+            const applyBtn = card.querySelector('button[data-action="apply"]');
+            const applyBtnHtml = applyBtn ? applyBtn.innerHTML : '';
             buttons.forEach(btn => btn.disabled = true);
+            if (action === 'apply' && applyBtn) {
+                applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span>Applying…';
+            }
 
             try {
                 const response = await fetch(suggestionsApiUrl, {
@@ -289,6 +294,9 @@
                 alert(error.message || 'Could not update suggestion.');
             } finally {
                 buttons.forEach(btn => btn.disabled = false);
+                if (applyBtn) {
+                    applyBtn.innerHTML = applyBtnHtml;
+                }
             }
         }
 

@@ -113,3 +113,49 @@ def test_analyzer_analyze_calls_ollama():
     assert result["ats_score"] == 81
     assert result["method"] == "ai"
     ollama.generate_json.assert_called_once()
+
+
+def test_analyzer_apply_suggestion_calls_llm_and_merges_changes():
+    ollama = MagicMock()
+    ollama.is_available.return_value = True
+    ollama.validate_models.return_value = {"main": "test-model"}
+    ollama.generate_json.return_value = {
+        "reply": "Updated the professional summary.",
+        "changes": {"professional_summary": "Cloud-focused Python engineer."},
+    }
+
+    current = {
+        "professional_title": "Engineer",
+        "professional_summary": "Old summary.",
+        "technical_skills": ["Python"],
+        "tools_platforms": [],
+        "experience_highlights": [],
+        "personal_projects": [],
+        "soft_skills": [],
+        "languages": [],
+        "job_matched_skills": [],
+        "job_skills_not_in_cv": [],
+    }
+    suggestion = {
+        "id": "s1",
+        "title": "Strengthen summary",
+        "description": "Add cloud keywords naturally.",
+        "rationale": "Better ATS keyword match",
+        "category": "summary",
+        "changes": {"professional_summary": "Stale hint from analysis."},
+    }
+
+    analyzer = ATSFriendlyAnalyzer(llm=ollama)
+    updated = analyzer.apply_suggestion(
+        job={"title": "Cloud Engineer", "description": "Python and AWS"},
+        cv_content=current,
+        profile={"full_name": "Jane Doe", "technical_skills": ["Python"]},
+        suggestion=suggestion,
+    )
+
+    assert updated["professional_summary"] == "Cloud-focused Python engineer."
+    assert updated["professional_title"] == "Engineer"
+    ollama.generate_json.assert_called_once()
+    prompt = ollama.generate_json.call_args[0][0]
+    assert "Strengthen summary" in prompt
+    assert "CURRENT CV CONTENT" in prompt

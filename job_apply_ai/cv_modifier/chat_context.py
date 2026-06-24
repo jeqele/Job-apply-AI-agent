@@ -200,6 +200,27 @@ def resolve_cv_preview_lines(
     return normalized
 
 
+def resolve_effective_tailored_content(
+    content: dict[str, Any],
+    profile_name: str = "",
+    *,
+    stored_lines: list[PreviewLine] | None = None,
+    customized: bool = False,
+) -> dict[str, Any]:
+    """Return tailored content, folding in user-customized preview lines when active."""
+    if not content:
+        return {}
+    preview_lines = resolve_cv_preview_lines(
+        content,
+        profile_name,
+        stored_lines=stored_lines,
+        customized=customized,
+    )
+    if customized and preview_lines:
+        return preview_lines_to_content(content, preview_lines, profile_name)
+    return deepcopy(content)
+
+
 def format_numbered_cv_preview(lines: list[PreviewLine]) -> str:
     """Format preview lines with stable 1-based line numbers for LLM prompts."""
     if not lines:
