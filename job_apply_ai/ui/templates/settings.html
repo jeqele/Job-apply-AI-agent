@@ -14,7 +14,7 @@
     <div class="container config-page">
         <div class="page-intro">
             <h1>Settings</h1>
-            <p>Configure AI models and developer options. Mix local Ollama with cloud Qwen models.</p>
+            <p>Configure AI models and developer options. Mix local Ollama, cloud Qwen, or FreeLLMAPI.</p>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -53,7 +53,8 @@
                             <div class="section-card-body">
                                 <p class="section-lead">
                                     Pick a provider for quick tasks (analysis, import) and quality tasks (CV writing).
-                                    Example: fast = Ollama <code>gemma4:e4b</code>, main = Alibaba <code>qwen-plus</code>.
+                                    Example: fast = Ollama <code>gemma4:e4b</code>, main = Alibaba <code>qwen-plus</code>,
+                                    or FreeLLMAPI <code>auto</code> for router-managed failover.
                                 </p>
                                 <div class="row g-3">
                                     <div class="col-md-6">
@@ -61,6 +62,7 @@
                                         <select class="form-select" id="fast_model_provider" name="fast_model_provider">
                                             <option value="ollama" {% if fast_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
                                             <option value="alibaba" {% if fast_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud (Qwen)</option>
+                                            <option value="freellmapi" {% if fast_model_provider == 'freellmapi' %}selected{% endif %}>FreeLLMAPI (free tier router)</option>
                                         </select>
                                         <div class="field-hint">Job analysis, profile import, RAG prep</div>
                                     </div>
@@ -69,6 +71,7 @@
                                         <select class="form-select" id="main_model_provider" name="main_model_provider">
                                             <option value="ollama" {% if main_model_provider == 'ollama' %}selected{% endif %}>Ollama (local)</option>
                                             <option value="alibaba" {% if main_model_provider == 'alibaba' %}selected{% endif %}>Alibaba Cloud (Qwen)</option>
+                                            <option value="freellmapi" {% if main_model_provider == 'freellmapi' %}selected{% endif %}>FreeLLMAPI (free tier router)</option>
                                         </select>
                                         <div class="field-hint">CV generation, cover letters, chat editing</div>
                                     </div>
@@ -199,7 +202,92 @@
                             </div>
                         </div>
 
-                        {% if ollama_models or alibaba_models %}
+                        <div id="freellmapiPanel" class="provider-panel">
+                            <div class="section-card">
+                                <div class="section-card-header">
+                                    <span><i class="fas fa-route me-2 text-primary"></i>FreeLLMAPI</span>
+                                    {% if freellmapi_available %}
+                                        <span class="status-pill online"><i class="fas fa-circle"></i>API reachable</span>
+                                    {% else %}
+                                        <span class="status-pill offline"><i class="fas fa-circle"></i>API not reachable</span>
+                                    {% endif %}
+                                </div>
+                                <div class="section-card-body">
+                                    <p class="section-lead mb-3">
+                                        Uses the <a href="https://github.com/tashfeenahmed/freellmapi" target="_blank" rel="noopener">FreeLLMAPI</a>
+                                        OpenAI-compatible proxy. Install via
+                                        <a href="https://github.com/tashfeenahmed/freellmapi/releases/tag/v0.4.1" target="_blank" rel="noopener">desktop app or Docker</a>,
+                                        then use <code>auto</code> to let the router pick from your configured free-tier providers.
+                                    </p>
+                                    <div class="mb-3">
+                                        <label for="freellmapi_api_key" class="form-label">Unified API key</label>
+                                        <input type="password" class="form-control" id="freellmapi_api_key" name="freellmapi_api_key"
+                                               value="" placeholder="{% if has_freellmapi_api_key %}•••••••• (saved — leave blank to keep){% else %}freellmapi-...{% endif %}"
+                                               autocomplete="off">
+                                        <div class="field-hint">Or set <code>FREELLMAPI_API_KEY</code> in <code>.env</code></div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="freellmapi_base_url" class="form-label">API base URL</label>
+                                        <input type="url" class="form-control" id="freellmapi_base_url" name="freellmapi_base_url"
+                                               value="{{ freellmapi_settings.base_url }}"
+                                               placeholder="http://localhost:3001/v1">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="freellmapi_model_mode" class="form-label">Model selection mode</label>
+                                        <select class="form-select" id="freellmapi_model_mode" name="freellmapi_model_mode">
+                                            <option value="fixed" {% if freellmapi_settings.model_mode == 'fixed' %}selected{% endif %}>Fixed — use configured models only</option>
+                                            <option value="round_robin" {% if freellmapi_settings.model_mode == 'round_robin' %}selected{% endif %}>Round robin — rotate each request</option>
+                                            <option value="auto" {% if freellmapi_settings.model_mode == 'auto' %}selected{% endif %}>Auto — switch on errors</option>
+                                        </select>
+                                        <div class="field-hint">Use model <code>auto</code> (recommended) to delegate routing to FreeLLMAPI's fallback chain.</div>
+                                    </div>
+                                    <div class="row g-3 mb-3">
+                                        <div class="col-md-6">
+                                            <label for="freellmapi_fast_model" class="form-label">Fast model{% if freellmapi_settings.model_mode != 'fixed' %}s{% endif %}</label>
+                                            <input type="text" class="form-control model-input" id="freellmapi_fast_model" name="freellmapi_fast_model"
+                                                   list="freellmapi-model-options" value="{{ freellmapi_settings.fast_model }}"
+                                                   placeholder="{% if freellmapi_settings.model_mode == 'fixed' %}auto{% else %}auto, gemini-2.5-flash{% endif %}">
+                                            {% if freellmapi_settings.model_mode != 'fixed' %}
+                                            <div class="field-hint">
+                                                Pool: {{ freellmapi_fast_pool|length }} configured
+                                                {% if freellmapi_fast_rotating_count < 2 and freellmapi_settings.fast_model != 'auto' %}<span class="text-warning">— add 2+ models for rotation</span>{% endif %}
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="freellmapi_main_model" class="form-label">Main model{% if freellmapi_settings.model_mode != 'fixed' %}s{% endif %}</label>
+                                            <input type="text" class="form-control model-input" id="freellmapi_main_model" name="freellmapi_main_model"
+                                                   list="freellmapi-model-options" value="{{ freellmapi_settings.main_model }}"
+                                                   placeholder="{% if freellmapi_settings.model_mode == 'fixed' %}auto{% else %}auto, qwen-plus{% endif %}">
+                                            {% if freellmapi_settings.model_mode != 'fixed' %}
+                                            <div class="field-hint">
+                                                Pool: {{ freellmapi_main_pool|length }} configured
+                                                {% if freellmapi_main_rotating_count < 2 and freellmapi_settings.main_model != 'auto' %}<span class="text-warning">— add 2+ models for rotation</span>{% endif %}
+                                                {% if freellmapi_settings.model_state.active_main_model %}
+                                                · Active: <code>{{ freellmapi_settings.model_state.active_main_model }}</code>
+                                                {% endif %}
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <datalist id="freellmapi-model-options">
+                                        <option value="auto"></option>
+                                        {% for model in freellmapi_models %}
+                                            {% if model != 'auto' %}
+                                            <option value="{{ model }}"></option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </datalist>
+                                    <div>
+                                        <label for="freellmapi_num_predict" class="form-label">Max tokens per response</label>
+                                        <input type="number" class="form-control" id="freellmapi_num_predict" name="freellmapi_num_predict"
+                                               value="{{ freellmapi_settings.num_predict }}" min="256" max="32768" step="256">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {% if ollama_models or alibaba_models or freellmapi_models %}
                         <div class="section-card">
                             <div class="section-card-header">
                                 <a class="collapse-toggle text-decoration-none" data-bs-toggle="collapse" href="#modelPresets" role="button">
@@ -227,6 +315,17 @@
                                             {% for model in alibaba_models %}
                                                 <button type="button" class="btn btn-sm btn-outline-secondary model-preset model-chip"
                                                         data-model="{{ model }}" data-provider="alibaba">{{ model }}</button>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                    {% if freellmapi_models %}
+                                    <div class="{% if ollama_models or alibaba_models %}mt-3{% endif %}">
+                                        <div class="field-hint mb-2">FreeLLMAPI</div>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            {% for model in freellmapi_models %}
+                                                <button type="button" class="btn btn-sm btn-outline-secondary model-preset model-chip"
+                                                        data-model="{{ model }}" data-provider="freellmapi">{{ model }}</button>
                                             {% endfor %}
                                         </div>
                                     </div>
@@ -281,12 +380,15 @@
             const mainProvider = document.getElementById('main_model_provider');
             const ollamaPanel = document.getElementById('ollamaPanel');
             const alibabaPanel = document.getElementById('alibabaPanel');
+            const freellmapiPanel = document.getElementById('freellmapiPanel');
 
             function updateProviderPanels() {
                 const usesOllama = fastProvider.value === 'ollama' || mainProvider.value === 'ollama';
                 const usesAlibaba = fastProvider.value === 'alibaba' || mainProvider.value === 'alibaba';
+                const usesFreellmapi = fastProvider.value === 'freellmapi' || mainProvider.value === 'freellmapi';
                 ollamaPanel.classList.toggle('d-none', !usesOllama);
                 alibabaPanel.classList.toggle('d-none', !usesAlibaba);
+                freellmapiPanel.classList.toggle('d-none', !usesFreellmapi);
             }
 
             fastProvider.addEventListener('change', updateProviderPanels);
@@ -316,17 +418,33 @@
                 button.addEventListener('click', function () {
                     const provider = button.dataset.provider;
                     const model = button.dataset.model;
-                    const targetId = provider === 'alibaba'
-                        ? (lastFocusedModelInput && lastFocusedModelInput.id.startsWith('alibaba_')
+                    let targetId;
+                    if (provider === 'alibaba') {
+                        targetId = lastFocusedModelInput && lastFocusedModelInput.id.startsWith('alibaba_')
                             ? lastFocusedModelInput.id
-                            : 'alibaba_fast_model')
-                        : (lastFocusedModelInput && lastFocusedModelInput.id.startsWith('ollama_')
+                            : 'alibaba_fast_model';
+                    } else if (provider === 'freellmapi') {
+                        targetId = lastFocusedModelInput && lastFocusedModelInput.id.startsWith('freellmapi_')
                             ? lastFocusedModelInput.id
-                            : 'ollama_fast_model');
+                            : 'freellmapi_fast_model';
+                    } else {
+                        targetId = lastFocusedModelInput && lastFocusedModelInput.id.startsWith('ollama_')
+                            ? lastFocusedModelInput.id
+                            : 'ollama_fast_model';
+                    }
                     const target = document.getElementById(targetId);
                     if (!target) return;
+                    const rotationModes = ['round_robin', 'auto'];
                     const alibabaMode = document.getElementById('alibaba_model_mode')?.value || 'fixed';
-                    if (provider === 'alibaba' && (alibabaMode === 'round_robin' || alibabaMode === 'auto')) {
+                    const freellmapiMode = document.getElementById('freellmapi_model_mode')?.value || 'fixed';
+                    if (provider === 'alibaba' && rotationModes.indexOf(alibabaMode) !== -1) {
+                        const existing = target.value.split(/[,;\n]+/).map(function (part) {
+                            return part.trim();
+                        }).filter(Boolean);
+                        if (existing.indexOf(model) === -1) {
+                            target.value = existing.length ? existing.concat(model).join(', ') : model;
+                        }
+                    } else if (provider === 'freellmapi' && rotationModes.indexOf(freellmapiMode) !== -1) {
                         const existing = target.value.split(/[,;\n]+/).map(function (part) {
                             return part.trim();
                         }).filter(Boolean);

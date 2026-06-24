@@ -117,10 +117,17 @@ from job_apply_ai.storage.user_profile import (
     update_smtp_account_tokens,
     upsert_oauth_smtp_account,
 )
-from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form, uses_alibaba_provider, ensure_alibaba_rotation_pools
+from job_apply_ai.storage.app_settings import (
+    AppSettingsRepository,
+    ensure_alibaba_rotation_pools,
+    llm_settings_from_form,
+    uses_alibaba_provider,
+    uses_freellmapi_provider,
+)
 from job_apply_ai.storage.dev_log import DEV_LOG_CATEGORIES, DevLogRepository
 from job_apply_ai.dev_logging import dev_agent, dev_task, dev_llm_context, invalidate_dev_mode_cache
 from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient, KNOWN_MODELS
+from job_apply_ai.cv_modifier.freellmapi_client import AUTO_MODEL, FreeLLMAPIClient
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 from job_apply_ai.storage.exports import export_jobs
 from job_apply_ai.email.application_mailer import (
@@ -1774,6 +1781,25 @@ def _llm_settings_context() -> dict:
     alibaba_fast_rotating_count = len(alibaba_client.rotation_pool("fast"))
     alibaba_main_rotating_count = len(alibaba_client.rotation_pool("main"))
 
+    freellmapi_settings = all_settings["freellmapi"]
+    freellmapi_client = FreeLLMAPIClient(
+        api_key=freellmapi_settings["api_key"],
+        base_url=freellmapi_settings["base_url"],
+        fast_model=freellmapi_settings["fast_model"],
+        main_model=freellmapi_settings["main_model"],
+        num_predict=freellmapi_settings["num_predict"],
+        model_mode=freellmapi_settings["model_mode"],
+        model_state=freellmapi_settings.get("model_state"),
+    )
+    freellmapi_available = freellmapi_client.is_available()
+    freellmapi_models = (
+        freellmapi_client.list_models(refresh=True) if freellmapi_available else [AUTO_MODEL]
+    )
+    freellmapi_fast_pool = parse_model_pool(freellmapi_settings["fast_model"])
+    freellmapi_main_pool = parse_model_pool(freellmapi_settings["main_model"])
+    freellmapi_fast_rotating_count = len(freellmapi_client.rotation_pool("fast"))
+    freellmapi_main_rotating_count = len(freellmapi_client.rotation_pool("main"))
+
     return {
         "llm_provider": all_settings["llm_provider"],
         "fast_model_provider": fast_provider,
@@ -1793,6 +1819,14 @@ def _llm_settings_context() -> dict:
         "alibaba_main_pool": alibaba_main_pool,
         "alibaba_fast_rotating_count": alibaba_fast_rotating_count,
         "alibaba_main_rotating_count": alibaba_main_rotating_count,
+        "freellmapi_settings": freellmapi_settings,
+        "has_freellmapi_api_key": bool(freellmapi_settings.get("api_key")),
+        "freellmapi_available": freellmapi_available,
+        "freellmapi_models": freellmapi_models,
+        "freellmapi_fast_pool": freellmapi_fast_pool,
+        "freellmapi_main_pool": freellmapi_main_pool,
+        "freellmapi_fast_rotating_count": freellmapi_fast_rotating_count,
+        "freellmapi_main_rotating_count": freellmapi_main_rotating_count,
         "settings": ollama_settings,
         "dev_mode": all_settings.get("dev_mode", False),
     }
@@ -1806,6 +1840,7 @@ def app_settings():
         llm_settings = llm_settings_from_form(
             request.form,
             existing_alibaba_api_key=current["alibaba"].get("api_key", ""),
+            existing_freellmapi_api_key=current["freellmapi"].get("api_key", ""),
         )
         fast_provider = llm_settings["fast_model_provider"]
         main_provider = llm_settings["main_model_provider"]
@@ -1819,6 +1854,10 @@ def app_settings():
 
         if uses_alibaba_provider(llm_settings) and not llm_settings["alibaba"].get("api_key"):
             flash('Alibaba Cloud API key is required when Alibaba is selected for fast or main models.', 'error')
+            return render_template('settings.html', **_llm_settings_context())
+
+        if uses_freellmapi_provider(llm_settings) and not llm_settings["freellmapi"].get("api_key"):
+            flash('FreeLLMAPI unified API key is required when FreeLLMAPI is selected for fast or main models.', 'error')
             return render_template('settings.html', **_llm_settings_context())
 
         alibaba = llm_settings["alibaba"]

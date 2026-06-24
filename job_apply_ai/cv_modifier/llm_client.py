@@ -1,4 +1,4 @@
-"""LLM provider factory — Ollama (local) and/or Alibaba Cloud Model Studio."""
+"""LLM provider factory — Ollama, Alibaba Cloud, and FreeLLMAPI."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 from typing import Any, Protocol, runtime_checkable
 
 from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient, get_alibaba_client
+from job_apply_ai.cv_modifier.freellmapi_client import FreeLLMAPIClient
 from job_apply_ai.cv_modifier.ollama_client import OllamaClient, get_ollama_client
 
 logger = logging.getLogger(__name__)
@@ -339,6 +340,27 @@ def _build_alibaba_client(settings: dict[str, Any]) -> AlibabaClient:
     )
 
 
+def _build_freellmapi_client(settings: dict[str, Any]) -> FreeLLMAPIClient:
+    freellmapi = settings["freellmapi"]
+    return FreeLLMAPIClient(
+        api_key=freellmapi["api_key"],
+        base_url=freellmapi["base_url"],
+        fast_model=freellmapi["fast_model"],
+        main_model=freellmapi["main_model"],
+        num_predict=freellmapi["num_predict"],
+        model_mode=freellmapi["model_mode"],
+        model_state=freellmapi.get("model_state"),
+    )
+
+
+def _build_client_for_provider(provider: str, settings: dict[str, Any]) -> LLMClient:
+    if provider == "alibaba":
+        return _build_alibaba_client(settings)
+    if provider == "freellmapi":
+        return _build_freellmapi_client(settings)
+    return _build_ollama_client(settings)
+
+
 def _maybe_wrap_dev_logging(client: LLMClient, settings: dict[str, Any]) -> LLMClient:
     if settings.get("dev_mode"):
         return DevLoggingLLMClient(client)
@@ -351,18 +373,15 @@ def build_llm_client(settings: dict[str, Any]) -> LLMClient:
     main_provider = settings.get("main_model_provider", settings.get("llm_provider", "ollama"))
 
     if fast_provider == main_provider:
-        if fast_provider == "alibaba":
-            client: LLMClient = _build_alibaba_client(settings)
-        else:
-            client = _build_ollama_client(settings)
+        client: LLMClient = _build_client_for_provider(fast_provider, settings)
         return _maybe_wrap_dev_logging(client, settings)
 
     fast_client = _maybe_wrap_dev_logging(
-        _build_alibaba_client(settings) if fast_provider == "alibaba" else _build_ollama_client(settings),
+        _build_client_for_provider(fast_provider, settings),
         settings,
     )
     main_client = _maybe_wrap_dev_logging(
-        _build_alibaba_client(settings) if main_provider == "alibaba" else _build_ollama_client(settings),
+        _build_client_for_provider(main_provider, settings),
         settings,
     )
     return CompositeLLMClient(fast_client, main_client)

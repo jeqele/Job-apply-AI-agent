@@ -41,9 +41,26 @@ DEFAULT_ALIBABA_SETTINGS: dict[str, Any] = {
     "model_mode": os.environ.get("ALIBABA_MODEL_MODE", "fixed"),
 }
 
+DEFAULT_FREELLMAPI_SETTINGS: dict[str, Any] = {
+    "api_key": os.environ.get("FREELLMAPI_API_KEY", ""),
+    "base_url": os.environ.get("FREELLMAPI_BASE_URL", "http://localhost:3001/v1"),
+    "fast_model": os.environ.get("FREELLMAPI_CV_FAST_MODEL", "auto"),
+    "main_model": os.environ.get("FREELLMAPI_CV_MODEL", "auto"),
+    "num_predict": int(os.environ.get("FREELLMAPI_MAX_TOKENS", "8192")),
+    "model_mode": os.environ.get("FREELLMAPI_MODEL_MODE", "fixed"),
+}
+
 ALIBABA_MODEL_MODES = ("fixed", "round_robin", "auto")
+FREELLMAPI_MODEL_MODES = ALIBABA_MODEL_MODES
 
 DEFAULT_ALIBABA_MODEL_STATE: dict[str, Any] = {
+    "round_robin_index": {"fast": 0, "main": 0},
+    "auto_index": {"fast": 0, "main": 0},
+    "active_fast_model": "",
+    "active_main_model": "",
+}
+
+DEFAULT_FREELLMAPI_MODEL_STATE: dict[str, Any] = {
     "round_robin_index": {"fast": 0, "main": 0},
     "auto_index": {"fast": 0, "main": 0},
     "active_fast_model": "",
@@ -57,7 +74,8 @@ DEFAULT_DEV_MODE = os.environ.get("DEV_MODE", "").strip().lower() in ("1", "true
 
 OLLAMA_SETTING_KEYS = ("base_url", "fast_model", "main_model", "num_predict")
 ALIBABA_SETTING_KEYS = ("api_key", "base_url", "fast_model", "main_model", "num_predict", "model_mode")
-LLM_PROVIDERS = ("ollama", "alibaba")
+FREELLMAPI_SETTING_KEYS = ALIBABA_SETTING_KEYS
+LLM_PROVIDERS = ("ollama", "alibaba", "freellmapi")
 
 
 def normalize_ollama_settings(data: dict[str, Any] | None) -> dict[str, Any]:
@@ -134,6 +152,63 @@ def ensure_alibaba_rotation_pools(settings: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
+def normalize_freellmapi_model_state(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge stored FreeLLMAPI rotation state with defaults."""
+    state = deepcopy(DEFAULT_FREELLMAPI_MODEL_STATE)
+    if not data:
+        return state
+
+    for role in ("fast", "main"):
+        for key in ("round_robin_index", "auto_index"):
+            bucket = data.get(key)
+            if isinstance(bucket, dict):
+                try:
+                    state[key][role] = max(0, int(bucket.get(role, state[key][role])))
+                except (TypeError, ValueError):
+                    pass
+
+        active_key = f"active_{role}_model"
+        active = str(data.get(active_key) or "").strip()
+        if active:
+            state[active_key] = active
+
+    return state
+
+
+def normalize_freellmapi_settings(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge stored FreeLLMAPI settings with defaults."""
+    settings = deepcopy(DEFAULT_FREELLMAPI_SETTINGS)
+    if not data:
+        return settings
+
+    api_key = str(data.get("api_key") or "").strip()
+    if api_key:
+        settings["api_key"] = api_key
+
+    base_url = str(data.get("base_url") or "").strip()
+    if base_url:
+        settings["base_url"] = base_url.rstrip("/")
+
+    fast_model = str(data.get("fast_model") or "").strip()
+    if fast_model:
+        settings["fast_model"] = fast_model
+
+    main_model = str(data.get("main_model") or "").strip()
+    if main_model:
+        settings["main_model"] = main_model
+
+    try:
+        settings["num_predict"] = max(256, int(data.get("num_predict", settings["num_predict"])))
+    except (TypeError, ValueError):
+        pass
+
+    mode = str(data.get("model_mode") or settings["model_mode"]).strip().lower()
+    settings["model_mode"] = mode if mode in FREELLMAPI_MODEL_MODES else "fixed"
+    settings["model_state"] = normalize_freellmapi_model_state(data.get("model_state"))
+
+    return settings
+
+
 def normalize_alibaba_settings(data: dict[str, Any] | None) -> dict[str, Any]:
     """Merge stored Alibaba Cloud settings with defaults."""
     settings = deepcopy(DEFAULT_ALIBABA_SETTINGS)
@@ -198,6 +273,13 @@ def uses_alibaba_provider(providers: dict[str, str]) -> bool:
     )
 
 
+def uses_freellmapi_provider(providers: dict[str, str]) -> bool:
+    return (
+        providers["fast_model_provider"] == "freellmapi"
+        or providers["main_model_provider"] == "freellmapi"
+    )
+
+
 def ollama_settings_from_form(form_data: Any) -> dict[str, Any]:
     """Build Ollama settings from a submitted settings form."""
     if hasattr(form_data, "to_dict"):
@@ -211,6 +293,33 @@ def ollama_settings_from_form(form_data: Any) -> dict[str, Any]:
             "fast_model": scalar_data.get("ollama_fast_model", ""),
             "main_model": scalar_data.get("ollama_main_model", ""),
             "num_predict": scalar_data.get("ollama_num_predict", ""),
+        }
+    )
+
+
+def freellmapi_settings_from_form(
+    form_data: Any,
+    *,
+    existing_api_key: str = "",
+) -> dict[str, Any]:
+    """Build FreeLLMAPI settings from a submitted settings form."""
+    if hasattr(form_data, "to_dict"):
+        scalar_data = form_data.to_dict()
+    else:
+        scalar_data = dict(form_data)
+
+    api_key = str(scalar_data.get("freellmapi_api_key") or "").strip()
+    if not api_key:
+        api_key = existing_api_key
+
+    return normalize_freellmapi_settings(
+        {
+            "api_key": api_key,
+            "base_url": scalar_data.get("freellmapi_base_url", ""),
+            "fast_model": scalar_data.get("freellmapi_fast_model", ""),
+            "main_model": scalar_data.get("freellmapi_main_model", ""),
+            "num_predict": scalar_data.get("freellmapi_num_predict", ""),
+            "model_mode": scalar_data.get("freellmapi_model_mode", ""),
         }
     )
 
@@ -256,6 +365,7 @@ def llm_settings_from_form(
     form_data: Any,
     *,
     existing_alibaba_api_key: str = "",
+    existing_freellmapi_api_key: str = "",
 ) -> dict[str, Any]:
     """Build full LLM settings from a submitted settings form."""
     if hasattr(form_data, "to_dict"):
@@ -280,6 +390,10 @@ def llm_settings_from_form(
         "alibaba": alibaba_settings_from_form(
             form_data,
             existing_api_key=existing_alibaba_api_key,
+        ),
+        "freellmapi": freellmapi_settings_from_form(
+            form_data,
+            existing_api_key=existing_freellmapi_api_key,
         ),
     }
 
@@ -306,6 +420,7 @@ class AppSettingsRepository:
             "dev_mode": normalize_dev_mode(data.get("dev_mode")),
             "ollama": normalize_ollama_settings(data.get("ollama")),
             "alibaba": normalize_alibaba_settings(data.get("alibaba")),
+            "freellmapi": normalize_freellmapi_settings(data.get("freellmapi")),
         }
 
     def _default_settings(self) -> dict[str, Any]:
@@ -316,6 +431,7 @@ class AppSettingsRepository:
             "dev_mode": DEFAULT_DEV_MODE,
             "ollama": normalize_ollama_settings(None),
             "alibaba": normalize_alibaba_settings(None),
+            "freellmapi": normalize_freellmapi_settings(None),
         }
 
     def get_dev_mode(self) -> bool:
@@ -331,6 +447,9 @@ class AppSettingsRepository:
 
     def get_alibaba_settings(self) -> dict[str, Any]:
         return self.get_settings()["alibaba"]
+
+    def get_freellmapi_settings(self) -> dict[str, Any]:
+        return self.get_settings()["freellmapi"]
 
     def get_llm_provider(self) -> str:
         return self.get_settings()["llm_provider"]
@@ -351,6 +470,19 @@ class AppSettingsRepository:
         alibaba = normalize_alibaba_settings(current["alibaba"])
         alibaba["model_state"] = normalize_alibaba_model_state(model_state)
         current["alibaba"] = alibaba
+        return self._persist(current)
+
+    def save_freellmapi_settings(self, freellmapi_settings: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_settings()
+        current["freellmapi"] = normalize_freellmapi_settings(freellmapi_settings)
+        return self._persist(current)
+
+    def save_freellmapi_model_state(self, model_state: dict[str, Any]) -> dict[str, Any]:
+        """Persist FreeLLMAPI round robin / auto rotation state."""
+        current = self.get_settings()
+        freellmapi = normalize_freellmapi_settings(current["freellmapi"])
+        freellmapi["model_state"] = normalize_freellmapi_model_state(model_state)
+        current["freellmapi"] = freellmapi
         return self._persist(current)
 
     def save_llm_settings(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -379,6 +511,17 @@ class AppSettingsRepository:
                     current["alibaba"].get("model_state")
                 )
             current["alibaba"] = incoming
+        if "freellmapi" in data:
+            incoming = normalize_freellmapi_settings(data["freellmapi"])
+            if not incoming.get("api_key") and current["freellmapi"].get("api_key"):
+                incoming["api_key"] = current["freellmapi"]["api_key"]
+            if data["freellmapi"].get("model_state"):
+                incoming["model_state"] = normalize_freellmapi_model_state(data["freellmapi"]["model_state"])
+            else:
+                incoming["model_state"] = normalize_freellmapi_model_state(
+                    current["freellmapi"].get("model_state")
+                )
+            current["freellmapi"] = incoming
         if "dev_mode" in data:
             current["dev_mode"] = normalize_dev_mode(data["dev_mode"])
         return self._persist(current)

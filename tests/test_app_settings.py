@@ -61,6 +61,39 @@ def test_app_settings_repository_round_trip(monkeypatch, tmp_path):
     assert full["fast_model_provider"] == "ollama"
     assert full["main_model_provider"] == "ollama"
     assert full["ollama"] == saved["ollama"]
+    assert full["freellmapi"]["fast_model"] == "auto"
+
+
+def test_normalize_freellmapi_settings_uses_defaults():
+    from job_apply_ai.storage.app_settings import normalize_freellmapi_settings
+
+    settings = normalize_freellmapi_settings(None)
+    assert settings["base_url"] == "http://localhost:3001/v1"
+    assert settings["fast_model"] == "auto"
+    assert settings["main_model"] == "auto"
+    assert settings["model_mode"] == "fixed"
+
+
+def test_freellmapi_settings_from_form_preserves_existing_key():
+    from job_apply_ai.storage.app_settings import freellmapi_settings_from_form
+
+    settings = freellmapi_settings_from_form(
+        {
+            "freellmapi_api_key": "",
+            "freellmapi_base_url": "http://localhost:3001/v1",
+            "freellmapi_fast_model": "auto",
+            "freellmapi_main_model": "auto",
+        },
+        existing_api_key="freellmapi-existing",
+    )
+    assert settings["api_key"] == "freellmapi-existing"
+
+
+def test_uses_freellmapi_provider():
+    from job_apply_ai.storage.app_settings import uses_freellmapi_provider
+
+    assert uses_freellmapi_provider({"fast_model_provider": "freellmapi", "main_model_provider": "ollama"})
+    assert not uses_freellmapi_provider({"fast_model_provider": "ollama", "main_model_provider": "ollama"})
 
 
 def test_normalize_alibaba_settings_uses_defaults():

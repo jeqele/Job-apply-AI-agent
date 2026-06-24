@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient
+from job_apply_ai.cv_modifier.freellmapi_client import FreeLLMAPIClient
 from job_apply_ai.cv_modifier.llm_client import (
     CompositeLLMClient,
     build_llm_client,
@@ -27,6 +28,14 @@ def _base_settings(**overrides):
             "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             "fast_model": "qwen-turbo",
             "main_model": "qwen-plus",
+            "num_predict": 4096,
+            "model_mode": "fixed",
+        },
+        "freellmapi": {
+            "api_key": "freellmapi-test",
+            "base_url": "http://localhost:3001/v1",
+            "fast_model": "auto",
+            "main_model": "auto",
             "num_predict": 4096,
             "model_mode": "fixed",
         },
@@ -55,6 +64,18 @@ def test_build_llm_client_uses_alibaba_when_both_providers_alibaba():
     assert isinstance(client, AlibabaClient)
     assert client.api_key == "sk-test"
     assert client.main_model == "qwen-plus"
+
+
+def test_build_llm_client_uses_freellmapi_when_both_providers_freellmapi():
+    settings = _base_settings(
+        llm_provider="freellmapi",
+        fast_model_provider="freellmapi",
+        main_model_provider="freellmapi",
+    )
+    client = build_llm_client(settings)
+    assert isinstance(client, FreeLLMAPIClient)
+    assert client.api_key == "freellmapi-test"
+    assert client.main_model == "auto"
 
 
 def test_build_llm_client_mixed_ollama_fast_alibaba_main():
