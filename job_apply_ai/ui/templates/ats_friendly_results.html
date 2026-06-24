@@ -1,11 +1,10 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>ATS Friendly — {{ job.title }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% set page_title = 'ATS Results' %}
+    {% include '_app_head.html' %}
     <style>
-        body { background: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background: var(--hh-surface-raised); }
         .score-ring {
             width: 120px;
             height: 120px;
@@ -18,9 +17,9 @@
             color: #fff;
             flex-shrink: 0;
         }
-        .score-high { background: linear-gradient(135deg, #198754, #20c997); }
-        .score-mid { background: linear-gradient(135deg, #fd7e14, #ffc107); color: #212529; }
-        .score-low { background: linear-gradient(135deg, #dc3545, #e35d6a); }
+        .score-high { background: var(--hh-success, #047857); }
+        .score-mid { background: var(--hh-warning, #b45309); }
+        .score-low { background: var(--hh-danger, #b91c1c); }
         .keyword-tag {
             display: inline-block;
             background: #e9ecef;
@@ -50,22 +49,21 @@
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}"><i class="fas fa-briefcase me-2"></i>Hermes Hire</a>
+    {% include '_config_nav.html' %}
+    <div class="container page-shell-wide py-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+            <h1 class="h5 mb-0">ATS analysis — {{ job.title }}</h1>
             <div class="d-flex gap-2">
-                <a href="{{ back_url }}" class="btn btn-outline-light btn-sm"><i class="fas fa-arrow-left me-1"></i>Back</a>
+                <a href="{{ back_url }}" class="btn btn-ghost btn-sm"><i class="fas fa-arrow-left me-1"></i>Back</a>
                 {% if preview_cv_url %}
-                <a href="{{ preview_cv_url }}" class="btn btn-outline-info btn-sm"><i class="fas fa-eye me-1"></i>Preview CV</a>
+                <a href="{{ preview_cv_url }}" class="btn btn-ghost btn-sm"><i class="fas fa-eye me-1"></i>Preview CV</a>
                 {% endif %}
                 {% if reanalyze_url %}
-                <a href="{{ reanalyze_url }}" class="btn btn-success btn-sm"><i class="fas fa-rotate me-1"></i>Re-analyze</a>
+                <a href="{{ reanalyze_url }}" class="btn btn-primary btn-sm"><i class="fas fa-rotate me-1"></i>Re-analyze</a>
                 {% endif %}
             </div>
         </div>
-    </nav>
 
-    <div class="container py-4">
         <div class="card shadow-sm mb-4">
             <div class="card-body">
                 <div class="d-flex flex-wrap align-items-center gap-4">

@@ -1,64 +1,23 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>All CVs Generated Successfully</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% set page_title = 'Batch CVs Complete' %}
+    {% include '_app_head.html' %}
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            padding-top: 30px;
-            padding-bottom: 50px;
-            color: #343a40;
-        }
         .success-header {
-            background: linear-gradient(135deg, #198754 0%, #20c997 100%);
-            padding: 2.5rem;
-            border-radius: 1rem;
-            margin-bottom: 2.5rem;
-            color: white;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            background: var(--hh-success-bg);
+            border: 1px solid #a7f3d0;
+            border-left: 3px solid var(--hh-success);
+            padding: 1.5rem;
+            border-radius: var(--hh-radius-lg);
+            margin-bottom: 1.5rem;
             text-align: center;
-            position: relative;
-            overflow: hidden;
-        }
-        .success-header::before {
-            content: '';
-            position: absolute;
-            top: -50px;
-            right: -50px;
-            width: 100px;
-            height: 100px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.1);
-        }
-        .success-header::after {
-            content: '';
-            position: absolute;
-            bottom: -30px;
-            left: -30px;
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.1);
+            color: var(--hh-text);
         }
         .success-icon {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-            color: white;
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0% {
-                transform: scale(1);
-            }
-            50% {
-                transform: scale(1.1);
-            }
-            100% {
-                transform: scale(1);
-            }
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            color: var(--hh-success);
         }
         .card {
             border: none;
@@ -73,11 +32,12 @@
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
         }
         .card-header {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            color: white;
+            background: var(--hh-surface);
+            color: var(--hh-text);
             font-weight: 600;
-            padding: 1.25rem;
-            border-bottom: none;
+            font-size: 0.875rem;
+            padding: 0.85rem 1.15rem;
+            border-bottom: 1px solid var(--hh-border);
         }
         .card-body {
             padding: 1.5rem;
@@ -172,7 +132,8 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    {% include '_config_nav.html' %}
+    <div class="container page-shell mt-3">
         <div class="success-header">
             <div class="success-icon">
                 <i class="fas fa-check-circle"></i>

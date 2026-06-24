@@ -1,130 +1,44 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Job Listings</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% set page_title = 'Job Listings' %}
+    {% include '_app_head.html' %}
     {% include '_job_card_styles.html' %}
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            padding-top: 30px;
-            padding-bottom: 50px;
-            color: #343a40;
-        }
-        .page-header {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            padding: 2rem;
-            border-radius: 1rem;
-            margin-bottom: 2rem;
-            color: white;
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-        }
-        .action-buttons {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 1rem;
-            gap: 1rem;
-        }
-        .btn-primary {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            border: none;
-            padding: 0.6rem 1.5rem;
-            border-radius: 0.5rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #0957cc 0%, #0080d6 100%);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(13, 110, 253, 0.3);
-        }
-        .btn-success {
-            background: linear-gradient(135deg, #198754 0%, #20c997 100%);
-            border: none;
-            padding: 0.6rem 1.5rem;
-            border-radius: 0.5rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
-        .btn-success:hover {
-            background: linear-gradient(135deg, #146c43 0%, #1aa179 100%);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(25, 135, 84, 0.3);
-        }
-        .btn-secondary {
-            background: linear-gradient(135deg, #6c757d 0%, #adb5bd 100%);
-            border: none;
-            padding: 0.6rem 1.5rem;
-            border-radius: 0.5rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
-        .btn-secondary:hover {
-            background: linear-gradient(135deg, #5a6268 0%, #98a1a9 100%);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(108, 117, 125, 0.3);
-        }
-        .btn-outline-primary {
-            border: 2px solid #0d6efd;
-            color: #0d6efd;
-            background: transparent;
-            padding: 0.5rem 1rem;
-            border-radius: 0.5rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
-        .btn-outline-primary:hover {
-            background-color: #0d6efd;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(13, 110, 253, 0.2);
-        }
-        .alert {
-            border-radius: 0.5rem;
-            border: none;
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
-        }
         .stats-card {
-            background: linear-gradient(135deg, #0099ff 0%, #0d6efd 100%);
-            color: white;
-            border-radius: 1rem;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            background: var(--hh-surface);
+            border: 1px solid var(--hh-border);
+            border-left: 3px solid var(--hh-primary);
+            border-radius: var(--hh-radius-lg);
+            padding: 1.15rem;
+            margin-bottom: 1.5rem;
+            box-shadow: var(--hh-shadow-sm);
         }
         .stats-number {
-            font-size: 2.5rem;
+            font-size: 1.75rem;
             font-weight: 700;
             margin-bottom: 0;
+            font-variant-numeric: tabular-nums;
         }
         .stats-label {
-            font-size: 1rem;
-            opacity: 0.8;
+            font-size: 0.8rem;
+            color: var(--hh-text-muted);
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="page-header d-flex justify-content-between align-items-center">
+    {% include '_config_nav.html' %}
+
+    <div class="container page-shell-wide">
+        <div class="page-header-bar d-flex flex-wrap justify-content-between align-items-center gap-3 mt-3 mb-4">
             <div>
-                <h1 class="fw-bold mb-0">Job Listings</h1>
-                <p class="lead mb-0">Find and apply to the best matching jobs</p>
+                <h1 class="mb-0">Job listings</h1>
+                <p class="lead">Review search results and generate tailored applications</p>
             </div>
-            <a href="{{ url_for('index') }}" class="btn btn-light"><i class="fas fa-home me-2"></i>Back to Home</a>
+            <a href="{{ url_for('index') }}" class="btn btn-ghost btn-sm"><i class="fas fa-arrow-left me-2"></i>Dashboard</a>
         </div>
-        
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show mb-4" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+
+        {% include '_flashes.html' %}
 
         {% include '_active_tasks_banner.html' %}
         

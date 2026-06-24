@@ -1,20 +1,20 @@
 {% if active_background_tasks %}
     {% for task in active_background_tasks %}
-        <div class="alert alert-info mb-4 d-flex flex-wrap justify-content-between align-items-center gap-2" role="alert">
-            <span>
+        <div class="alert alert-info hh-flash mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2" role="alert">
+            <span style="font-size: 0.875rem;">
                 <i class="fas fa-spinner fa-spin me-2"></i>
-                <strong>{{ task.label }}</strong> is in progress.
+                <strong>{{ task.label }}</strong> in progress
                 {% if task.message %}
                     <span class="text-muted ms-1">{{ task.message }}</span>
                 {% endif %}
             </span>
             <div class="d-flex flex-wrap gap-2">
                 <a href="{{ task.progress_url }}" class="btn btn-sm btn-primary">
-                    <i class="fas fa-arrow-left me-1"></i>Back to {{ task.label }}
+                    View progress
                 </a>
                 {% if task.release_url %}
-                    <a href="{{ task.release_url }}" class="btn btn-sm btn-outline-dark">
-                        <i class="fas fa-unlock me-1"></i>Unlock
+                    <a href="{{ task.release_url }}" class="btn btn-sm btn-ghost">
+                        Unlock
                     </a>
                 {% endif %}
             </div>

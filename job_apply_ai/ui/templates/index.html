@@ -1,353 +1,42 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Job Application AI Agent</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        :root {
-            --brand-primary: #0d6efd;
-            --brand-secondary: #0099ff;
-            --surface-muted: #f8f9fa;
-            --text-muted: #6c757d;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--surface-muted);
-            color: #343a40;
-            padding-bottom: 2.5rem;
-        }
-
-        .top-nav {
-            background: #fff;
-            border-bottom: 1px solid #e9ecef;
-            position: sticky;
-            top: 0;
-            z-index: 1030;
-        }
-
-        .brand-mark {
-            width: 2.25rem;
-            height: 2.25rem;
-            border-radius: 0.65rem;
-            background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
-            color: #fff;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1rem;
-        }
-
-        .hero-section {
-            background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
-            border-radius: 1rem;
-            color: #fff;
-            box-shadow: 0 10px 24px rgba(13, 110, 253, 0.18);
-            padding: clamp(1.5rem, 4vw, 2.75rem);
-        }
-
-        .hero-section .lead {
-            opacity: 0.95;
-            max-width: 42rem;
-        }
-
-        .stat-card {
-            background: #fff;
-            border: none;
-            border-radius: 0.85rem;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
-            height: 100%;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-        }
-
-        .stat-value {
-            font-size: clamp(1.5rem, 4vw, 2rem);
-            font-weight: 700;
-            line-height: 1.1;
-        }
-
-        .stat-label {
-            color: var(--text-muted);
-            font-size: 0.85rem;
-        }
-
-        .stat-icon {
-            width: 2.5rem;
-            height: 2.5rem;
-            border-radius: 0.65rem;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1rem;
-        }
-
-        .setup-card,
-        .action-card {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-            overflow: hidden;
-            height: auto;
-        }
-
-        .home-layout-row {
-            align-items: flex-start;
-        }
-
-        .home-layout-row > [class*="col-"] {
-            height: auto;
-        }
-
-        .action-card .card-header {
-            background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
-            color: #fff;
-            font-weight: 600;
-            padding: 1rem 1.25rem;
-            border-bottom: none;
-        }
-
-        .setup-item {
-            display: flex;
-            gap: 0.85rem;
-            align-items: flex-start;
-            padding: 0.85rem 0;
-            border-bottom: 1px solid #eef1f4;
-        }
-
-        .setup-item:last-child {
-            border-bottom: none;
-            padding-bottom: 0;
-        }
-
-        .setup-status {
-            width: 1.75rem;
-            height: 1.75rem;
-            border-radius: 50%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            font-size: 0.75rem;
-        }
-
-        .setup-status.done {
-            background: #d1e7dd;
-            color: #198754;
-        }
-
-        .setup-status.pending {
-            background: #fff3cd;
-            color: #997404;
-        }
-
-        .feature-pill {
-            background: rgba(255, 255, 255, 0.14);
-            border: 1px solid rgba(255, 255, 255, 0.25);
-            border-radius: 999px;
-            padding: 0.35rem 0.75rem;
-            font-size: 0.8rem;
-            white-space: nowrap;
-        }
-
-        .workflow-step {
-            display: flex;
-            gap: 0.85rem;
-            align-items: flex-start;
-            margin-bottom: 0.85rem;
-        }
-
-        .workflow-step:last-child {
-            margin-bottom: 0;
-        }
-
-        .step-number {
-            width: 1.75rem;
-            height: 1.75rem;
-            background: var(--brand-primary);
-            color: #fff;
-            border-radius: 50%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.8rem;
-            font-weight: 700;
-            flex-shrink: 0;
-        }
-
-        .form-control,
-        .form-select {
-            border-radius: 0.5rem;
-            padding: 0.65rem 0.85rem;
-        }
-
-        .btn-brand {
-            background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
-            border: none;
-            color: #fff;
-            font-weight: 500;
-        }
-
-        .btn-brand:hover {
-            background: linear-gradient(135deg, #0957cc, #0080d6);
-            color: #fff;
-        }
-
-        .quick-link-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.65rem;
-        }
-
-        @media (min-width: 576px) {
-            .quick-link-grid {
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-            }
-        }
-
-        .quick-link {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            text-align: center;
-            gap: 0.45rem;
-            padding: 0.85rem 0.5rem;
-            background: #fff;
-            border-radius: 0.75rem;
-            border: 1px solid #e9ecef;
-            color: #495057;
-            text-decoration: none;
-            transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-            min-height: 5.5rem;
-            justify-content: center;
-        }
-
-        .quick-link:hover {
-            border-color: var(--brand-primary);
-            color: var(--brand-primary);
-            box-shadow: 0 4px 12px rgba(13, 110, 253, 0.12);
-        }
-
-        .quick-link i {
-            font-size: 1.25rem;
-        }
-
-        .quick-link span {
-            font-size: 0.78rem;
-            font-weight: 600;
-            line-height: 1.2;
-        }
-
-        .status-chip-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.45rem;
-        }
-
-        .status-chip {
-            font-size: 0.75rem;
-            padding: 0.25rem 0.55rem;
-            border-radius: 999px;
-            background: #eef2f7;
-            color: #495057;
-        }
-
-        .status-chip strong {
-            color: #212529;
-        }
-
-        @media (max-width: 575.98px) {
-            .hero-actions .btn {
-                width: 100%;
-            }
-
-            .top-nav .nav-actions {
-                gap: 0.35rem !important;
-            }
-
-            .top-nav .nav-actions .btn {
-                padding: 0.35rem 0.55rem;
-                font-size: 0.85rem;
-            }
-        }
-    </style>
+    {% set page_title = 'Dashboard' %}
+    {% include '_app_head.html' %}
 </head>
 <body>
-    <nav class="top-nav py-2 mb-3 mb-md-4">
-        <div class="container">
-            <div class="d-flex align-items-center justify-content-between gap-2">
-                <div class="d-flex align-items-center gap-2 min-w-0">
-                    <span class="brand-mark"><i class="fas fa-briefcase"></i></span>
-                    <div class="min-w-0">
-                        <div class="fw-bold text-truncate">HermesHire</div>
-                        <div class="small text-muted d-none d-sm-block">Job Application AI Agent</div>
-                    </div>
-                </div>
-                <div class="nav-actions d-flex gap-2 flex-shrink-0">
-                    <a href="{{ url_for('app_settings') }}" class="btn btn-outline-secondary btn-sm">
-                        <i class="fas fa-sliders-h d-sm-none"></i>
-                        <span class="d-none d-sm-inline"><i class="fas fa-sliders-h me-1"></i>Settings</span>
-                    </a>
-                    <a href="{{ url_for('manage_jobs') }}" class="btn btn-outline-primary btn-sm">
-                        <i class="fas fa-database d-sm-none"></i>
-                        <span class="d-none d-sm-inline"><i class="fas fa-database me-1"></i>Jobs</span>
-                    </a>
-                    <a href="{{ url_for('user_profile') }}" class="btn btn-primary btn-sm">
-                        <i class="fas fa-user d-sm-none"></i>
-                        <span class="d-none d-sm-inline"><i class="fas fa-user me-1"></i>Profile</span>
-                    </a>
-                </div>
-            </div>
-        </div>
-    </nav>
+    {% include '_config_nav.html' %}
 
-    <div class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show mb-3 mb-md-4" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
+    <div class="container page-shell">
+        {% include '_flashes.html' %}
         {% include '_active_tasks_banner.html' %}
 
-        <section class="hero-section mb-4">
-            <div class="row align-items-center g-4">
-                <div class="col-lg-7">
-                    <h1 class="display-6 fw-bold mb-2">Find jobs, tailor CVs, apply faster</h1>
-                    <p class="lead mb-3 mb-lg-4">
-                        Search multiple job boards, score fit against your profile, generate tailored CVs and cover letters with Ollama, then send applications from one workspace.
+        <section class="dashboard-hero">
+            <div class="row align-items-start g-4">
+                <div class="col-lg-8">
+                    <h1>Job search &amp; application workspace</h1>
+                    <p class="lead">
+                        Search multiple job boards, score fit against your profile, generate tailored CVs and cover letters, then track applications from one place.
                     </p>
-                    <div class="d-flex flex-wrap gap-2 mb-3 mb-lg-0">
-                        <span class="feature-pill"><i class="fas fa-search me-1"></i>Multi-source search</span>
-                        <span class="feature-pill"><i class="fas fa-user-check me-1"></i>Profile fit scoring</span>
-                        <span class="feature-pill"><i class="fas fa-file-word me-1"></i>CV &amp; cover letters</span>
-                        <span class="feature-pill"><i class="fas fa-envelope me-1"></i>Email apply</span>
+                    <div class="feature-tags">
+                        <span class="feature-tag"><i class="fas fa-search"></i> Multi-source search</span>
+                        <span class="feature-tag"><i class="fas fa-user-check"></i> Profile fit scoring</span>
+                        <span class="feature-tag"><i class="fas fa-file-lines"></i> CV &amp; cover letters</span>
+                        <span class="feature-tag"><i class="fas fa-envelope"></i> Email apply</span>
                     </div>
                 </div>
-                <div class="col-lg-5">
-                    <div class="hero-actions d-grid gap-2">
+                <div class="col-lg-4">
+                    <div class="dashboard-hero-actions d-grid gap-2">
                         {% if profile_ready %}
-                            <a href="{{ url_for('manage_jobs') }}" class="btn btn-light btn-lg">
-                                <i class="fas fa-arrow-right me-2"></i>Continue with {{ total_jobs }} saved job{{ 's' if total_jobs != 1 else '' }}
+                            <a href="{{ url_for('manage_jobs') }}" class="btn btn-primary">
+                                <i class="fas fa-arrow-right me-2"></i>Continue — {{ total_jobs }} saved job{{ 's' if total_jobs != 1 else '' }}
                             </a>
                         {% else %}
-                            <a href="{{ url_for('user_profile') }}" class="btn btn-light btn-lg">
-                                <i class="fas fa-user-plus me-2"></i>Set up your profile first
+                            <a href="{{ url_for('user_profile') }}" class="btn btn-primary">
+                                <i class="fas fa-user-plus me-2"></i>Set up your profile
                             </a>
                         {% endif %}
-                        <a href="#search-jobs" class="btn btn-outline-light">
+                        <a href="#search-jobs" class="btn btn-ghost">
                             <i class="fas fa-search me-2"></i>Search new jobs
                         </a>
                     </div>
@@ -355,87 +44,64 @@
             </div>
         </section>
 
-        <section class="row g-3 mb-4">
-            <div class="col-6 col-md-3">
-                <div class="card stat-card p-3">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <span class="stat-icon bg-primary-subtle text-primary"><i class="fas fa-briefcase"></i></span>
-                    </div>
-                    <div class="stat-value">{{ total_jobs }}</div>
-                    <div class="stat-label">Saved jobs</div>
-                </div>
+        <section class="kpi-grid">
+            <div class="kpi-card accent-primary">
+                <div class="kpi-value">{{ total_jobs }}</div>
+                <div class="kpi-label">Saved jobs</div>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card stat-card p-3">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <span class="stat-icon bg-success-subtle text-success"><i class="fas fa-star"></i></span>
-                    </div>
-                    <div class="stat-value">{{ status_counts.get('new', 0) }}</div>
-                    <div class="stat-label">New / discovered</div>
-                </div>
+            <div class="kpi-card accent-success">
+                <div class="kpi-value">{{ status_counts.get('new', 0) }}</div>
+                <div class="kpi-label">New / discovered</div>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card stat-card p-3">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <span class="stat-icon bg-info-subtle text-info"><i class="fas fa-paper-plane"></i></span>
-                    </div>
-                    <div class="stat-value">{{ status_counts.get('applied', 0) + status_counts.get('cv_sent', 0) }}</div>
-                    <div class="stat-label">Applied / CV sent</div>
-                </div>
+            <div class="kpi-card accent-info">
+                <div class="kpi-value">{{ status_counts.get('applied', 0) + status_counts.get('cv_sent', 0) }}</div>
+                <div class="kpi-label">Applied / CV sent</div>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card stat-card p-3">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <span class="stat-icon bg-warning-subtle text-warning"><i class="fas fa-calendar-check"></i></span>
-                    </div>
-                    <div class="stat-value">{{ status_counts.get('interview_scheduled', 0) + status_counts.get('interview_completed', 0) }}</div>
-                    <div class="stat-label">Interviews</div>
-                </div>
+            <div class="kpi-card accent-warning">
+                <div class="kpi-value">{{ status_counts.get('interview_scheduled', 0) + status_counts.get('interview_completed', 0) }}</div>
+                <div class="kpi-label">Interviews</div>
             </div>
         </section>
 
-        <section class="mb-4">
-            <div class="quick-link-grid">
-                <a href="{{ url_for('user_profile') }}" class="quick-link">
-                    <i class="fas fa-id-card"></i>
-                    <span>Profile</span>
-                </a>
-                <a href="{{ url_for('manage_jobs') }}" class="quick-link">
-                    <i class="fas fa-folder-open"></i>
-                    <span>Manage jobs</span>
-                </a>
-                <a href="{{ url_for('manage_jobs', folder='new') }}" class="quick-link">
-                    <i class="fas fa-inbox"></i>
-                    <span>New jobs</span>
-                </a>
-                <a href="#search-jobs" class="quick-link">
-                    <i class="fas fa-search"></i>
-                    <span>Search</span>
-                </a>
-                <a href="#batch-search-jobs" class="quick-link">
-                    <i class="fas fa-layer-group"></i>
-                    <span>Batch search</span>
-                </a>
-            </div>
+        <section class="quick-nav-grid">
+            <a href="{{ url_for('user_profile') }}" class="quick-nav-item">
+                <i class="fas fa-id-card"></i>
+                Profile
+            </a>
+            <a href="{{ url_for('manage_jobs') }}" class="quick-nav-item">
+                <i class="fas fa-folder-open"></i>
+                Manage jobs
+            </a>
+            <a href="{{ url_for('manage_jobs', folder='new') }}" class="quick-nav-item">
+                <i class="fas fa-inbox"></i>
+                New jobs
+            </a>
+            <a href="#search-jobs" class="quick-nav-item">
+                <i class="fas fa-search"></i>
+                Search
+            </a>
+            <a href="#batch-search-jobs" class="quick-nav-item">
+                <i class="fas fa-layer-group"></i>
+                Batch search
+            </a>
         </section>
 
-        <div class="row g-4 mb-4 home-layout-row align-items-start">
+        <div class="row g-4 mb-4 align-items-start">
             <div class="col-lg-4">
-                <div class="card setup-card">
-                    <div class="card-body p-3 p-md-4">
-                        <h2 class="h5 mb-3"><i class="fas fa-clipboard-check me-2 text-primary"></i>Setup checklist</h2>
-
+                <div class="hh-card">
+                    <div class="hh-card-header">Setup checklist</div>
+                    <div class="hh-card-body setup-checklist">
                         <div class="setup-item">
                             <span class="setup-status {% if profile_ready %}done{% else %}pending{% endif %}">
-                                <i class="fas fa-{% if profile_ready %}check{% else %}hourglass-half{% endif %}"></i>
+                                <i class="fas fa-{% if profile_ready %}check{% else %}minus{% endif %}"></i>
                             </span>
                             <div>
-                                <div class="fw-semibold">CV profile</div>
+                                <div class="fw-semibold" style="font-size: 0.875rem;">CV profile</div>
                                 <div class="small text-muted">
                                     {% if profile_ready %}
-                                        Ready{% if profile_name %} for {{ profile_name }}{% endif %}. Skills, experience, and projects are stored for generation.
+                                        Ready{% if profile_name %} for {{ profile_name }}{% endif %}.
                                     {% else %}
-                                        Add your name, skills, experience, and projects so the AI can fill your template.
+                                        Add skills, experience, and projects for AI generation.
                                     {% endif %}
                                 </div>
                             </div>
@@ -443,15 +109,15 @@
 
                         <div class="setup-item">
                             <span class="setup-status {% if profile_has_skills %}done{% else %}pending{% endif %}">
-                                <i class="fas fa-{% if profile_has_skills %}check{% else %}hourglass-half{% endif %}"></i>
+                                <i class="fas fa-{% if profile_has_skills %}check{% else %}minus{% endif %}"></i>
                             </span>
                             <div>
-                                <div class="fw-semibold">Matchable skills</div>
+                                <div class="fw-semibold" style="font-size: 0.875rem;">Matchable skills</div>
                                 <div class="small text-muted">
                                     {% if profile_has_skills %}
-                                        Technical skills or stacks are configured for profile fit scoring.
+                                        Configured for profile fit scoring.
                                     {% else %}
-                                        Add technical skills or stacks to enable AI job match analysis.
+                                        Add technical skills to enable match analysis.
                                     {% endif %}
                                 </div>
                             </div>
@@ -459,15 +125,15 @@
 
                         <div class="setup-item">
                             <span class="setup-status {% if email_configured %}done{% else %}pending{% endif %}">
-                                <i class="fas fa-{% if email_configured %}check{% else %}hourglass-half{% endif %}"></i>
+                                <i class="fas fa-{% if email_configured %}check{% else %}minus{% endif %}"></i>
                             </span>
                             <div>
-                                <div class="fw-semibold">Application email</div>
+                                <div class="fw-semibold" style="font-size: 0.875rem;">Application email</div>
                                 <div class="small text-muted">
                                     {% if email_configured %}
-                                        SMTP or OAuth email is connected for sending CVs and cover letters.
+                                        SMTP or OAuth connected.
                                     {% else %}
-                                        Connect Google, Microsoft, or SMTP in your profile to send applications.
+                                        Connect email in your profile to send applications.
                                     {% endif %}
                                 </div>
                             </div>
@@ -490,22 +156,22 @@
             </div>
 
             <div class="col-lg-8">
-                <div class="card action-card mb-4">
-                    <div class="card-header">
-                        <h2 class="h5 mb-0"><i class="fas fa-user-edit me-2"></i>Step 1 — Your CV profile</h2>
+                <div class="hh-card mb-4">
+                    <div class="hh-card-header">
+                        <span>Step 1 — Your CV profile</span>
                     </div>
-                    <div class="card-body p-3 p-md-4 d-flex flex-column">
-                        <p class="mb-3">
-                            Enter your details once. The system uses your profile to fill the Word template, tailor summaries and bullets per job, generate cover letters, and score profile fit after each search.
+                    <div class="hh-card-body d-flex flex-column">
+                        <p class="mb-3" style="font-size: 0.875rem;">
+                            Enter your details once. The system uses your profile to fill templates, tailor content per job, generate cover letters, and score profile fit.
                         </p>
                         <ul class="small text-muted mb-3 ps-3">
-                            <li>Import from an existing DOCX or edit fields manually</li>
-                            <li>Support for multiple job titles and OAuth/SMTP email accounts</li>
-                            <li>Preview and chat-edit generated CV content before export</li>
+                            <li>Import from DOCX or edit fields manually</li>
+                            <li>Multiple job titles and OAuth/SMTP email accounts</li>
+                            <li>Preview and chat-edit generated CV content</li>
                         </ul>
-                        <a href="{{ url_for('user_profile') }}" class="btn {% if profile_ready %}btn-success{% else %}btn-brand{% endif %} mt-auto">
+                        <a href="{{ url_for('user_profile') }}" class="btn {% if profile_ready %}btn-outline-success{% else %}btn-primary{% endif %} mt-auto align-self-start">
                             {% if profile_ready %}
-                                <i class="fas fa-check-circle me-2"></i>Edit profile
+                                <i class="fas fa-pen me-2"></i>Edit profile
                             {% else %}
                                 <i class="fas fa-user-plus me-2"></i>Create profile
                             {% endif %}
@@ -513,11 +179,11 @@
                     </div>
                 </div>
 
-                <div class="card action-card" id="search-jobs">
-                    <div class="card-header">
-                        <h2 class="h5 mb-0"><i class="fas fa-search me-2"></i>Step 2 — Search for jobs</h2>
+                <div class="hh-card" id="search-jobs">
+                    <div class="hh-card-header">
+                        <span>Step 2 — Search for jobs</span>
                     </div>
-                    <div class="card-body p-3 p-md-4">
+                    <div class="hh-card-body">
                         <ul class="nav nav-tabs mb-3" id="searchTabs" role="tablist">
                             <li class="nav-item" role="presentation">
                                 <button class="nav-link active" id="single-search-tab" data-bs-toggle="tab" data-bs-target="#single-search-panel" type="button" role="tab" aria-controls="single-search-panel" aria-selected="true">
@@ -526,7 +192,7 @@
                             </li>
                             <li class="nav-item" role="presentation">
                                 <button class="nav-link" id="batch-search-tab" data-bs-toggle="tab" data-bs-target="#batch-search-panel" type="button" role="tab" aria-controls="batch-search-panel" aria-selected="false">
-                                    <i class="fas fa-layer-group me-1"></i>Batch search
+                                    Batch search
                                 </button>
                             </li>
                         </ul>
@@ -558,8 +224,8 @@
                                             </select>
                                         </div>
                                         <div class="col-12">
-                                            <button class="btn btn-link btn-sm px-0 text-decoration-none" type="button" data-bs-toggle="collapse" data-bs-target="#advancedSearch" aria-expanded="false" aria-controls="advancedSearch">
-                                                <i class="fas fa-sliders-h me-1"></i>Advanced options
+                                            <button class="btn btn-link btn-sm px-0 text-decoration-none collapse-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#advancedSearch" aria-expanded="false" aria-controls="advancedSearch">
+                                                Advanced options
                                             </button>
                                             <div class="collapse mt-2" id="advancedSearch">
                                                 <label for="sources" class="form-label">Job sources</label>
@@ -568,7 +234,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <button type="submit" class="btn btn-brand w-100 w-sm-auto mt-3" id="search-button">
+                                    <button type="submit" class="btn btn-primary mt-3" id="search-button">
                                         <i class="fas fa-search me-2"></i>Search jobs
                                     </button>
                                 </form>
@@ -576,18 +242,18 @@
 
                             <div class="tab-pane fade" id="batch-search-panel" role="tabpanel" aria-labelledby="batch-search-tab" tabindex="0">
                                 <div id="batch-search-jobs">
-                                    <p class="mb-3">
+                                    <p class="mb-3" style="font-size: 0.875rem;">
                                         Upload a <strong>job titles</strong> file and a <strong>locations</strong> file (one entry per line).
-                                        HermesHire queues every title against every location and saves all results together.
+                                        HermesHire queues every title against every location.
                                     </p>
                                     <form action="{{ url_for('batch_search_jobs') }}" method="post" enctype="multipart/form-data">
                                         <div class="row g-3">
                                             <div class="col-md-6">
-                                                <label for="titles_file" class="form-label fw-semibold">Job titles file (.txt)</label>
+                                                <label for="titles_file" class="form-label">Job titles file (.txt)</label>
                                                 <input type="file" class="form-control" id="titles_file" name="titles_file" accept=".txt,text/plain">
-                                                <div class="form-text">One job title per line. Lines starting with <code>#</code> are ignored.</div>
+                                                <div class="form-text">One title per line. Lines starting with <code>#</code> are ignored.</div>
                                                 <div class="d-flex align-items-center gap-2 mt-3 flex-wrap">
-                                                    <label for="titles_text" class="form-label mb-0 small text-muted">Or paste titles here</label>
+                                                    <label for="titles_text" class="form-label mb-0 small text-muted">Or paste titles</label>
                                                     <button type="button" class="btn btn-outline-primary btn-sm" id="suggest-titles-btn" {% if not profile_ready %}disabled title="Complete your profile first"{% endif %}>
                                                         <i class="fas fa-wand-magic-sparkles me-1"></i>Suggest from profile
                                                     </button>
@@ -596,10 +262,10 @@
                                                 <div class="form-text" id="suggest-titles-status"></div>
                                             </div>
                                             <div class="col-md-6">
-                                                <label for="locations_file" class="form-label fw-semibold">Locations file (.txt)</label>
+                                                <label for="locations_file" class="form-label">Locations file (.txt)</label>
                                                 <input type="file" class="form-control" id="locations_file" name="locations_file" accept=".txt,text/plain">
-                                                <div class="form-text">One location per line. Example: <code>Berlin</code>, <code>Remote</code>, <code>London</code>.</div>
-                                                <label for="locations_text" class="form-label mt-3 small text-muted">Or paste locations here</label>
+                                                <div class="form-text">One location per line.</div>
+                                                <label for="locations_text" class="form-label mt-3 small text-muted">Or paste locations</label>
                                                 <textarea class="form-control font-monospace" id="locations_text" name="locations_text" rows="5" placeholder="Berlin&#10;Remote&#10;London"></textarea>
                                             </div>
                                             {% set id_prefix = 'batch_' %}
@@ -623,14 +289,12 @@
                                             <div class="col-12">
                                                 <div class="form-check">
                                                     <input class="form-check-input" type="checkbox" id="shuffle_queue" name="shuffle_queue">
-                                                    <label class="form-check-label" for="shuffle_queue">
-                                                        Randomize search order
-                                                    </label>
-                                                    <div class="form-text">Shuffle title × location pairs before running the batch.</div>
+                                                    <label class="form-check-label" for="shuffle_queue">Randomize search order</label>
+                                                    <div class="form-text">Shuffle title × location pairs before running.</div>
                                                 </div>
                                             </div>
                                         </div>
-                                        <button type="submit" class="btn btn-brand w-100 w-sm-auto mt-3">
+                                        <button type="submit" class="btn btn-primary mt-3">
                                             <i class="fas fa-play me-2"></i>Start batch search
                                         </button>
                                     </form>
@@ -642,56 +306,43 @@
             </div>
         </div>
 
-        <section class="card setup-card mb-4">
-            <div class="card-body p-3 p-md-4">
-                <h2 class="h5 mb-3"><i class="fas fa-route me-2 text-primary"></i>How the workflow fits together</h2>
-                <div class="row g-3">
-                    <div class="col-md-6 col-lg-3">
-                        <div class="workflow-step">
-                            <span class="step-number">1</span>
-                            <div>
-                                <div class="fw-semibold">Build profile</div>
-                                <div class="small text-muted">Save skills, experience, and email settings.</div>
-                            </div>
+        <section class="hh-card mb-4">
+            <div class="hh-card-header">How it works</div>
+            <div class="hh-card-body">
+                <div class="workflow-grid">
+                    <div class="workflow-step">
+                        <span class="step-number">1</span>
+                        <div>
+                            <div class="fw-semibold" style="font-size: 0.875rem;">Build profile</div>
+                            <div class="small text-muted">Save skills, experience, and email settings.</div>
                         </div>
                     </div>
-                    <div class="col-md-6 col-lg-3">
-                        <div class="workflow-step">
-                            <span class="step-number">2</span>
-                            <div>
-                                <div class="fw-semibold">Search &amp; score</div>
-                                <div class="small text-muted">Jobs are saved and scored against your profile.</div>
-                            </div>
+                    <div class="workflow-step">
+                        <span class="step-number">2</span>
+                        <div>
+                            <div class="fw-semibold" style="font-size: 0.875rem;">Search &amp; score</div>
+                            <div class="small text-muted">Jobs are saved and scored against your profile.</div>
                         </div>
                     </div>
-                    <div class="col-md-6 col-lg-3">
-                        <div class="workflow-step">
-                            <span class="step-number">3</span>
-                            <div>
-                                <div class="fw-semibold">Generate documents</div>
-                                <div class="small text-muted">Tailored CVs and cover letters per role.</div>
-                            </div>
+                    <div class="workflow-step">
+                        <span class="step-number">3</span>
+                        <div>
+                            <div class="fw-semibold" style="font-size: 0.875rem;">Generate documents</div>
+                            <div class="small text-muted">Tailored CVs and cover letters per role.</div>
                         </div>
                     </div>
-                    <div class="col-md-6 col-lg-3">
-                        <div class="workflow-step">
-                            <span class="step-number">4</span>
-                            <div>
-                                <div class="fw-semibold">Track &amp; apply</div>
-                                <div class="small text-muted">Move jobs through folders and send applications.</div>
-                            </div>
+                    <div class="workflow-step">
+                        <span class="step-number">4</span>
+                        <div>
+                            <div class="fw-semibold" style="font-size: 0.875rem;">Track &amp; apply</div>
+                            <div class="small text-muted">Move jobs through folders and send applications.</div>
                         </div>
                     </div>
                 </div>
             </div>
         </section>
 
-        <footer class="text-center text-muted small pb-2">
-            <p class="mb-2">HermesHire Job Application AI Agent — local-first job search, CV tailoring, and application tracking.</p>
-            <a href="{{ url_for('manage_jobs') }}" class="btn btn-outline-primary btn-sm">
-                <i class="fas fa-database me-1"></i>Open job manager
-            </a>
-        </footer>
+        {% include '_page_footer.html' %}
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

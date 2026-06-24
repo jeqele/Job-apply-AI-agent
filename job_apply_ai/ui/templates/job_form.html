@@ -1,57 +1,28 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>{% if job %}Edit Job{% else %}Add Job{% endif %}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            padding-top: 30px;
-            padding-bottom: 50px;
-        }
-        .card {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-        }
-        .card-header {
-            background: linear-gradient(135deg, #0d6efd 0%, #0099ff 100%);
-            color: white;
-            font-weight: 600;
-            padding: 1.25rem;
-            border-bottom: none;
-        }
-    </style>
+    {% if job %}{% set page_title = 'Edit Job' %}{% else %}{% set page_title = 'Add Job' %}{% endif %}
+    {% include '_app_head.html' %}
 </head>
 <body>
-    <div class="container">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1 class="fw-bold mb-0">
-                {% if job %}<i class="fas fa-edit me-2"></i>Edit Job{% else %}<i class="fas fa-plus me-2"></i>Add Job{% endif %}
-            </h1>
-            <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-secondary">
-                <i class="fas fa-arrow-left me-2"></i>Back to Jobs
+    {% include '_config_nav.html' %}
+
+    <div class="container page-shell">
+        <div class="page-intro d-flex flex-wrap justify-content-between align-items-start gap-3 mt-3">
+            <div>
+                <h1>{% if job %}Edit job{% else %}Add job{% endif %}</h1>
+                <p>Enter job details manually or update an existing listing.</p>
+            </div>
+            <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-ghost btn-sm">
+                <i class="fas fa-arrow-left me-2"></i>Back to jobs
             </a>
         </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show mb-4" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+        {% include '_flashes.html' %}
 
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Job Details</h5>
-            </div>
-            <div class="card-body">
+        <div class="hh-card">
+            <div class="hh-card-header">Job details</div>
+            <div class="hh-card-body">
                 <form method="post">
                     <input type="hidden" name="return_folder" value="{{ return_folder|default('all') }}">
                     <input type="hidden" name="return_search" value="{{ return_search|default('') }}">
@@ -122,9 +93,9 @@
                     </div>
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Save Job
+                            <i class="fas fa-save me-2"></i>Save job
                         </button>
-                        <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-outline-secondary">Cancel</a>
+                        <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-ghost">Cancel</a>
                     </div>
                 </form>
             </div>

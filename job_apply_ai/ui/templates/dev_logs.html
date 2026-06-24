@@ -1,30 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Developer Logs — HermesHire</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% set page_title = 'Developer Logs' %}
+    {% include '_app_head.html' %}
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fa;
-            padding-top: 30px;
-            padding-bottom: 50px;
-            color: #343a40;
-        }
-        .page-header {
-            background: linear-gradient(135deg, #212529 0%, #495057 100%);
-            padding: 2rem;
-            border-radius: 1rem;
-            margin-bottom: 1.5rem;
-            color: white;
-        }
         .log-table-wrap {
-            background: white;
-            border-radius: 1rem;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            background: var(--hh-surface);
+            border: 1px solid var(--hh-border);
+            border-radius: var(--hh-radius-lg);
+            box-shadow: var(--hh-shadow-sm);
             overflow: hidden;
         }
         .log-row {
@@ -53,15 +37,15 @@
     </style>
 </head>
 <body>
-    <div class="container-fluid px-4">
-        <div class="page-header d-flex flex-wrap align-items-center justify-content-between gap-3">
+    {% include '_config_nav.html' %}
+    <div class="container-fluid px-3 px-md-4 page-shell-wide">
+        <div class="page-header-bar d-flex flex-wrap align-items-center justify-content-between gap-3 mt-3 mb-4">
             <div>
-                <h1 class="h3 mb-1"><i class="fas fa-terminal me-2"></i>Developer Logs</h1>
-                <p class="mb-0 opacity-75">Agent runs, LLM conversations, and background task events.</p>
+                <h1 class="h5 mb-1">Developer logs</h1>
+                <p class="lead mb-0">Agent runs, LLM conversations, and background task events.</p>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <a href="{{ url_for('app_settings') }}" class="btn btn-outline-light btn-sm">Settings</a>
-                <a href="{{ url_for('index') }}" class="btn btn-light btn-sm">Dashboard</a>
+                <a href="{{ url_for('app_settings') }}" class="btn btn-ghost btn-sm">Settings</a>
             </div>
         </div>
 
