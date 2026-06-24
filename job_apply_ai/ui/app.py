@@ -113,7 +113,7 @@ from job_apply_ai.storage.user_profile import (
     update_smtp_account_tokens,
     upsert_oauth_smtp_account,
 )
-from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form, uses_alibaba_provider
+from job_apply_ai.storage.app_settings import AppSettingsRepository, llm_settings_from_form, uses_alibaba_provider, ensure_alibaba_rotation_pools
 from job_apply_ai.storage.dev_log import DEV_LOG_CATEGORIES, DevLogRepository
 from job_apply_ai.dev_logging import dev_agent, dev_task, dev_llm_context, invalidate_dev_mode_cache
 from job_apply_ai.cv_modifier.alibaba_client import AlibabaClient, KNOWN_MODELS
@@ -1742,8 +1742,15 @@ def _llm_settings_context() -> dict:
 
     from job_apply_ai.cv_modifier.llm_client import build_llm_client
 
+    from job_apply_ai.cv_modifier.alibaba_client import parse_model_pool
+
     active_client = build_llm_client(all_settings)
     llm_available = active_client.is_available()
+
+    alibaba_fast_pool = parse_model_pool(alibaba_settings["fast_model"])
+    alibaba_main_pool = parse_model_pool(alibaba_settings["main_model"])
+    alibaba_fast_rotating_count = len(alibaba_client.rotation_pool("fast"))
+    alibaba_main_rotating_count = len(alibaba_client.rotation_pool("main"))
 
     return {
         "llm_provider": all_settings["llm_provider"],
@@ -1760,6 +1767,10 @@ def _llm_settings_context() -> dict:
         "alibaba_models": alibaba_models,
         "active_provider_label": active_client.provider_label,
         "known_alibaba_models": list(KNOWN_MODELS),
+        "alibaba_fast_pool": alibaba_fast_pool,
+        "alibaba_main_pool": alibaba_main_pool,
+        "alibaba_fast_rotating_count": alibaba_fast_rotating_count,
+        "alibaba_main_rotating_count": alibaba_main_rotating_count,
         "settings": ollama_settings,
         "dev_mode": all_settings.get("dev_mode", False),
     }
@@ -1788,11 +1799,48 @@ def app_settings():
             flash('Alibaba Cloud API key is required when Alibaba is selected for fast or main models.', 'error')
             return render_template('settings.html', **_llm_settings_context())
 
+        alibaba = llm_settings["alibaba"]
+        if alibaba.get("model_mode") in ("round_robin", "auto"):
+            from job_apply_ai.cv_modifier.alibaba_client import parse_model_pool
+
+            for role, provider in (("fast", fast_provider), ("main", main_provider)):
+                if provider != "alibaba":
+                    continue
+                pool = parse_model_pool(alibaba[f"{role}_model"])
+                if len(pool) < 2:
+                    flash(
+                        f'Alibaba {role} model pool was expanded to multiple models for {alibaba["model_mode"]} mode. '
+                        'Review the comma-separated list and save again if needed.',
+                        'warning',
+                    )
+                    break
+
         llm_settings["dev_mode"] = request.form.get("dev_mode") == "on"
         app_settings_repo.save_llm_settings(llm_settings)
         invalidate_dev_mode_cache()
         flash('Settings saved. New model choices apply to the next AI task.', 'success')
         return redirect(url_for('app_settings'))
+
+    current = app_settings_repo.get_settings()
+    alibaba = current["alibaba"]
+    if alibaba.get("model_mode") in ("round_robin", "auto"):
+        from job_apply_ai.cv_modifier.alibaba_client import parse_model_pool
+
+        repaired = ensure_alibaba_rotation_pools(alibaba)
+        needs_repair = any(
+            len(parse_model_pool(alibaba[key])) < 2 and parse_model_pool(repaired[key]) != parse_model_pool(alibaba[key])
+            for key in ("fast_model", "main_model")
+        )
+        if needs_repair:
+            saved = dict(alibaba)
+            saved["fast_model"] = repaired["fast_model"]
+            saved["main_model"] = repaired["main_model"]
+            app_settings_repo.save_alibaba_settings(saved)
+            flash(
+                'Alibaba model pools were expanded with additional Qwen models so rotation can work. '
+                'Review the model lists below.',
+                'info',
+            )
 
     return render_template('settings.html', **_llm_settings_context())
 
@@ -2906,6 +2954,13 @@ def ats_friendly_progress(job_id):
         if return_from_manage:
             return _manage_jobs_redirect(return_folder, return_search, return_sort)
         return redirect(url_for('job_list', sort=return_sort or None))
+
+    if force:
+        stale_task_id = session.pop('ats_friendly_active', None)
+        if stale_task_id:
+            stale_task = get_task(stale_task_id)
+            if stale_task and stale_task.get('status') in ('pending', 'running'):
+                fail_task(stale_task_id, 'Superseded by a new ATS analysis.')
 
     if not force:
         existing = get_job_ats_analysis(job)

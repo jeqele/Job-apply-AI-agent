@@ -240,12 +240,27 @@
                                 <input type="text" class="form-control model-input" id="alibaba_fast_model" name="alibaba_fast_model"
                                        list="alibaba-model-options" value="{{ alibaba_settings.fast_model }}"
                                        placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-turbo{% else %}qwen-turbo, qwen-plus{% endif %}">
+                                {% if alibaba_settings.model_mode != 'fixed' %}
+                                <div class="hint mt-1">
+                                    Pool: {{ alibaba_fast_pool|length }} configured{% if alibaba_fast_rotating_count != alibaba_fast_pool|length %}, {{ alibaba_fast_rotating_count }} unique after alias resolution{% endif %}.
+                                    {% if alibaba_fast_rotating_count < 2 %}<strong class="text-warning">Add at least 2 distinct models for rotation.</strong>{% endif %}
+                                </div>
+                                {% endif %}
                             </div>
                             <div class="col-md-6">
                                 <label for="alibaba_main_model" class="form-label">Main model{% if alibaba_settings.model_mode != 'fixed' %}s{% endif %}</label>
                                 <input type="text" class="form-control model-input" id="alibaba_main_model" name="alibaba_main_model"
                                        list="alibaba-model-options" value="{{ alibaba_settings.main_model }}"
                                        placeholder="{% if alibaba_settings.model_mode == 'fixed' %}qwen-plus{% else %}qwen-plus, qwen-max{% endif %}">
+                                {% if alibaba_settings.model_mode != 'fixed' %}
+                                <div class="hint mt-1">
+                                    Pool: {{ alibaba_main_pool|length }} configured{% if alibaba_main_rotating_count != alibaba_main_pool|length %}, {{ alibaba_main_rotating_count }} unique after alias resolution{% endif %}.
+                                    {% if alibaba_main_rotating_count < 2 %}<strong class="text-warning">Add at least 2 distinct models for rotation.</strong>{% endif %}
+                                    {% if alibaba_settings.model_state.active_main_model %}
+                                    Current main model: <code>{{ alibaba_settings.model_state.active_main_model }}</code>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
                             </div>
                         </div>
                         <datalist id="alibaba-model-options">
@@ -350,7 +365,17 @@
                             : 'ollama_fast_model');
                     const target = document.getElementById(targetId);
                     if (!target) return;
-                    target.value = model;
+                    const alibabaMode = document.getElementById('alibaba_model_mode')?.value || 'fixed';
+                    if (provider === 'alibaba' && (alibabaMode === 'round_robin' || alibabaMode === 'auto')) {
+                        const existing = target.value.split(/[,;\n]+/).map(function (part) {
+                            return part.trim();
+                        }).filter(Boolean);
+                        if (existing.indexOf(model) === -1) {
+                            target.value = existing.length ? existing.concat(model).join(', ') : model;
+                        }
+                    } else {
+                        target.value = model;
+                    }
                     target.focus();
                     lastFocusedModelInput = target;
                 });

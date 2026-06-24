@@ -9,6 +9,19 @@ from typing import Any
 
 from job_apply_ai.storage.database import get_connection
 
+try:
+    from job_apply_ai.cv_modifier.alibaba_client import parse_model_pool
+except ImportError:
+    def parse_model_pool(value: str) -> list[str]:
+        models: list[str] = []
+        seen: set[str] = set()
+        for part in value.replace(";", ",").split(","):
+            name = part.strip()
+            if name and name not in seen:
+                seen.add(name)
+                models.append(name)
+        return models
+
 DEFAULT_OLLAMA_SETTINGS: dict[str, Any] = {
     "base_url": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
     "fast_model": os.environ.get("OLLAMA_CV_FAST_MODEL", "gemma4:e4b"),
@@ -29,6 +42,13 @@ DEFAULT_ALIBABA_SETTINGS: dict[str, Any] = {
 }
 
 ALIBABA_MODEL_MODES = ("fixed", "round_robin", "auto")
+
+DEFAULT_ALIBABA_MODEL_STATE: dict[str, Any] = {
+    "round_robin_index": {"fast": 0, "main": 0},
+    "auto_index": {"fast": 0, "main": 0},
+    "active_fast_model": "",
+    "active_main_model": "",
+}
 
 DEFAULT_LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
 DEFAULT_FAST_MODEL_PROVIDER = os.environ.get("LLM_FAST_PROVIDER", DEFAULT_LLM_PROVIDER)
@@ -66,6 +86,54 @@ def normalize_ollama_settings(data: dict[str, Any] | None) -> dict[str, Any]:
     return settings
 
 
+def normalize_alibaba_model_state(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge stored Alibaba rotation state with defaults."""
+    state = deepcopy(DEFAULT_ALIBABA_MODEL_STATE)
+    if not data:
+        return state
+
+    for role in ("fast", "main"):
+        for key in ("round_robin_index", "auto_index"):
+            bucket = data.get(key)
+            if isinstance(bucket, dict):
+                try:
+                    state[key][role] = max(0, int(bucket.get(role, state[key][role])))
+                except (TypeError, ValueError):
+                    pass
+
+        active_key = f"active_{role}_model"
+        active = str(data.get(active_key) or "").strip()
+        if active:
+            state[active_key] = active
+
+    return state
+
+
+def ensure_alibaba_rotation_pools(settings: dict[str, Any]) -> dict[str, Any]:
+    """Ensure fast/main model fields list multiple models when rotating."""
+    if settings.get("model_mode") not in ("round_robin", "auto"):
+        return settings
+
+    default_pools = {
+        "fast_model": ("qwen-turbo", "qwen-plus"),
+        "main_model": ("qwen-plus", "qwen-max"),
+    }
+    updated = dict(settings)
+    for key, defaults in default_pools.items():
+        pool = parse_model_pool(str(updated.get(key) or ""))
+        if len(pool) >= 2:
+            continue
+        seed = pool or [defaults[0]]
+        merged: list[str] = []
+        seen: set[str] = set()
+        for name in (*seed, *defaults):
+            if name and name not in seen:
+                seen.add(name)
+                merged.append(name)
+        updated[key] = ", ".join(merged)
+    return updated
+
+
 def normalize_alibaba_settings(data: dict[str, Any] | None) -> dict[str, Any]:
     """Merge stored Alibaba Cloud settings with defaults."""
     settings = deepcopy(DEFAULT_ALIBABA_SETTINGS)
@@ -95,6 +163,7 @@ def normalize_alibaba_settings(data: dict[str, Any] | None) -> dict[str, Any]:
 
     mode = str(data.get("model_mode") or settings["model_mode"]).strip().lower()
     settings["model_mode"] = mode if mode in ALIBABA_MODEL_MODES else "fixed"
+    settings["model_state"] = normalize_alibaba_model_state(data.get("model_state"))
 
     return settings
 
@@ -162,14 +231,16 @@ def alibaba_settings_from_form(
         api_key = existing_api_key
 
     return normalize_alibaba_settings(
-        {
-            "api_key": api_key,
-            "base_url": scalar_data.get("alibaba_base_url", ""),
-            "fast_model": scalar_data.get("alibaba_fast_model", ""),
-            "main_model": scalar_data.get("alibaba_main_model", ""),
-            "num_predict": scalar_data.get("alibaba_num_predict", ""),
-            "model_mode": scalar_data.get("alibaba_model_mode", ""),
-        }
+        ensure_alibaba_rotation_pools(
+            {
+                "api_key": api_key,
+                "base_url": scalar_data.get("alibaba_base_url", ""),
+                "fast_model": scalar_data.get("alibaba_fast_model", ""),
+                "main_model": scalar_data.get("alibaba_main_model", ""),
+                "num_predict": scalar_data.get("alibaba_num_predict", ""),
+                "model_mode": scalar_data.get("alibaba_model_mode", ""),
+            }
+        )
     )
 
 
@@ -274,6 +345,14 @@ class AppSettingsRepository:
         current["alibaba"] = normalize_alibaba_settings(alibaba_settings)
         return self._persist(current)
 
+    def save_alibaba_model_state(self, model_state: dict[str, Any]) -> dict[str, Any]:
+        """Persist round robin / auto rotation state without touching other settings."""
+        current = self.get_settings()
+        alibaba = normalize_alibaba_settings(current["alibaba"])
+        alibaba["model_state"] = normalize_alibaba_model_state(model_state)
+        current["alibaba"] = alibaba
+        return self._persist(current)
+
     def save_llm_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         current = self.get_settings()
         if "llm_provider" in data:
@@ -293,6 +372,12 @@ class AppSettingsRepository:
             incoming = normalize_alibaba_settings(data["alibaba"])
             if not incoming.get("api_key") and current["alibaba"].get("api_key"):
                 incoming["api_key"] = current["alibaba"]["api_key"]
+            if data["alibaba"].get("model_state"):
+                incoming["model_state"] = normalize_alibaba_model_state(data["alibaba"]["model_state"])
+            else:
+                incoming["model_state"] = normalize_alibaba_model_state(
+                    current["alibaba"].get("model_state")
+                )
             current["alibaba"] = incoming
         if "dev_mode" in data:
             current["dev_mode"] = normalize_dev_mode(data["dev_mode"])

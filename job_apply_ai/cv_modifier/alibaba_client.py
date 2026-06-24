@@ -19,6 +19,13 @@ DEFAULT_MAIN_MODEL = os.environ.get("ALIBABA_CV_MODEL", "qwen-plus")
 DEFAULT_MAX_TOKENS = int(os.environ.get("ALIBABA_MAX_TOKENS", "8192"))
 DEFAULT_MODEL_MODE = os.environ.get("ALIBABA_MODEL_MODE", "fixed")
 
+DEFAULT_MODEL_STATE = {
+    "round_robin_index": {"fast": 0, "main": 0},
+    "auto_index": {"fast": 0, "main": 0},
+    "active_fast_model": "",
+    "active_main_model": "",
+}
+
 MODEL_MODES = ("fixed", "round_robin", "auto")
 
 KNOWN_MODELS = (
@@ -67,6 +74,7 @@ def get_alibaba_client() -> AlibabaClient:
             main_model=settings["main_model"],
             num_predict=settings["num_predict"],
             model_mode=settings["model_mode"],
+            model_state=settings.get("model_state"),
         )
     except Exception as exc:
         logger.warning("Could not load Alibaba settings from storage: %s", exc)
@@ -86,6 +94,7 @@ class AlibabaClient:
         main_model: str | None = None,
         num_predict: int | None = None,
         model_mode: str | None = None,
+        model_state: dict[str, Any] | None = None,
         timeout: int = 300,
     ):
         self.api_key = (api_key or os.environ.get("DASHSCOPE_API_KEY", "")).strip()
@@ -97,15 +106,70 @@ class AlibabaClient:
         self.model_mode = mode if mode in MODEL_MODES else "fixed"
         self.timeout = timeout
         self._available_models: list[str] | None = None
-        self._round_robin_index = {"fast": 0, "main": 0}
-        self._auto_index = {"fast": 0, "main": 0}
+        self._apply_model_state(model_state or DEFAULT_MODEL_STATE)
+
+    def _apply_model_state(self, model_state: dict[str, Any]) -> None:
+        round_robin = model_state.get("round_robin_index") or {}
+        auto = model_state.get("auto_index") or {}
+        self._round_robin_index = {
+            "fast": max(0, int(round_robin.get("fast", 0) or 0)),
+            "main": max(0, int(round_robin.get("main", 0) or 0)),
+        }
+        self._auto_index = {
+            "fast": max(0, int(auto.get("fast", 0) or 0)),
+            "main": max(0, int(auto.get("main", 0) or 0)),
+        }
+        self._active_model = {
+            "fast": str(model_state.get("active_fast_model") or "").strip(),
+            "main": str(model_state.get("active_main_model") or "").strip(),
+        }
+
+    def get_model_state(self) -> dict[str, Any]:
+        return {
+            "round_robin_index": dict(self._round_robin_index),
+            "auto_index": dict(self._auto_index),
+            "active_fast_model": self._active_model.get("fast", ""),
+            "active_main_model": self._active_model.get("main", ""),
+        }
+
+    def _current_model_name(self, role: str) -> str:
+        pool = self.rotation_pool(role) if self.model_mode != "fixed" else self._model_pool(role)
+        if self.model_mode == "fixed":
+            return pool[0]
+
+        active = self._active_model.get(role, "").strip()
+        if active:
+            for candidate in pool:
+                if candidate == active:
+                    return candidate
+                available = self.list_models()
+                if self._canonical_model_id(candidate, available, role=role) == self._canonical_model_id(
+                    active, available, role=role
+                ):
+                    return candidate
+
+        if self.model_mode == "auto":
+            return pool[self._auto_index[role] % len(pool)]
+
+        return pool[0]
+
+    def _record_active_model(self, role: str, pool_candidate: str) -> None:
+        if self.model_mode == "fixed":
+            return
+        self._active_model[role] = pool_candidate
+        self._persist_model_state()
+
+    def _persist_model_state(self) -> None:
+        try:
+            from job_apply_ai.storage.app_settings import AppSettingsRepository
+
+            AppSettingsRepository().save_alibaba_model_state(self.get_model_state())
+        except Exception as exc:
+            logger.debug("Could not persist Alibaba model state: %s", exc)
 
     @property
     def fast_model(self) -> str:
-        pool = self._model_pool("fast")
-        if self.model_mode == "auto":
-            return pool[self._auto_index["fast"] % len(pool)]
-        return pool[0]
+        return self._current_model_name("fast")
 
     @fast_model.setter
     def fast_model(self, value: str) -> None:
@@ -113,10 +177,7 @@ class AlibabaClient:
 
     @property
     def main_model(self) -> str:
-        pool = self._model_pool("main")
-        if self.model_mode == "auto":
-            return pool[self._auto_index["main"] % len(pool)]
-        return pool[0]
+        return self._current_model_name("main")
 
     @main_model.setter
     def main_model(self, value: str) -> None:
@@ -126,6 +187,65 @@ class AlibabaClient:
         raw = self._fast_model_config if role == "fast" else self._main_model_config
         pool = parse_model_pool(raw)
         return pool or [raw.strip() or (DEFAULT_FAST_MODEL if role == "fast" else DEFAULT_MAIN_MODEL)]
+
+    def _canonical_model_id(
+        self,
+        model: str,
+        available: list[str],
+        role: str,
+    ) -> str:
+        """Map configured model names to a stable id for rotation deduplication."""
+        resolved = self._resolve_model(model, available, role=role, allow_unlisted=True)
+        if resolved in available:
+            return resolved
+
+        model_base = model.split(":", 1)[0]
+        for name in available:
+            base = name.split(":", 1)[0]
+            if base == model_base:
+                return name
+            if model_base.startswith(base + "-") or base.startswith(model_base + "-"):
+                return name
+        return resolved
+
+    def _rotation_family(self, model: str) -> str:
+        base = model.split(":", 1)[0]
+        for suffix in ("-latest",):
+            if base.endswith(suffix):
+                return base[: -len(suffix)]
+        return base
+
+    def _rotation_key(self, model: str, available: list[str], role: str) -> str:
+        canonical = self._canonical_model_id(model, available, role=role)
+        family = self._rotation_family(canonical)
+        for name in available:
+            if self._rotation_family(name) == family:
+                return name
+        return family
+
+    def rotation_pool(self, role: str) -> list[str]:
+        """Configured pool deduplicated by resolved API model id."""
+        available = self.list_models()
+        unique: list[str] = []
+        seen_resolved: set[str] = set()
+        for candidate in self._model_pool(role):
+            key = self._rotation_key(candidate, available, role=role)
+            if key in seen_resolved:
+                continue
+            seen_resolved.add(key)
+            unique.append(candidate)
+        return unique or self._model_pool(role)
+
+    def pool_diagnostics(self, role: str) -> dict[str, Any]:
+        configured = self._model_pool(role)
+        rotating = self.rotation_pool(role)
+        return {
+            "configured": configured,
+            "configured_count": len(configured),
+            "rotating": rotating,
+            "rotating_count": len(rotating),
+            "current": self._current_model_name(role),
+        }
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -185,16 +305,24 @@ class AlibabaClient:
             )
 
         available = self.list_models(refresh=True)
-        fast_pool = [
-            self._resolve_model(model, available, role="fast")
-            for model in self._model_pool("fast")
-        ]
-        main_pool = [
-            self._resolve_model(model, available, role="main")
-            for model in self._model_pool("main")
-        ]
-        self._fast_model_config = ", ".join(fast_pool)
-        self._main_model_config = ", ".join(main_pool)
+        for role in ("fast", "main"):
+            configured = self._model_pool(role)
+            rotating = self.rotation_pool(role)
+            if self.model_mode in ("round_robin", "auto") and len(rotating) < 2:
+                logger.warning(
+                    "Alibaba %s model pool has only one rotatable model (%s). "
+                    "Add comma-separated models in Settings for %s rotation.",
+                    role,
+                    ", ".join(rotating) or ", ".join(configured) or "(empty)",
+                    self.model_mode,
+                )
+            for candidate in configured:
+                self._resolve_model(
+                    candidate,
+                    available,
+                    role=role,
+                    allow_unlisted=candidate in configured,
+                )
         return {"fast": self.fast_model, "main": self.main_model}
 
     def generate(
@@ -217,7 +345,7 @@ class AlibabaClient:
                 role=role,
                 allow_unlisted=configured in self._model_pool(role),
             )
-            return self._generate_once(
+            content = self._generate_once(
                 resolved_model,
                 prompt,
                 system=system,
@@ -226,8 +354,16 @@ class AlibabaClient:
                 json_schema=json_schema,
                 num_predict=num_predict,
             )
+            self._record_active_model(role, configured)
+            return content
 
-        pool = self._model_pool(role)
+        pool = self.rotation_pool(role)
+        if len(pool) < 2:
+            logger.warning(
+                "Alibaba %s rotation pool has one model (%s); current model will not change.",
+                role,
+                pool[0] if pool else "(empty)",
+            )
         if model and model not in pool:
             pool = [model, *[name for name in pool if name != model]]
 
@@ -264,6 +400,7 @@ class AlibabaClient:
                         role,
                         resolved_model,
                     )
+                self._record_active_model(role, candidate)
                 return content
             except Exception as exc:
                 if not self._should_failover(exc, len(pool), offset):
