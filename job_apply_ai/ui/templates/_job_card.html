@@ -52,12 +52,7 @@
                     </button>
                 {% endif %}
             {% endif %}
-            {% if ats_analysis %}
-                <span class="badge {% if ats_analysis.ats_score >= 70 %}bg-success{% elif ats_analysis.ats_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}"
-                      title="{{ ats_analysis.score_summary }}">
-                    <i class="fas fa-file-circle-check me-1"></i>{{ ats_analysis.ats_score }}/100 ATS
-                </span>
-            {% endif %}
+            {% include '_job_ats_score_badge.html' %}
             {% if job.posted_days_ago is not none %}
                 <span class="badge bg-light text-dark">{{ job.posted_days_ago }} days ago</span>
             {% endif %}

@@ -1,6 +1,10 @@
 {# Compact job context panel for CV preview / editor pages. #}
 {% set match_analysis = job|profile_match_analysis %}
 {% set match_score = job|profile_match_score %}
+{% set ats_analysis = job|job_ats_analysis %}
+{% set nav_folder = return_folder|default('all') %}
+{% set nav_search = return_search|default('') %}
+{% set nav_sort = return_sort|default('') %}
 
 <div class="job-preview-panel">
     <div class="job-preview-head">
@@ -11,6 +15,11 @@
                       title="{{ match_analysis.reason if match_analysis else 'Profile match' }}">
                     {{ match_score|round(0)|int }}% fit
                 </span>
+            {% endif %}
+            {% if ats_analysis and job.cv_filename %}
+                {% with compact=true, link_url=url_for('ats_friendly_progress', job_id=job.id, folder=nav_folder if nav_folder != 'all' else none, q=nav_search or none, sort=nav_sort or none) %}
+                    {% include '_job_ats_score_badge.html' %}
+                {% endwith %}
             {% endif %}
             {% if job.source %}
                 <span class="badge bg-secondary">{{ job.source }}</span>
@@ -114,6 +123,11 @@
             <div class="job-preview-status">
                 {% if job.cv_filename or cv_filename|default('') %}
                     <span class="job-doc-status"><i class="fas fa-file-lines me-1"></i>CV ready</span>
+                {% endif %}
+                {% if ats_analysis %}
+                    <span class="job-doc-status {% if ats_analysis.ats_score >= 70 %}text-success{% elif ats_analysis.ats_score >= 50 %}text-warning{% else %}text-danger{% endif %}">
+                        <i class="fas fa-file-circle-check me-1"></i>ATS {{ ats_analysis.ats_score }}/100
+                    </span>
                 {% endif %}
                 {% if has_cover_letter|default(false) %}
                     <span class="job-doc-status"><i class="fas fa-envelope me-1"></i>Cover letter</span>

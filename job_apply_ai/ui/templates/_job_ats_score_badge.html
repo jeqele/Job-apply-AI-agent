@@ -1,0 +1,15 @@
+{# ATS score badge. Requires ats_analysis. Optional: compact=true, link_url #}
+{% if ats_analysis %}
+    {% set score = ats_analysis.ats_score %}
+    {% set tone = 'bg-success' if score >= 70 else ('bg-warning text-dark' if score >= 50 else 'bg-danger') %}
+    {% set badge_classes = ('job-match-badge ' ~ tone) if compact|default(false) else tone %}
+    {% if link_url %}
+        <a href="{{ link_url }}" class="badge {{ badge_classes }} text-decoration-none" title="{{ ats_analysis.score_summary }}">
+            <i class="fas fa-file-circle-check me-1"></i>{{ score }}/100 ATS
+        </a>
+    {% else %}
+        <span class="badge {{ badge_classes }}" title="{{ ats_analysis.score_summary }}">
+            <i class="fas fa-file-circle-check me-1"></i>{{ score }}/100 ATS
+        </span>
+    {% endif %}
+{% endif %}

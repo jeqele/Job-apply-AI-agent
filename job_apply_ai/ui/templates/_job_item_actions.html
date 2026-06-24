@@ -8,6 +8,7 @@
 {% set btn_size = 'btn-sm w-100' if panel_mode else ('btn-sm' if manage_mode else '') %}
 {% set workflow_status = job.workflow_status or 'new' %}
 {% set show_manage_move = manage_mode or (panel_mode and return_from_manage|default(false)) %}
+{% set ats_analysis = ats_analysis|default(job|job_ats_analysis) %}
 
 <div class="job-item-actions{% if panel_mode %} job-item-actions-panel{% endif %}">
     <div class="{{ 'd-grid gap-2' if panel_mode else 'd-flex gap-2 flex-wrap align-items-center' }}">
@@ -122,8 +123,8 @@
             {% else %}
             <a href="{{ url_for('ats_friendly_progress', job_id=job.id, folder=nav_folder if nav_folder != 'all' else none, q=nav_search or none, sort=nav_sort or none) }}"
                class="btn btn-outline-success {{ btn_size }}"
-               title="Score your CV for ATS compatibility and apply improvements">
-                <i class="fas fa-file-circle-check {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>ATS Friendly
+               title="{% if ats_analysis %}ATS score {{ ats_analysis.ats_score }}/100 — {{ ats_analysis.score_summary }}{% else %}Score your CV for ATS compatibility and apply improvements{% endif %}">
+                <i class="fas fa-file-circle-check {% if manage_mode or panel_mode %}me-1{% else %}me-2{% endif %}"></i>ATS Friendly{% if ats_analysis %} · {{ ats_analysis.ats_score }}/100{% endif %}
             </a>
             {% endif %}
             <form method="post"

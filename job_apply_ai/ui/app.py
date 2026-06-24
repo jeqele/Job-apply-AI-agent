@@ -878,6 +878,7 @@ def _ats_friendly_results_context(
             folder=return_folder,
             q=return_search or None,
             sort=return_sort or None,
+            force='1',
         ) if job_id else None,
         'preview_cv_url': url_for(
             'preview_job_cv',
