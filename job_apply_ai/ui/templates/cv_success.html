@@ -102,6 +102,11 @@
         .typing-indicator { color: #6c757d; font-size: 0.9rem; padding: 0.5rem 1rem; }
         .doc-tabs .nav-link { border-radius: 0.75rem 0.75rem 0 0; font-weight: 600; }
         .empty-cover-letter { text-align: center; padding: 4rem 2rem; color: #6c757d; }
+        .section-profile-picker .dropdown-toggle { font-size: 0.72rem; font-weight: 600; text-decoration: none; vertical-align: baseline; }
+        .section-profile-picker .dropdown-menu { font-size: 0.8rem; max-height: 220px; overflow-y: auto; }
+        .preview-line.kind-section-row { cursor: default; }
+        .preview-line.kind-section-row .line-drag-handle { visibility: hidden; }
+        .preview-line.kind-section-row .line-body { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem; }
     </style>
 </head>
 <body>
@@ -244,6 +249,8 @@
 
     <script id="cvPreviewLinesData" type="application/json">{{ cv_preview_lines | tojson }}</script>
     <script id="profileNameData" type="application/json">{{ profile_name | tojson }}</script>
+    <script id="profileWorkExperienceData" type="application/json">{{ profile_work_experience | tojson }}</script>
+    <script id="profilePersonalProjectsData" type="application/json">{{ profile_personal_projects | tojson }}</script>
     <script id="cvContentData" type="application/json">{{ tailored_content | tojson }}</script>
     <script id="coverLetterData" type="application/json">{{ cover_letter | tojson }}</script>
     <script id="chatHistoryData" type="application/json">{{ chat_history | tojson }}</script>
@@ -260,6 +267,8 @@
         const sendApplicationUrl = {{ send_application_url | tojson }};
         let cvPreviewLines = JSON.parse(document.getElementById('cvPreviewLinesData').textContent || '[]');
         const profileName = JSON.parse(document.getElementById('profileNameData').textContent || '""');
+        const profileWorkExperience = JSON.parse(document.getElementById('profileWorkExperienceData').textContent || '[]');
+        const profilePersonalProjects = JSON.parse(document.getElementById('profilePersonalProjectsData').textContent || '[]');
         let cvContent = JSON.parse(document.getElementById('cvContentData').textContent || '{}');
         let coverLetter = JSON.parse(document.getElementById('coverLetterData').textContent || '{}');
         let activeDocument = 'cv';
@@ -375,7 +384,183 @@
                 const cssClass = line.variant ? ` ${line.variant}` : '';
                 return `<span class="line-content kind-skills">${renderSkillPills(items, cssClass.trim())}</span>`;
             }
-            return `<span class="line-content kind-${escapeHtml(kind)}">${escapeHtml(text)}</span>`;
+            const sectionPicker = kind === 'section' ? renderSectionProfilePicker(text) : '';
+            return `<span class="line-content kind-${escapeHtml(kind)}">${escapeHtml(text)}</span>${sectionPicker}`;
+        }
+
+        function normalizeProfileEntryKey(...parts) {
+            return parts.map(part => String(part || '').trim().toLowerCase()).filter(Boolean).join('|');
+        }
+
+        function findSectionRange(sectionLabel) {
+            const target = String(sectionLabel || '').trim().toLowerCase();
+            let start = -1;
+            let end = cvPreviewLines.length;
+            for (let i = 0; i < cvPreviewLines.length; i += 1) {
+                const line = cvPreviewLines[i];
+                if (line.kind !== 'section') continue;
+                const text = String(line.text || '').trim().toLowerCase();
+                if (text === target) {
+                    start = i;
+                } else if (start >= 0) {
+                    end = i;
+                    break;
+                }
+            }
+            return { start, end };
+        }
+
+        function findSectionInsertIndex(sectionLabel) {
+            const { start, end } = findSectionRange(sectionLabel);
+            if (start < 0) return cvPreviewLines.length;
+            return end;
+        }
+
+        function collectExperienceKeys() {
+            const keys = new Set();
+            const { start, end } = findSectionRange('Experience Highlights');
+            if (start < 0) return keys;
+            let currentRole = '';
+            for (let i = start + 1; i < end; i += 1) {
+                const line = cvPreviewLines[i];
+                if (line.kind === 'role') {
+                    currentRole = String(line.text || '').trim();
+                } else if (line.kind === 'meta' && currentRole) {
+                    const company = String(line.text || '').split('·')[0].trim();
+                    keys.add(normalizeProfileEntryKey(currentRole, company));
+                    currentRole = '';
+                }
+            }
+            return keys;
+        }
+
+        function collectProjectKeys() {
+            const keys = new Set();
+            const { start, end } = findSectionRange('Personal Projects');
+            if (start < 0) return keys;
+            for (let i = start + 1; i < end; i += 1) {
+                const line = cvPreviewLines[i];
+                if (line.kind === 'role') {
+                    keys.add(normalizeProfileEntryKey(line.text));
+                }
+            }
+            return keys;
+        }
+
+        function getAvailableProfileExperience() {
+            const used = collectExperienceKeys();
+            return profileWorkExperience
+                .map((entry, index) => ({ entry, index }))
+                .filter(({ entry }) => {
+                    const role = String(entry.role || '').trim();
+                    if (!role) return false;
+                    return !used.has(normalizeProfileEntryKey(role, entry.company));
+                });
+        }
+
+        function getAvailableProfileProjects() {
+            const used = collectProjectKeys();
+            return profilePersonalProjects
+                .map((entry, index) => ({ entry, index }))
+                .filter(({ entry }) => {
+                    const name = String(entry.name || '').trim();
+                    if (!name) return false;
+                    return !used.has(normalizeProfileEntryKey(name));
+                });
+        }
+
+        function profileExperienceToLines(entry) {
+            const lines = [];
+            const role = String(entry.role || '').trim();
+            const company = String(entry.company || '').trim();
+            const period = String(entry.period || '').trim();
+            if (role) lines.push({ text: role, kind: 'role' });
+            const metaParts = [company, period].filter(Boolean);
+            if (metaParts.length) lines.push({ text: metaParts.join(' · '), kind: 'meta' });
+            const bullets = Array.isArray(entry.bullets) ? entry.bullets : [];
+            if (!bullets.length) {
+                lines.push({ text: 'No bullets listed.', kind: 'muted' });
+            } else {
+                bullets.forEach((bullet) => {
+                    const text = String(bullet).trim().replace(/^•\s*/, '');
+                    if (text) lines.push({ text: `• ${text}`, kind: 'bullet' });
+                });
+            }
+            return lines;
+        }
+
+        function profileProjectToLines(entry) {
+            const lines = [];
+            const name = String(entry.name || '').trim();
+            const description = String(entry.description || '').trim();
+            if (name) lines.push({ text: name, kind: 'role' });
+            if (description) lines.push({ text: description, kind: 'meta' });
+            const bullets = Array.isArray(entry.bullets) ? entry.bullets : [];
+            bullets.forEach((bullet) => {
+                const text = String(bullet).trim().replace(/^•\s*/, '');
+                if (text) lines.push({ text: `• ${text}`, kind: 'bullet' });
+            });
+            return lines;
+        }
+
+        function removeSectionPlaceholder(sectionLabel) {
+            const { start, end } = findSectionRange(sectionLabel);
+            if (start < 0) return;
+            for (let i = end - 1; i > start; i -= 1) {
+                const line = cvPreviewLines[i];
+                if (line.kind === 'muted') {
+                    cvPreviewLines.splice(i, 1);
+                }
+            }
+        }
+
+        function addProfileExperience(index) {
+            const entry = profileWorkExperience[index];
+            if (!entry) return;
+            removeSectionPlaceholder('Experience Highlights');
+            const insertAt = findSectionInsertIndex('Experience Highlights');
+            cvPreviewLines.splice(insertAt, 0, ...profileExperienceToLines(entry));
+        }
+
+        function addProfileProject(index) {
+            const entry = profilePersonalProjects[index];
+            if (!entry) return;
+            removeSectionPlaceholder('Personal Projects');
+            const insertAt = findSectionInsertIndex('Personal Projects');
+            cvPreviewLines.splice(insertAt, 0, ...profileProjectToLines(entry));
+        }
+
+        function renderProfilePicker(type, entries) {
+            const title = type === 'experience'
+                ? 'Add work experience from your profile'
+                : 'Add personal project from your profile';
+            const items = entries.map(({ entry, index }) => {
+                const label = type === 'experience'
+                    ? [entry.role, entry.company].filter(Boolean).join(' @ ') || 'Untitled role'
+                    : entry.name || 'Untitled project';
+                return `<li><button type="button" class="dropdown-item profile-add-item" data-profile-type="${type}" data-profile-index="${index}">${escapeHtml(label)}</button></li>`;
+            }).join('');
+            return `
+                <div class="dropdown section-profile-picker d-inline-block">
+                    <button type="button" class="btn btn-link btn-sm py-0 dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="${escapeHtml(title)}">
+                        <i class="fas fa-user-plus me-1"></i>From profile
+                    </button>
+                    <ul class="dropdown-menu">${items}</ul>
+                </div>
+            `;
+        }
+
+        function renderSectionProfilePicker(sectionText) {
+            const normalized = String(sectionText || '').trim().toLowerCase();
+            if (normalized === 'experience highlights') {
+                const available = getAvailableProfileExperience();
+                return available.length ? renderProfilePicker('experience', available) : '';
+            }
+            if (normalized === 'personal projects') {
+                const available = getAvailableProfileProjects();
+                return available.length ? renderProfilePicker('projects', available) : '';
+            }
+            return '';
         }
 
         let editingLineIndex = null;
@@ -527,8 +712,9 @@
 
         function renderPreviewLineRow(line, index) {
             const isEditing = editingLineIndex === index;
+            const isSection = line.kind === 'section';
             return `
-                <div class="preview-line${isEditing ? ' editing' : ''}" draggable="${isEditing ? 'false' : 'true'}" data-index="${index}">
+                <div class="preview-line${isEditing ? ' editing' : ''}${isSection ? ' kind-section-row' : ''}" draggable="${isEditing || isSection ? 'false' : 'true'}" data-index="${index}">
                     <span class="line-drag-handle" aria-hidden="true" title="Drag to reorder">
                         <i class="fas fa-grip-vertical"></i>
                     </span>
@@ -537,6 +723,7 @@
                         ${isEditing ? renderLineEditor(line, index) : renderLineContent(line)}
                     </div>
                     <div class="line-actions">
+                        ${isSection ? '' : `
                         <button type="button" class="btn btn-link btn-sm line-action-edit" data-action="edit" data-index="${index}" title="Edit line">
                             <i class="fas fa-pencil"></i>
                         </button>
@@ -546,6 +733,7 @@
                         <button type="button" class="btn btn-link btn-sm btn-delete line-action-delete" data-action="delete" data-index="${index}" title="Delete line">
                             <i class="fas fa-trash"></i>
                         </button>
+                        `}
                     </div>
                 </div>
             `;
@@ -556,7 +744,7 @@
             preview.innerHTML = `
                 <div class="preview-toolbar">
                     <div class="d-flex align-items-center gap-2 flex-wrap">
-                        <span>Drag to reorder · edit, duplicate, or delete lines</span>
+                        <span>Drag to reorder · edit, duplicate, or delete lines · add experience/projects from profile</span>
                         <div class="preview-history-actions btn-group btn-group-sm" role="group" aria-label="Preview history">
                             <button type="button" class="btn btn-outline-secondary" id="previewUndoBtn" title="Undo (Ctrl+Z)" disabled>
                                 <i class="fas fa-rotate-left me-1"></i>Undo
@@ -640,6 +828,21 @@
                             input.focus();
                             input.select();
                         }
+                        persistPreviewLines();
+                        return;
+                    }
+
+                    const profileAddBtn = event.target.closest('.profile-add-item');
+                    if (profileAddBtn) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        flushActiveLineEdit();
+                        recordPreviewHistoryBeforeChange();
+                        const profileType = profileAddBtn.dataset.profileType;
+                        const profileIndex = Number(profileAddBtn.dataset.profileIndex);
+                        if (profileType === 'experience') addProfileExperience(profileIndex);
+                        else if (profileType === 'projects') addProfileProject(profileIndex);
+                        renderCvPreview();
                         persistPreviewLines();
                         return;
                     }

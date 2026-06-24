@@ -625,6 +625,8 @@ def _cv_preview_context(
         'job': job,
         'job_id': job_id,
         'profile_name': profile_name,
+        'profile_work_experience': profile.get('work_experience', []),
+        'profile_personal_projects': profile.get('personal_projects', []),
         'cv_preview_lines': cv_preview_lines,
         'cv_filename': cv_filename,
         'cover_letter_filename': cover_letter_filename,
