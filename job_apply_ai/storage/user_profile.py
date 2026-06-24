@@ -7,6 +7,7 @@ import os
 import re
 import uuid
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from job_apply_ai.storage.database import get_connection
@@ -42,6 +43,9 @@ DEFAULT_PROFILE: dict[str, Any] = {
 }
 
 DEFAULT_FAMILIARITY = 70
+
+PROFILE_EXPORT_FORMAT = "job_apply_ai_profile"
+PROFILE_EXPORT_VERSION = 1
 
 SKILL_LIST_FIELDS = (
     "technical_skills",
@@ -1127,6 +1131,31 @@ def summarize_import_changes(changes: dict[str, Any]) -> list[str]:
 
 def import_has_changes(changes: dict[str, Any]) -> bool:
     return bool(summarize_import_changes(changes))
+
+
+def profile_to_export_dict(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Build a versioned JSON export payload from a stored profile."""
+    normalized = normalize_profile(profile)
+    return {
+        "format": PROFILE_EXPORT_FORMAT,
+        "version": PROFILE_EXPORT_VERSION,
+        "exported_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "profile": normalized,
+    }
+
+
+def profile_from_export_dict(data: Any) -> dict[str, Any]:
+    """Parse a profile from an exported JSON file or a raw profile object."""
+    if not isinstance(data, dict):
+        raise ValueError("Profile file must contain a JSON object.")
+
+    if data.get("format") == PROFILE_EXPORT_FORMAT and isinstance(data.get("profile"), dict):
+        return normalize_profile(data["profile"])
+
+    if any(key in data for key in DEFAULT_PROFILE):
+        return normalize_profile(data)
+
+    raise ValueError("Unrecognized profile file format.")
 
 
 def get_default_cv_template_path() -> str:

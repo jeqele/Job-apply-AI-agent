@@ -1,10 +1,18 @@
 """Tests for profile merge and CV import helpers."""
 
+import json
 import os
 import unittest
 
 from job_apply_ai.cv_modifier.profile_importer import ProfileImporter
-from job_apply_ai.storage.user_profile import merge_profiles, skill_names, summarize_import_changes
+from job_apply_ai.storage.user_profile import (
+    PROFILE_EXPORT_FORMAT,
+    merge_profiles,
+    profile_from_export_dict,
+    profile_to_export_dict,
+    skill_names,
+    summarize_import_changes,
+)
 
 
 class ProfileMergeTests(unittest.TestCase):
@@ -74,6 +82,46 @@ class ProfileMergeTests(unittest.TestCase):
         )
         self.assertTrue(any("Filled Email" in line for line in lines))
         self.assertTrue(any("Docker" in line for line in lines))
+
+
+class ProfileJsonExportTests(unittest.TestCase):
+    def test_profile_export_round_trip(self):
+        profile = {
+            "full_name": "Jane Doe",
+            "email": "jane@example.com",
+            "technical_skills": [{"name": "Python", "familiarity": 90}],
+            "work_experience": [
+                {
+                    "role": "Developer",
+                    "company": "Acme",
+                    "period": "2020-2022",
+                    "bullets": ["Built APIs"],
+                }
+            ],
+        }
+        exported = profile_to_export_dict(profile)
+        self.assertEqual(exported["format"], PROFILE_EXPORT_FORMAT)
+        self.assertEqual(exported["profile"]["full_name"], "Jane Doe")
+        self.assertEqual(skill_names(exported["profile"]["technical_skills"]), ["Python"])
+
+        restored = profile_from_export_dict(exported)
+        self.assertEqual(restored["full_name"], "Jane Doe")
+        self.assertEqual(restored["work_experience"][0]["company"], "Acme")
+
+    def test_profile_from_raw_dict(self):
+        raw = {"full_name": "Alex", "technical_skills": ["Go"]}
+        profile = profile_from_export_dict(raw)
+        self.assertEqual(profile["full_name"], "Alex")
+        self.assertEqual(skill_names(profile["technical_skills"]), ["Go"])
+
+    def test_profile_from_invalid_json_object(self):
+        with self.assertRaises(ValueError):
+            profile_from_export_dict(["not", "a", "profile"])
+
+    def test_export_json_is_serializable(self):
+        exported = profile_to_export_dict({"full_name": "Jane"})
+        payload = json.dumps(exported)
+        self.assertIn("job_apply_ai_profile", payload)
 
 
 class ProfileImporterTests(unittest.TestCase):

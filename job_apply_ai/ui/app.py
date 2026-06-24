@@ -104,8 +104,10 @@ from job_apply_ai.storage.user_profile import (
     get_default_cv_template_path,
     import_has_changes,
     merge_profiles,
+    profile_from_export_dict,
     profile_from_form,
     profile_is_ready,
+    profile_to_export_dict,
     profile_to_form_fields,
     remove_smtp_account,
     set_default_smtp_account,
@@ -2082,6 +2084,71 @@ def oauth_set_default_account(account_id):
     profile = set_default_smtp_account(profile_repo.get_profile(), account_id)
     profile_repo.save_profile(profile)
     flash('Default sending account updated.', 'success')
+    return redirect(url_for('user_profile'))
+
+
+@app.route('/profile/export')
+def export_profile():
+    """Download the stored profile as a JSON file."""
+    profile = profile_repo.get_profile()
+    payload = profile_to_export_dict(profile)
+    name_part = sanitize_filename(profile.get('full_name') or 'profile')
+    filename = f"{name_part}_profile.json"
+    buffer = io.BytesIO(json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'))
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype='application/json',
+    )
+
+
+@app.route('/profile/import/json', methods=['POST'])
+def import_profile_json():
+    """Import profile data from a JSON file for review before saving."""
+    if 'profile_file' not in request.files:
+        flash('No file selected', 'error')
+        return redirect(url_for('user_profile'))
+
+    file = request.files['profile_file']
+    if not file.filename:
+        flash('No file selected', 'error')
+        return redirect(url_for('user_profile'))
+    if not file.filename.lower().endswith('.json'):
+        flash('Please upload a .json profile file', 'error')
+        return redirect(url_for('user_profile'))
+
+    try:
+        raw = json.loads(file.read().decode('utf-8'))
+        imported = profile_from_export_dict(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        flash(f'Invalid profile JSON file: {exc}', 'error')
+        return redirect(url_for('user_profile'))
+    except ValueError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('user_profile'))
+
+    replace = request.form.get('replace') == '1'
+    current = profile_repo.get_profile()
+
+    if replace:
+        merged = imported
+        summary_lines = ['Replaced profile with imported data']
+        has_changes = True
+    else:
+        merged, changes = merge_profiles(current, imported)
+        summary_lines = summarize_import_changes(changes)
+        has_changes = import_has_changes(changes)
+
+    session['profile_draft'] = profile_to_form_fields(merged)
+    session['profile_import_summary'] = summary_lines
+
+    if has_changes:
+        flash('Profile imported. Review the updates and click Save Profile to apply them.', 'success')
+    else:
+        flash('Profile imported, but no new details were found beyond your current profile.', 'info')
+
     return redirect(url_for('user_profile'))
 
 

@@ -205,17 +205,38 @@
 
         <div class="card import-card mb-4">
             <div class="card-body">
-                <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
-                    <div>
+                <div class="row g-4">
+                    <div class="col-lg-6">
                         <h5 class="mb-2"><i class="fas fa-file-import section-icon"></i>Import from CV</h5>
-                        <p class="mb-0 hint">Upload an existing CV (.docx). New details will be merged into your profile for review before saving. Example: export your current CV from Word or Google Docs as <em>.docx</em>.</p>
+                        <p class="hint mb-3">Upload an existing CV (.docx). New details will be merged into your profile for review before saving. Example: export your current CV from Word or Google Docs as <em>.docx</em>.</p>
+                        <form method="POST" action="{{ url_for('start_profile_import') }}" enctype="multipart/form-data" class="d-flex flex-column flex-sm-row gap-2 align-items-stretch">
+                            <input type="file" class="form-control" name="cv_file" accept=".docx" required>
+                            <button type="submit" class="btn btn-outline-primary">
+                                <i class="fas fa-upload me-2"></i>Import CV
+                            </button>
+                        </form>
                     </div>
-                    <form method="POST" action="{{ url_for('start_profile_import') }}" enctype="multipart/form-data" class="d-flex flex-column flex-sm-row gap-2 align-items-stretch">
-                        <input type="file" class="form-control" name="cv_file" accept=".docx" required>
-                        <button type="submit" class="btn btn-outline-primary">
-                            <i class="fas fa-upload me-2"></i>Import CV
-                        </button>
-                    </form>
+                    <div class="col-lg-6">
+                        <h5 class="mb-2"><i class="fas fa-file-code section-icon"></i>Import / Export JSON</h5>
+                        <p class="hint mb-3">Back up your full profile or restore it on another machine. JSON exports include skills, experience, and email account settings.</p>
+                        <div class="d-flex flex-column gap-3">
+                            <a href="{{ url_for('export_profile') }}" class="btn btn-outline-secondary align-self-start">
+                                <i class="fas fa-download me-2"></i>Export Profile
+                            </a>
+                            <form method="POST" action="{{ url_for('import_profile_json') }}" enctype="multipart/form-data" class="d-flex flex-column gap-2">
+                                <input type="file" class="form-control" name="profile_file" accept=".json,application/json" required>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="replace" value="1" id="profile_replace">
+                                    <label class="form-check-label" for="profile_replace">
+                                        Replace entire profile instead of merging
+                                    </label>
+                                </div>
+                                <button type="submit" class="btn btn-outline-primary align-self-start">
+                                    <i class="fas fa-upload me-2"></i>Import JSON
+                                </button>
+                            </form>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
