@@ -15,6 +15,8 @@ import zipfile
 import io
 
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
+from job_apply_ai.scraper.linkedin import LinkedInScraper
+from job_apply_ai.scraper.linkedin_job_url import parse_linkedin_job_url
 from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.batch_search import (
     build_search_queue,
@@ -2597,6 +2599,165 @@ def job_match_analyze_complete(task_id):
         result.get('return_folder', 'all'),
         result.get('return_search', ''),
         result.get('return_sort') or 'match_desc',
+    )
+
+
+def _build_job_from_linkedin_scrape(url: str, details: dict) -> dict:
+    """Merge scraped LinkedIn details into a job record for create/edit forms."""
+    job = {column: details.get(column, '') or '' for column in JOB_COLUMNS}
+    job['link'] = parse_linkedin_job_url(url) or url.strip()
+    job['source'] = 'LinkedIn'
+    job['fetch_method'] = 'scrape'
+    job['workflow_status'] = DEFAULT_JOB_STATUS
+    return job
+
+
+def _run_linkedin_import_task(
+    task_id: str,
+    linkedin_url: str,
+    return_folder: str,
+    return_search: str,
+) -> None:
+    try:
+        with dev_task(task_id, "linkedin_job_import"):
+            update_task(
+                task_id,
+                status='running',
+                step='opening',
+                message='Opening the LinkedIn job page…',
+                percent=15,
+            )
+            scraper = LinkedInScraper(headless=True)
+            with dev_agent("LinkedInScraper"):
+                details = scraper.fetch_job_details(linkedin_url)
+
+            update_task(
+                task_id,
+                step='building',
+                message='Building job details…',
+                percent=85,
+            )
+            job = _build_job_from_linkedin_scrape(linkedin_url, details)
+            if not job.get('title'):
+                fail_task(
+                    task_id,
+                    'Could not extract a job title from that LinkedIn page. '
+                    'The listing may require sign-in or the page layout may have changed.',
+                )
+                return
+
+            complete_task(
+                task_id,
+                {
+                    'job': job,
+                    'return_folder': return_folder,
+                    'return_search': return_search,
+                },
+                message='LinkedIn job imported successfully',
+            )
+    except Exception as exc:
+        logger.exception('LinkedIn job import failed for %s', linkedin_url)
+        fail_task(task_id, f'LinkedIn import failed: {exc}')
+
+
+@app.route('/jobs/new/linkedin', methods=['GET', 'POST'])
+def create_job_from_linkedin():
+    """Import a job by scraping a LinkedIn job share link."""
+    return_folder = (
+        request.form.get('return_folder')
+        or request.args.get('folder', 'all')
+    )
+    return_search = (
+        request.form.get('return_search')
+        or request.args.get('q', '')
+    )
+
+    if request.method == 'POST':
+        raw_url = (request.form.get('linkedin_url') or '').strip()
+        linkedin_url = parse_linkedin_job_url(raw_url)
+        if not linkedin_url:
+            flash('Please enter a valid LinkedIn job link.', 'error')
+            return render_template(
+                'job_import_linkedin.html',
+                linkedin_url=raw_url,
+                return_folder=return_folder,
+                return_search=return_search,
+            )
+
+        task_id = create_task(
+            'linkedin_job_import',
+            meta={'linkedin_url': linkedin_url},
+        )
+        start_background_task(
+            task_id,
+            lambda: _run_linkedin_import_task(
+                task_id,
+                linkedin_url,
+                return_folder,
+                return_search,
+            ),
+        )
+        return redirect(url_for('linkedin_job_import_progress', task_id=task_id))
+
+    return render_template(
+        'job_import_linkedin.html',
+        linkedin_url='',
+        return_folder=return_folder,
+        return_search=return_search,
+    )
+
+
+@app.route('/jobs/import/linkedin/<task_id>')
+def linkedin_job_import_progress(task_id):
+    """Show progress while a LinkedIn job is being scraped."""
+    task = get_task(task_id)
+    if not task:
+        flash('Import task not found', 'error')
+        return redirect(url_for('create_job_from_linkedin'))
+
+    return render_template(
+        'job_import_progress.html',
+        task_id=task_id,
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=url_for('linkedin_job_import_complete', task_id=task_id),
+        back_url=url_for('create_job_from_linkedin'),
+    )
+
+
+@app.route('/jobs/import/linkedin/complete/<task_id>')
+def linkedin_job_import_complete(task_id):
+    """Save the scraped job and open it for review."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('LinkedIn import result not found', 'error')
+        return redirect(url_for('create_job_from_linkedin'))
+
+    result = task['result']
+    job = result.get('job', {})
+    if not job.get('title'):
+        flash(
+            'Imported job is missing a title. The listing may require sign-in — try again or add manually.',
+            'error',
+        )
+        return redirect(url_for('create_job_from_linkedin'))
+
+    try:
+        job_id = job_repo.create_job(job)
+    except ValueError as exc:
+        flash(f'Could not save imported job: {exc}', 'error')
+        return redirect(url_for('create_job_from_linkedin'))
+
+    flash(
+        f'Job #{job_id} imported from LinkedIn. Review the details and save if you change anything.',
+        'success',
+    )
+    return redirect(
+        url_for(
+            'edit_job',
+            job_id=job_id,
+            folder=result.get('return_folder', 'all'),
+            q=result.get('return_search') or None,
+        )
     )
 
 

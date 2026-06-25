@@ -13,9 +13,16 @@
                 <h1>{% if job %}Edit job{% else %}Add job{% endif %}</h1>
                 <p>Enter job details manually or update an existing listing.</p>
             </div>
-            <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-ghost btn-sm">
-                <i class="fas fa-arrow-left me-2"></i>Back to jobs
-            </a>
+            <div class="d-flex flex-wrap gap-2">
+                {% if not job %}
+                <a href="{{ url_for('create_job_from_linkedin', folder=return_folder, q=return_search or none) }}" class="btn btn-outline-primary btn-sm">
+                    <i class="fab fa-linkedin me-2"></i>Import from LinkedIn
+                </a>
+                {% endif %}
+                <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-ghost btn-sm">
+                    <i class="fas fa-arrow-left me-2"></i>Back to jobs
+                </a>
+            </div>
         </div>
 
         {% include '_flashes.html' %}

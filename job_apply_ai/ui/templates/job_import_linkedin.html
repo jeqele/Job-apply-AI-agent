@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'Add Job from LinkedIn' %}
+    {% include '_app_head.html' %}
+</head>
+<body>
+    {% include '_config_nav.html' %}
+
+    <div class="container page-shell">
+        <div class="page-intro d-flex flex-wrap justify-content-between align-items-start gap-3 mt-3">
+            <div>
+                <h1>Add job from LinkedIn</h1>
+                <p>Paste a LinkedIn job link and we will fetch the listing and add it to your jobs.</p>
+            </div>
+            <a href="{% if return_folder and return_folder != 'all' %}{{ url_for('manage_jobs', folder=return_folder, q=return_search or none) }}{% else %}{{ url_for('manage_jobs', q=return_search or none) }}{% endif %}" class="btn btn-ghost btn-sm">
+                <i class="fas fa-arrow-left me-2"></i>Back to jobs
+            </a>
+        </div>
+
+        {% include '_flashes.html' %}
+
+        <div class="hh-card">
+            <div class="hh-card-header">LinkedIn job URL</div>
+            <div class="hh-card-body">
+                <form method="post">
+                    <input type="hidden" name="return_folder" value="{{ return_folder|default('all') }}">
+                    <input type="hidden" name="return_search" value="{{ return_search|default('') }}">
+                    <div class="mb-3">
+                        <label class="form-label" for="linkedin_url">Job link</label>
+                        <input class="form-control"
+                               id="linkedin_url"
+                               name="linkedin_url"
+                               type="url"
+                               placeholder="https://www.linkedin.com/jobs/view/4431490621/"
+                               value="{{ linkedin_url|default('') }}"
+                               required>
+                        <div class="form-text">
+                            Share links like <code>linkedin.com/jobs/view/…</code> or collection URLs with <code>currentJobId</code>.
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fab fa-linkedin me-2"></i>Import job
+                        </button>
+                        <a href="{{ url_for('create_job', folder=return_folder, q=return_search or none) }}" class="btn btn-ghost">
+                            Add manually instead
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

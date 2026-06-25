@@ -26,6 +26,9 @@
                 <a href="{{ url_for('create_job', folder=current_folder, q=search_query or none) }}" class="btn btn-primary">
                     <i class="fas fa-plus me-2"></i>Add Job
                 </a>
+                <a href="{{ url_for('create_job_from_linkedin', folder=current_folder, q=search_query or none) }}" class="btn btn-outline-primary">
+                    <i class="fab fa-linkedin me-2"></i>Add from LinkedIn
+                </a>
                 <a href="{{ url_for('export_jobs_route', fmt='excel') }}" class="btn btn-success">
                     <i class="fas fa-file-excel me-2"></i>Export Excel
                 </a>

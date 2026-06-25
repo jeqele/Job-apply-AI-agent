@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'Importing Job' %}
+    {% include '_app_head.html' %}
+    {% include '_progress_styles.html' %}
+</head>
+<body class="progress-page">
+    <div class="progress-shell">
+        <div class="progress-card">
+            <div class="progress-header">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="fs-2"><i class="fab fa-linkedin"></i></div>
+                    <div>
+                        <h1 class="h3 mb-1">Importing LinkedIn Job</h1>
+                        <p class="mb-0 opacity-75">Fetching title, company, and description from the listing</p>
+                    </div>
+                </div>
+            </div>
+            <div class="progress-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong id="progress-label">Starting…</strong>
+                    <span id="progress-percent" class="text-muted">0%</span>
+                </div>
+                <div class="progress-bar-wrap mb-3">
+                    <div id="progress-bar" class="progress-bar-fill"></div>
+                </div>
+                <p id="progress-message" class="text-muted mb-0">Opening the LinkedIn job page…</p>
+                <div id="error-panel" class="alert alert-danger mt-4 d-none" role="alert"></div>
+                <div class="mt-4">
+                    <a href="{{ back_url }}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusUrl = {{ status_url|tojson }};
+        const completeUrl = {{ complete_url|tojson }};
+        let pollTimer = null;
+
+        function updateUi(data) {
+            document.getElementById('progress-label').textContent = data.message || 'Working…';
+            document.getElementById('progress-message').textContent = data.message || '';
+            document.getElementById('progress-percent').textContent = `${data.percent || 0}%`;
+            document.getElementById('progress-bar').style.width = `${data.percent || 0}%`;
+        }
+
+        async function pollStatus() {
+            const response = await fetch(statusUrl);
+            if (response.status === 404) {
+                clearInterval(pollTimer);
+                showError('Import session was lost. Please try again.');
+                return;
+            }
+
+            const data = await response.json();
+            updateUi(data);
+
+            if (data.status === 'complete') {
+                clearInterval(pollTimer);
+                window.location.href = completeUrl;
+                return;
+            }
+
+            if (data.status === 'error') {
+                clearInterval(pollTimer);
+                showError(data.error || data.message || 'LinkedIn import failed.');
+            }
+        }
+
+        function showError(message) {
+            const panel = document.getElementById('error-panel');
+            panel.textContent = message;
+            panel.classList.remove('d-none');
+        }
+
+        pollTimer = setInterval(pollStatus, 900);
+        pollStatus();
+    </script>
+    {% include '_dev_log_panel.html' %}
+</body>
+</html>
