@@ -5,10 +5,10 @@ import os
 from datetime import datetime
 from urllib.parse import quote_plus
 
-import requests
 from bs4 import BeautifulSoup
 
 from job_apply_ai.scraper.base import JobSource
+from job_apply_ai.scraper.http_client import get_with_retry
 from job_apply_ai.scraper.email_extractor import enrich_job_emails
 from job_apply_ai.scraper.job_metadata import extract_salary, infer_work_type
 
@@ -50,8 +50,7 @@ class AdzunaJobSource(JobSource):
             "max_days_old": max_days_old,
             "content-type": "application/json",
         }
-        response = requests.get(self.API_BASE, params=params, timeout=20)
-        response.raise_for_status()
+        response = get_with_retry(self.API_BASE, params=params, timeout=20, min_interval=0)
         payload = response.json()
 
         jobs = []
@@ -102,12 +101,7 @@ class AdzunaJobSource(JobSource):
             f"{self.WEB_BASE}?q={quote_plus(keyword)}"
             f"&loc={quote_plus(location)}"
         )
-        response = requests.get(
-            url,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; JobApplyAI/1.0)"},
-        )
-        response.raise_for_status()
+        response = get_with_retry(url, timeout=20)
         soup = BeautifulSoup(response.text, "html.parser")
         jobs = []
 

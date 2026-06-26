@@ -51,9 +51,10 @@ class JobSource(ABC):
         mode: str = "both",
         search_filters: SearchFilters | None = None,
     ) -> list[dict]:
-        """Search jobs using API, scrape, or both."""
+        """Search jobs using API, scrape, or both (scrape is fallback when API fails)."""
         jobs: list[dict] = []
         fetch_kwargs = {"search_filters": search_filters or SearchFilters()}
+        api_failed = False
 
         if mode in {"api", "both"} and self.supports_api:
             try:
@@ -66,9 +67,15 @@ class JobSource(ABC):
                 )
                 logger.info("%s API returned %s jobs", self.source_name, len(api_jobs))
             except Exception as exc:
+                api_failed = True
                 logger.warning("%s API failed: %s", self.source_name, exc)
 
-        if mode in {"scrape", "both"} and self.supports_scrape:
+        should_scrape = mode == "scrape" or (
+            mode == "both"
+            and self.supports_scrape
+            and (not self.supports_api or api_failed)
+        )
+        if should_scrape:
             try:
                 scrape_jobs = self.fetch_via_scrape(
                     keyword, location, max_jobs, max_days_old, **fetch_kwargs
@@ -80,6 +87,8 @@ class JobSource(ABC):
                 logger.info("%s scrape returned %s jobs", self.source_name, len(scrape_jobs))
             except Exception as exc:
                 logger.warning("%s scrape failed: %s", self.source_name, exc)
+        elif mode == "both" and self.supports_scrape and self.supports_api:
+            logger.debug("%s scrape skipped; API succeeded", self.source_name)
 
         jobs = dedupe_jobs(jobs)[:max_jobs]
         for job in jobs:

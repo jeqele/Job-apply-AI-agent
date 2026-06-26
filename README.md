@@ -114,10 +114,46 @@ Optional flags:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--max-jobs` | `10` | Max jobs fetched per title/location pair |
-| `--sources` | `all` | Comma-separated sources (`linkedin,adzuna,reed,indeed`, or `all`) |
+| `--sources` | `all` | Comma-separated sources (`linkedin-mcp,linkedin,adzuna,reed,indeed`, or `all`) |
 | `--mode` | `both` | `api`, `scrape`, or `both` |
 | `--output` | auto | Excel output path (defaults to `job_apply_ai/outputs/jobs/batch_jobs_YYYY-MM-DD.xlsx`) |
 | `--no-enrich` | off | Skip fetching full job details and contact emails |
+
+### LinkedIn MCP job search
+
+HermesHire can search LinkedIn through a local [linkedin-mcp-server](https://github.com/stickerdaniel/linkedin-mcp-server) sidecar using your logged-in browser session. This is more reliable than anonymous Selenium scraping and is the recommended LinkedIn source (`linkedin-mcp`).
+
+**Setup (one time):**
+
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
+2. Log in to LinkedIn in the MCP browser profile:
+   ```bash
+   uvx mcp-server-linkedin@latest --login
+   ```
+
+**Start the sidecar** (keep this running while searching):
+
+```powershell
+# Windows
+.\scripts\start-linkedin-mcp.ps1
+```
+
+```bash
+# macOS / Linux
+./scripts/start-linkedin-mcp.sh
+```
+
+**Use in searches:** include `linkedin-mcp` in job sources (it is the default in the web UI). Configure the sidecar URL in `.env` if needed (`LINKEDIN_MCP_URL=http://127.0.0.1:8080/mcp`).
+
+**Rate limits and account safety:** LinkedIn does not publish a safe requests-per-hour limit. The MCP server queues tool calls sequentially, but batch searches still issue many requests. Use conservative settings when `linkedin-mcp` is enabled:
+
+- `LINKEDIN_MCP_BATCH_DELAY_SECONDS=30` — pause between batch combinations (default when LinkedIn sources are used)
+- `LINKEDIN_MCP_MAX_PAGES=1` — limit search result pages per query
+- `LINKEDIN_MCP_DETAIL_DELAY_SECONDS=2` — pause between job detail fetches
+- Keep batch matrices small; prefer API sources (Adzuna, Reed) for large title × location grids
+- Do not run `linkedin` (Selenium) and `linkedin-mcp` together in the same batch
+
+See the maintainer guidance in [discussion #351](https://github.com/stickerdaniel/linkedin-mcp-server/discussions/351).
 
 ### Command Line
 

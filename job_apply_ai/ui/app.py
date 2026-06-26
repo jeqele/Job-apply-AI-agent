@@ -19,6 +19,7 @@ from job_apply_ai.scraper.linkedin import LinkedInScraper
 from job_apply_ai.scraper.linkedin_job_url import parse_linkedin_job_url
 from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.batch_search import (
+    batch_search_pause,
     build_search_queue,
     decode_uploaded_text,
     parse_lines,
@@ -1125,6 +1126,9 @@ def _run_batch_search_task(
             )
             searches_completed += 1
 
+        if index < total:
+            batch_search_pause(source_list)
+
     if stopped:
         if total_jobs_saved == 0:
             fail_task(task_id, 'Batch search stopped before saving any jobs.')
@@ -1471,7 +1475,7 @@ def search_jobs():
         keyword = (request.form.get('keyword') or '').strip()
         location = (request.form.get('location') or '').strip()
         max_jobs = int(request.form.get('max_jobs', 10))
-        sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
+        sources = request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed')
         mode = request.form.get('mode', 'both')
         search_filters = SearchFilters.from_mapping(request.form)
 
@@ -1521,7 +1525,7 @@ def batch_search_jobs():
         return redirect(url_for('index'))
 
     max_jobs = int(request.form.get('max_jobs', 5))
-    sources = request.form.get('sources', 'linkedin,adzuna,reed,indeed')
+    sources = request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed')
     mode = request.form.get('mode', 'both')
     search_filters = SearchFilters.from_mapping(request.form)
     source_list = [source.strip() for source in sources.split(',') if source.strip()]

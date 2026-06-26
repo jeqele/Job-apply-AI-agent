@@ -41,7 +41,7 @@ def main():
     scraper_parser.add_argument(
         '--sources',
         default='all',
-        help='Comma-separated sources: linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
+        help='Comma-separated sources: linkedin,linkedin-mcp,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
     )
     scraper_parser.add_argument(
         '--mode',
@@ -91,7 +91,7 @@ def main():
     batch_search_parser.add_argument(
         '--sources',
         default='all',
-        help='Comma-separated sources: linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
+        help='Comma-separated sources: linkedin,linkedin-mcp,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
     )
     batch_search_parser.add_argument(
         '--mode',
@@ -231,6 +231,7 @@ def main():
 
     elif args.command == 'batch-search':
         from job_apply_ai.batch_search import (
+            batch_search_pause,
             build_search_queue,
             parse_lines_from_path,
             shuffle_search_queue,
@@ -295,6 +296,9 @@ def main():
             except Exception as exc:
                 failed += 1
                 logger.error("Search failed for %r in %r: %s", keyword, location, exc)
+
+            if index < len(queue):
+                batch_search_pause(sources)
 
         saved_jobs = repo.list_jobs(search_run_id=search_run_id)
         if not saved_jobs:

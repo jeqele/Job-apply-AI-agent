@@ -48,6 +48,7 @@ Thumbs.db
 *.db
 temp/
 output/
+.tmp_pkg/
 
 # Flask
 instance/

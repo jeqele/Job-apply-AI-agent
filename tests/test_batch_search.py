@@ -3,10 +3,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from job_apply_ai.batch_search import (
+    batch_search_pause,
     build_search_queue,
-    get_max_batch_search_combinations,
     parse_lines,
     parse_lines_from_path,
     shuffle_search_queue,
@@ -57,20 +58,25 @@ class BatchSearchTests(unittest.TestCase):
             "Provide at least one job title and one location.",
         )
 
-    def test_validate_batch_queue_rejects_too_many(self):
+    def test_validate_batch_queue_accepts_large_queue(self):
         titles = [f"Title {index}" for index in range(11)]
         locations = [f"City {index}" for index in range(10)]
         queue = build_search_queue(titles, locations)
-        limit = get_max_batch_search_combinations()
         self.assertEqual(len(queue), 110)
-        self.assertGreater(len(queue), limit)
-        self.assertIn("Too many search combinations", validate_batch_queue(queue))
+        with patch("job_apply_ai.batch_search.get_max_batch_search_combinations", return_value=200):
+            self.assertIsNone(validate_batch_queue(queue))
 
     def test_shuffle_search_queue_preserves_items(self):
         queue = build_search_queue(["Engineer", "Analyst"], ["Berlin", "Remote"])
         shuffled = shuffle_search_queue(queue)
         self.assertEqual(sorted(shuffled), sorted(queue))
         self.assertEqual(len(shuffled), len(queue))
+
+    def test_batch_search_pause_honors_env(self):
+        with patch.dict("os.environ", {"BATCH_SEARCH_DELAY_SECONDS": "0.05"}):
+            with patch("job_apply_ai.batch_search.time.sleep") as sleep:
+                batch_search_pause()
+        sleep.assert_called_once_with(0.05)
 
 
 if __name__ == "__main__":

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import os
 import random
+import time
 from itertools import product
 from pathlib import Path
+from typing import Iterable
 
 from dotenv import load_dotenv
 
 DEFAULT_MAX_BATCH_SEARCH_COMBINATIONS = 100
+_LINKEDIN_SOURCES = frozenset({"linkedin", "linkedin-mcp"})
 
 
 def get_max_batch_search_combinations() -> int:
@@ -75,7 +78,24 @@ def validate_batch_queue(queue: list[tuple[str, str]]) -> str | None:
     if len(queue) > limit:
         return (
             f"Too many search combinations ({len(queue)}). "
-            f"Maximum is {limit} "
-            f"(titles × locations)."
+            f"Maximum is {limit} (titles × locations)."
         )
     return None
+
+
+def _uses_linkedin_sources(sources: Iterable[str] | None) -> bool:
+    if not sources:
+        return False
+    return any(source.strip().lower() in _LINKEDIN_SOURCES for source in sources)
+
+
+def batch_search_pause(sources: Iterable[str] | None = None) -> None:
+    """Sleep between batch search iterations to reduce upstream rate limits."""
+    if _uses_linkedin_sources(sources):
+        default = os.environ.get("LINKEDIN_MCP_BATCH_DELAY_SECONDS", "30")
+    else:
+        default = "1.0"
+    configured = os.environ.get("BATCH_SEARCH_DELAY_SECONDS", "").strip()
+    delay = float(configured if configured else default)
+    if delay > 0:
+        time.sleep(delay)

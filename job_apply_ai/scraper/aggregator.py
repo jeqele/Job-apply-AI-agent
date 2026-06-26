@@ -11,6 +11,7 @@ from job_apply_ai.scraper.cv_library import CVLibraryJobSource
 from job_apply_ai.scraper.indeed import IndeedJobSource
 from job_apply_ai.scraper.jobs_io import dedupe_jobs, save_jobs_to_db, save_jobs_to_excel
 from job_apply_ai.storage.job_repository import JobRepository
+from job_apply_ai.scraper.linkedin_mcp_source import LinkedInMcpJobSource
 from job_apply_ai.scraper.linkedin_source import LinkedInJobSource
 from job_apply_ai.scraper.reed import ReedJobSource
 from job_apply_ai.scraper.remoteok import RemoteOKJobSource
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 AVAILABLE_SOURCES: dict[str, type[JobSource]] = {
     "linkedin": LinkedInJobSource,
+    "linkedin-mcp": LinkedInMcpJobSource,
     "adzuna": AdzunaJobSource,
     "reed": ReedJobSource,
     "indeed": IndeedJobSource,
