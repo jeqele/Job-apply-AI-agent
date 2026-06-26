@@ -8,7 +8,13 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from job_apply_ai.batch_search import build_search_queue, shuffle_search_queue, validate_batch_queue
+from job_apply_ai.job_sources import UI_DEFAULT_JOB_SOURCES
+from job_apply_ai.batch_search import (
+    build_search_queue,
+    shuffle_search_queue,
+    split_batch_inputs,
+    validate_batch_queue,
+)
 from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.storage.database import get_connection
 
@@ -152,6 +158,62 @@ class BatchQueueRepository:
             ).fetchone()
         return _deserialize_job(dict(row)) if row else None
 
+    def create_jobs(
+        self,
+        *,
+        name: str,
+        titles: list[str],
+        locations: list[str],
+        schedule_type: str = "once",
+        shuffle_queue: bool = False,
+        max_jobs: int = 5,
+        sources: str = UI_DEFAULT_JOB_SOURCES,
+        mode: str = "both",
+        search_filters: SearchFilters | dict | None = None,
+        run_immediately: bool = True,
+    ) -> list[dict]:
+        schedule_type = schedule_type if schedule_type in VALID_SCHEDULES else "once"
+        chunks = split_batch_inputs(titles, locations)
+        if not chunks:
+            raise ValueError("Provide at least one job title and one location.")
+
+        total_parts = len(chunks)
+        base_name = name.strip()
+        jobs: list[dict] = []
+        for part_index, (part_titles, part_locations) in enumerate(chunks, start=1):
+            queue = build_search_queue(part_titles, part_locations)
+            if shuffle_queue:
+                queue = shuffle_search_queue(queue)
+            queue_error = validate_batch_queue(queue)
+            if queue_error:
+                raise ValueError(queue_error)
+
+            if total_parts > 1:
+                part_suffix = f" (part {part_index}/{total_parts})"
+                if base_name:
+                    job_name = f"{base_name}{part_suffix}"
+                else:
+                    job_name = f"Batch search ({len(queue)} searches){part_suffix}"
+            else:
+                job_name = base_name or f"Batch search ({len(queue)} combinations)"
+
+            jobs.append(
+                self._insert_job(
+                    name=job_name,
+                    titles=part_titles,
+                    locations=part_locations,
+                    schedule_type=schedule_type,
+                    shuffle_queue=shuffle_queue,
+                    max_jobs=max_jobs,
+                    sources=sources,
+                    mode=mode,
+                    search_filters=search_filters,
+                    total_combinations=len(queue),
+                    run_immediately=run_immediately,
+                )
+            )
+        return jobs
+
     def create_job(
         self,
         *,
@@ -161,19 +223,40 @@ class BatchQueueRepository:
         schedule_type: str = "once",
         shuffle_queue: bool = False,
         max_jobs: int = 5,
-        sources: str = "linkedin-mcp,adzuna,reed,indeed",
+        sources: str = UI_DEFAULT_JOB_SOURCES,
         mode: str = "both",
         search_filters: SearchFilters | dict | None = None,
         run_immediately: bool = True,
     ) -> dict:
-        schedule_type = schedule_type if schedule_type in VALID_SCHEDULES else "once"
-        queue = build_search_queue(titles, locations)
-        if shuffle_queue:
-            queue = shuffle_search_queue(queue)
-        queue_error = validate_batch_queue(queue)
-        if queue_error:
-            raise ValueError(queue_error)
+        jobs = self.create_jobs(
+            name=name,
+            titles=titles,
+            locations=locations,
+            schedule_type=schedule_type,
+            shuffle_queue=shuffle_queue,
+            max_jobs=max_jobs,
+            sources=sources,
+            mode=mode,
+            search_filters=search_filters,
+            run_immediately=run_immediately,
+        )
+        return jobs[0]
 
+    def _insert_job(
+        self,
+        *,
+        name: str,
+        titles: list[str],
+        locations: list[str],
+        schedule_type: str,
+        shuffle_queue: bool,
+        max_jobs: int,
+        sources: str,
+        mode: str,
+        search_filters: SearchFilters | dict | None,
+        total_combinations: int,
+        run_immediately: bool,
+    ) -> dict:
         now = _now_iso()
         next_run_at = now if run_immediately else None
         task_id = uuid.uuid4().hex
@@ -188,7 +271,7 @@ class BatchQueueRepository:
                 ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    name.strip() or f"Batch search ({len(queue)} combinations)",
+                    name,
                     schedule_type,
                     json.dumps(titles),
                     json.dumps(locations),
@@ -197,7 +280,7 @@ class BatchQueueRepository:
                     sources,
                     mode,
                     _serialize_filters(search_filters),
-                    len(queue),
+                    total_combinations,
                     task_id,
                     next_run_at,
                     now,

@@ -33,7 +33,13 @@ class SearchFiltersTests(unittest.TestCase):
     def test_expand_sources_adds_remoteok(self):
         filters = SearchFilters(remote=True)
         sources = filters.expand_sources(["linkedin", "indeed"])
-        self.assertEqual(sources, ["linkedin", "indeed", "remoteok"])
+        self.assertEqual(sources, ["linkedin", "indeed", "remoteok", "arbeitnow"])
+
+    def test_expand_sources_adds_arbeitnow_for_visa_filter(self):
+        filters = SearchFilters(visa_sponsorship=True)
+        sources = filters.expand_sources(["linkedin", "indeed"])
+        self.assertEqual(sources, ["linkedin", "indeed", "arbeitnow"])
+        self.assertNotIn("remoteok", sources)
 
     def test_filter_jobs_requires_all_active_filters(self):
         filters = SearchFilters(remote=True, visa_sponsorship=True)

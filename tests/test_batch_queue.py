@@ -5,12 +5,38 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from job_apply_ai.batch_search import split_batch_inputs
 from job_apply_ai.batch_search_runner import QueueTaskStopped, queue_control_checkpoint
 from job_apply_ai.storage.batch_queue_repository import (
     BatchQueueRepository,
     to_task_snapshot,
 )
 from job_apply_ai.storage.database import init_db
+from job_apply_ai.scraper.search_filters import SearchFilters
+
+
+class SplitBatchInputsTests(unittest.TestCase):
+    def test_no_split_when_under_limit(self):
+        titles = ["Engineer", "Analyst"]
+        locations = ["Berlin", "Remote"]
+        parts = split_batch_inputs(titles, locations, max_combinations=50)
+        self.assertEqual(parts, [(titles, locations)])
+
+    def test_splits_by_titles_when_locations_fit(self):
+        titles = [f"Title {index}" for index in range(26)]
+        locations = ["Berlin", "Remote"]
+        parts = split_batch_inputs(titles, locations, max_combinations=50)
+        self.assertEqual(len(parts), 2)
+        self.assertEqual(sum(len(t) * len(l) for t, l in parts), 52)
+        for part_titles, part_locations in parts:
+            self.assertLessEqual(len(part_titles) * len(part_locations), 50)
+
+    def test_splits_by_locations_when_titles_fit(self):
+        titles = ["Engineer"]
+        locations = [f"City {index}" for index in range(120)]
+        parts = split_batch_inputs(titles, locations, max_combinations=50)
+        self.assertEqual(len(parts), 3)
+        self.assertEqual(sum(len(t) * len(l) for t, l in parts), 120)
 
 
 class BatchQueueRepositoryTests(unittest.TestCase):
@@ -110,6 +136,61 @@ class BatchQueueRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["status"], "complete")
         self.assertEqual(snapshot["result"]["total_jobs"], 2)
+
+    def test_create_jobs_splits_large_batch(self):
+        titles = [f"Title {index}" for index in range(20)]
+        locations = [f"City {index}" for index in range(5)]
+        with patch(
+            "job_apply_ai.batch_search.get_batch_queue_max_combinations_per_job",
+            return_value=50,
+        ):
+            jobs = self.repo.create_jobs(
+                name="Weekly sweep",
+                titles=titles,
+                locations=locations,
+                schedule_type="weekly",
+                sources="adzuna,reed",
+                mode="remote",
+                search_filters=SearchFilters(remote=True),
+            )
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(
+            sum(job["total_combinations"] for job in jobs),
+            100,
+        )
+        for index, job in enumerate(jobs, start=1):
+            self.assertIn(f"(part {index}/2)", job["name"])
+            self.assertEqual(job["schedule_type"], "weekly")
+            self.assertEqual(job["sources"], "adzuna,reed")
+            self.assertEqual(job["mode"], "remote")
+            self.assertTrue(job["search_filters"]["remote"])
+            self.assertLessEqual(job["total_combinations"], 50)
+
+    def test_create_job_returns_first_when_split(self):
+        titles = [f"Title {index}" for index in range(20)]
+        locations = [f"City {index}" for index in range(5)]
+        with patch(
+            "job_apply_ai.batch_search.get_batch_queue_max_combinations_per_job",
+            return_value=50,
+        ):
+            job = self.repo.create_job(
+                name="Split batch",
+                titles=titles,
+                locations=locations,
+            )
+            all_jobs = self.repo.list_jobs()
+        self.assertEqual(len(all_jobs), 2)
+        self.assertEqual(job["id"], all_jobs[1]["id"])
+        self.assertIn("(part 1/2)", job["name"])
+
+    def test_create_jobs_single_item_keeps_name(self):
+        job = self.repo.create_jobs(
+            name="Single batch",
+            titles=["Engineer"],
+            locations=["Berlin"],
+        )[0]
+        self.assertEqual(job["name"], "Single batch")
+        self.assertNotIn("part", job["name"])
 
 
 class QueueCheckpointTests(unittest.TestCase):

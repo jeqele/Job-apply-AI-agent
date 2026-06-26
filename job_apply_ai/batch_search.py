@@ -12,6 +12,7 @@ from typing import Iterable
 from dotenv import load_dotenv
 
 DEFAULT_MAX_BATCH_SEARCH_COMBINATIONS = 100
+DEFAULT_BATCH_QUEUE_MAX_COMBINATIONS_PER_JOB = 50
 _LINKEDIN_SOURCES = frozenset({"linkedin", "linkedin-mcp"})
 
 
@@ -29,6 +30,18 @@ def get_max_batch_search_combinations() -> int:
 
 # Backward-compatible alias for the built-in default.
 MAX_BATCH_SEARCH_COMBINATIONS = DEFAULT_MAX_BATCH_SEARCH_COMBINATIONS
+
+
+def get_batch_queue_max_combinations_per_job() -> int:
+    """Return max title × location pairs per queue job when auto-splitting."""
+    load_dotenv()
+    raw = os.environ.get("BATCH_QUEUE_MAX_COMBINATIONS_PER_JOB", "").strip()
+    if not raw:
+        return DEFAULT_BATCH_QUEUE_MAX_COMBINATIONS_PER_JOB
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_BATCH_QUEUE_MAX_COMBINATIONS_PER_JOB
 
 
 def parse_lines(content: str) -> list[str]:
@@ -68,6 +81,48 @@ def shuffle_search_queue(queue: list[tuple[str, str]]) -> list[tuple[str, str]]:
     shuffled = list(queue)
     random.shuffle(shuffled)
     return shuffled
+
+
+def split_batch_inputs(
+    titles: list[str],
+    locations: list[str],
+    max_combinations: int | None = None,
+) -> list[tuple[list[str], list[str]]]:
+    """Split titles/locations into chunks each within the combination limit."""
+    if not titles or not locations:
+        return []
+    limit = (
+        max_combinations
+        if max_combinations is not None
+        else get_batch_queue_max_combinations_per_job()
+    )
+    total = len(titles) * len(locations)
+    if total <= limit:
+        return [(titles, locations)]
+
+    if len(locations) <= limit:
+        chunk_size = max(1, limit // len(locations))
+        return [
+            (titles[index : index + chunk_size], locations)
+            for index in range(0, len(titles), chunk_size)
+        ]
+
+    if len(titles) <= limit:
+        chunk_size = max(1, limit // len(titles))
+        return [
+            (titles, locations[index : index + chunk_size])
+            for index in range(0, len(locations), chunk_size)
+        ]
+
+    chunk_size = max(1, limit // len(locations))
+    parts: list[tuple[list[str], list[str]]] = []
+    for index in range(0, len(titles), chunk_size):
+        sub_titles = titles[index : index + chunk_size]
+        if len(sub_titles) * len(locations) <= limit:
+            parts.append((sub_titles, locations))
+        else:
+            parts.extend(split_batch_inputs(sub_titles, locations, limit))
+    return parts
 
 
 def validate_batch_queue(queue: list[tuple[str, str]]) -> str | None:

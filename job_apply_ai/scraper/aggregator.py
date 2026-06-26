@@ -6,6 +6,7 @@ from typing import Iterable, List, Optional, Tuple
 from dotenv import load_dotenv
 
 from job_apply_ai.scraper.adzuna import AdzunaJobSource
+from job_apply_ai.scraper.arbeitnow import ArbeitnowJobSource
 from job_apply_ai.scraper.base import JobSource
 from job_apply_ai.scraper.cv_library import CVLibraryJobSource
 from job_apply_ai.scraper.indeed import IndeedJobSource
@@ -31,6 +32,7 @@ AVAILABLE_SOURCES: dict[str, type[JobSource]] = {
     "totaljobs": TotaljobsJobSource,
     "cv-library": CVLibraryJobSource,
     "remoteok": RemoteOKJobSource,
+    "arbeitnow": ArbeitnowJobSource,
 }
 
 DEFAULT_SOURCES = ["linkedin", "adzuna", "reed", "indeed", "totaljobs", "cv-library"]

@@ -228,9 +228,8 @@
                                                 Advanced options
                                             </button>
                                             <div class="collapse mt-2" id="advancedSearch">
-                                                <label for="sources" class="form-label">Job sources</label>
-                                                <input type="text" class="form-control" id="sources" name="sources" value="linkedin-mcp,adzuna,reed,indeed" placeholder="linkedin-mcp,linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok">
-                                                <div class="form-text">Comma-separated list, or use <code>all</code>.</div>
+                                                {% set id_prefix = 'single_' %}
+                                                {% include '_job_sources.html' %}
                                             </div>
                                         </div>
                                     </div>
@@ -282,10 +281,8 @@
                                                     <option value="scrape">Scrape only</option>
                                                 </select>
                                             </div>
-                                            <div class="col-12">
-                                                <label for="batch_sources" class="form-label">Job sources</label>
-                                                <input type="text" class="form-control" id="batch_sources" name="sources" value="linkedin-mcp,adzuna,reed,indeed" placeholder="linkedin-mcp,linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok">
-                                            </div>
+                                            {% set id_prefix = 'batch_' %}
+                                            {% include '_job_sources.html' %}
                                             <div class="col-12">
                                                 <div class="form-check">
                                                     <input class="form-check-input" type="checkbox" id="shuffle_queue" name="shuffle_queue">

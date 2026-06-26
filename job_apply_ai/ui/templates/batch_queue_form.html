@@ -25,8 +25,14 @@
                                placeholder="e.g. Weekly remote sweep">
                     </div>
                     <div class="col-md-6">
-                        <label for="titles_text" class="form-label">Job titles</label>
-                        <textarea class="form-control font-monospace" id="titles_text" name="titles_text" rows="8" required>{% if form.titles_text is defined %}{{ form.titles_text }}{% elif form.titles is defined %}{{ form.titles | join('\n') }}{% elif job %}{{ job.titles | join('\n') }}{% endif %}</textarea>
+                        <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
+                            <label for="titles_text" class="form-label mb-0">Job titles</label>
+                            <button type="button" class="btn btn-outline-primary btn-sm" id="suggest-titles-btn" {% if not profile_ready %}disabled title="Complete your profile first"{% endif %}>
+                                <i class="fas fa-wand-magic-sparkles me-1"></i>Suggest job titles
+                            </button>
+                        </div>
+                        <textarea class="form-control font-monospace mt-2" id="titles_text" name="titles_text" rows="8" required>{% if form.titles_text is defined %}{{ form.titles_text }}{% elif form.titles is defined %}{{ form.titles | join('\n') }}{% elif job %}{{ job.titles | join('\n') }}{% endif %}</textarea>
+                        <div class="form-text" id="suggest-titles-status"></div>
                         <div class="form-text">One title per line. Lines starting with # are ignored.</div>
                     </div>
                     <div class="col-md-6">
@@ -55,11 +61,8 @@
                             <option value="scrape" {% if current_mode == 'scrape' %}selected{% endif %}>Scrape only</option>
                         </select>
                     </div>
-                    <div class="col-12">
-                        <label for="sources" class="form-label">Job sources</label>
-                        <input type="text" class="form-control" id="sources" name="sources"
-                               value="{{ form.sources or (job.sources if job else 'linkedin-mcp,adzuna,reed,indeed') }}">
-                    </div>
+                    {% set id_prefix = 'queue_' %}
+                    {% include '_job_sources.html' %}
                     {% set id_prefix = 'queue_' %}
                     {% set filter_remote = form.filter_remote if form.filter_remote is defined else (job.search_filters.remote if job else false) %}
                     {% set filter_relocation = form.filter_relocation if form.filter_relocation is defined else (job.search_filters.relocation if job else false) %}
@@ -100,5 +103,52 @@
             </div>
         </form>
     </div>
+
+    <script>
+        (function () {
+            const suggestTitlesBtn = document.getElementById('suggest-titles-btn');
+            const titlesTextarea = document.getElementById('titles_text');
+            const suggestTitlesStatus = document.getElementById('suggest-titles-status');
+            if (!suggestTitlesBtn || !titlesTextarea) {
+                return;
+            }
+
+            suggestTitlesBtn.addEventListener('click', async function () {
+                const originalHtml = suggestTitlesBtn.innerHTML;
+                suggestTitlesBtn.disabled = true;
+                suggestTitlesBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Suggesting…';
+                if (suggestTitlesStatus) {
+                    suggestTitlesStatus.textContent = '';
+                    suggestTitlesStatus.className = 'form-text';
+                }
+
+                try {
+                    const response = await fetch('{{ url_for("suggest_search_titles") }}', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ max_titles: 10 }),
+                    });
+                    const data = await response.json();
+                    if (!response.ok || !Array.isArray(data.titles) || !data.titles.length) {
+                        throw new Error(data.error || 'Could not suggest job titles.');
+                    }
+                    titlesTextarea.value = data.titles.join('\n');
+                    const methodLabel = data.method === 'ai' ? 'AI' : 'profile';
+                    if (suggestTitlesStatus) {
+                        suggestTitlesStatus.textContent = `Filled ${data.titles.length} title(s) from your ${methodLabel}.`;
+                        suggestTitlesStatus.className = 'form-text text-success';
+                    }
+                } catch (error) {
+                    if (suggestTitlesStatus) {
+                        suggestTitlesStatus.textContent = error.message || 'Could not suggest job titles.';
+                        suggestTitlesStatus.className = 'form-text text-danger';
+                    }
+                } finally {
+                    suggestTitlesBtn.disabled = {% if not profile_ready %}true{% else %}false{% endif %};
+                    suggestTitlesBtn.innerHTML = originalHtml;
+                }
+            });
+        })();
+    </script>
 </body>
 </html>

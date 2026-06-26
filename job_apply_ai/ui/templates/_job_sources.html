@@ -1,0 +1,44 @@
+<div class="col-12">
+    {% set id_prefix = id_prefix|default('') %}
+    {% if form is defined and form.source_ids is defined %}
+        {% set selected_ids = form.source_ids %}
+    {% else %}
+        {% set sources_csv = selected_sources if selected_sources is defined else (form.sources if form is defined and form.sources is defined else (job.sources if job is defined and job else default_job_sources)) %}
+        {% set selected_ids = selected_source_ids_from_csv(sources_csv) %}
+    {% endif %}
+    <fieldset class="search-filter-fieldset job-sources-fieldset border rounded p-3 w-100" id="{{ id_prefix }}job_sources_fieldset">
+        <legend class="form-label mb-2 float-none w-auto px-1">Job sources</legend>
+        <div class="small mb-2">
+            <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-decoration-none"
+                    onclick="this.closest('fieldset').querySelectorAll('input[name=sources]').forEach(function (cb) { cb.checked = true; })">
+                Select all
+            </button>
+            <span class="text-muted mx-1">/</span>
+            <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-decoration-none"
+                    onclick="this.closest('fieldset').querySelectorAll('input[name=sources]').forEach(function (cb) { cb.checked = false; })">
+                Deselect all
+            </button>
+        </div>
+        <input type="hidden" name="job_sources_field" value="1">
+        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
+            {% for source in job_source_options %}
+                <div class="col">
+                    <div class="form-check job-source-option h-100">
+                        <input class="form-check-input" type="checkbox"
+                               id="{{ id_prefix }}source_{{ source.id }}"
+                               name="sources"
+                               value="{{ source.id }}"
+                               {% if source.id in selected_ids %}checked{% endif %}>
+                        <label class="form-check-label" for="{{ id_prefix }}source_{{ source.id }}">
+                            <span class="d-block">{{ source.label }}</span>
+                            {% if source.description %}
+                                <span class="d-block text-muted small">{{ source.description }}</span>
+                            {% endif %}
+                        </label>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+        <div class="form-text mt-2 mb-0">Select one or more job boards and APIs to search.</div>
+    </fieldset>
+</div>

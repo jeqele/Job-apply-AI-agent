@@ -49,12 +49,16 @@ class SearchFilters:
         return keyword, location
 
     def expand_sources(self, sources: list[str]) -> list[str]:
-        """Add remote-focused sources when remote filter is enabled."""
-        if not self.remote:
+        """Add remote- or visa-focused sources when matching filters are enabled."""
+        if "all" in sources:
             return sources
-        if "remoteok" in sources or "all" in sources:
-            return sources
-        return [*sources, "remoteok"]
+
+        expanded = list(sources)
+        if self.remote and "remoteok" not in expanded:
+            expanded.append("remoteok")
+        if (self.remote or self.visa_sponsorship) and "arbeitnow" not in expanded:
+            expanded.append("arbeitnow")
+        return expanded
 
     def matches_job(self, job: dict) -> bool:
         """Return True when a job satisfies all active filters."""

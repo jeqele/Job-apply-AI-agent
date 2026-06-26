@@ -41,7 +41,7 @@ def main():
     scraper_parser.add_argument(
         '--sources',
         default='all',
-        help='Comma-separated sources: linkedin,linkedin-mcp,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
+        help='Comma-separated sources: linkedin,linkedin-mcp,adzuna,reed,indeed,totaljobs,cv-library,remoteok,arbeitnow,all',
     )
     scraper_parser.add_argument(
         '--mode',
@@ -91,7 +91,7 @@ def main():
     batch_search_parser.add_argument(
         '--sources',
         default='all',
-        help='Comma-separated sources: linkedin,linkedin-mcp,adzuna,reed,indeed,totaljobs,cv-library,remoteok,all',
+        help='Comma-separated sources: linkedin,linkedin-mcp,adzuna,reed,indeed,totaljobs,cv-library,remoteok,arbeitnow,all',
     )
     batch_search_parser.add_argument(
         '--mode',

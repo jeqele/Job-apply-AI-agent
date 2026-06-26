@@ -14,6 +14,14 @@ from flask import Flask, render_template, request, redirect, url_for, flash, sen
 import zipfile
 import io
 
+from job_apply_ai.job_sources import (
+    UI_DEFAULT_JOB_SOURCES,
+    UI_JOB_SOURCE_OPTIONS,
+    format_sources_csv,
+    job_source_options_for_ui,
+    parse_sources_csv,
+    selected_source_ids_from_csv,
+)
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
 from job_apply_ai.scraper.linkedin import LinkedInScraper
 from job_apply_ai.scraper.linkedin_job_url import parse_linkedin_job_url
@@ -333,6 +341,7 @@ def _inject_cv_generation_lock():
         'cv_generation_active': session.get('cv_generation_active'),
         'ats_friendly_active': session.get('ats_friendly_active'),
         'active_background_tasks': _active_background_tasks(),
+        'profile_ready': profile_is_ready(profile),
         'smtp_configured': bool(accounts),
         'smtp_accounts': accounts,
         'google_oauth_configured': google_oauth_configured(),
@@ -344,7 +353,26 @@ def _inject_cv_generation_lock():
         'status_icons': JOB_STATUS_ICONS,
         'status_badges': JOB_STATUS_BADGE_CLASSES,
         'dev_mode': app_settings_repo.get_dev_mode(),
+        'default_job_sources': UI_DEFAULT_JOB_SOURCES,
+        'job_source_options': job_source_options_for_ui(),
+        'selected_source_ids_from_csv': selected_source_ids_from_csv,
     }
+
+
+def _parse_job_sources_from_form() -> str:
+    """Parse checkbox (or legacy text) job source fields into a CSV string."""
+    if request.form.get('job_sources_field') == '1':
+        selected = request.form.getlist('sources')
+        valid = [source for source in selected if source in UI_JOB_SOURCE_OPTIONS]
+        if not valid:
+            raise ValueError('Select at least one job source.')
+        return format_sources_csv(valid)
+
+    legacy = (request.form.get('sources') or UI_DEFAULT_JOB_SOURCES).strip()
+    parsed = parse_sources_csv(legacy)
+    if not parsed:
+        raise ValueError('Select at least one job source.')
+    return format_sources_csv(parsed)
 
 
 def _oauth_redirect_uri(endpoint: str) -> str:
@@ -1364,7 +1392,11 @@ def search_jobs():
         keyword = (request.form.get('keyword') or '').strip()
         location = (request.form.get('location') or '').strip()
         max_jobs = int(request.form.get('max_jobs', 10))
-        sources = request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed')
+        try:
+            sources = _parse_job_sources_from_form()
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('index'))
         mode = request.form.get('mode', 'both')
         search_filters = SearchFilters.from_mapping(request.form)
 
@@ -1372,7 +1404,7 @@ def search_jobs():
             flash('Please enter both job title and location', 'error')
             return redirect(url_for('index'))
 
-        source_list = [source.strip() for source in sources.split(',') if source.strip()]
+        source_list = parse_sources_csv(sources)
         profile = profile_repo.get_profile()
 
         task_id = create_task(
@@ -1404,27 +1436,28 @@ def batch_search_jobs():
     """Enqueue a one-time batch search for the worker process."""
     titles = _read_batch_lines_from_request('titles_file', 'titles_text')
     locations = _read_batch_lines_from_request('locations_file', 'locations_text')
-    queue = build_search_queue(titles, locations)
-    if request.form.get('shuffle_queue') == 'on':
-        queue = shuffle_search_queue(queue)
-    queue_error = validate_batch_queue(queue)
-
-    if queue_error:
-        flash(queue_error, 'error')
+    if not titles or not locations:
+        flash('Provide at least one job title and one location.', 'error')
         return redirect(url_for('index'))
 
     max_jobs = int(request.form.get('max_jobs', 5))
-    sources = request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed')
+    try:
+        sources = _parse_job_sources_from_form()
+    except ValueError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('index'))
     mode = request.form.get('mode', 'both')
     search_filters = SearchFilters.from_mapping(request.form)
+    shuffle_queue = request.form.get('shuffle_queue') == 'on'
+    total_combinations = len(titles) * len(locations)
 
     try:
-        job = batch_queue_repo.create_job(
-            name=f"Dashboard batch ({len(queue)} searches)",
+        jobs = batch_queue_repo.create_jobs(
+            name=f"Dashboard batch ({total_combinations} searches)",
             titles=titles,
             locations=locations,
             schedule_type='once',
-            shuffle_queue=request.form.get('shuffle_queue') == 'on',
+            shuffle_queue=shuffle_queue,
             max_jobs=max_jobs,
             sources=sources,
             mode=mode,
@@ -1435,13 +1468,24 @@ def batch_search_jobs():
         flash(str(exc), 'error')
         return redirect(url_for('index'))
 
-    session['batch_search_active'] = job['task_id']
+    worker_hint = (
+        'start it with: python -m job_apply_ai batch-worker'
+    )
+    if len(jobs) == 1:
+        session['batch_search_active'] = jobs[0]['task_id']
+        flash(
+            f'Batch search queued. The worker will pick it up shortly — {worker_hint}',
+            'success',
+        )
+        return redirect(url_for('batch_search_progress', task_id=jobs[0]['task_id']))
+
     flash(
-        'Batch search queued. The worker will pick it up shortly — '
-        'start it with: python -m job_apply_ai batch-worker',
+        f'Large batch split into {len(jobs)} queue jobs '
+        f'({total_combinations} searches total). The worker will process them in order — '
+        f'{worker_hint}',
         'success',
     )
-    return redirect(url_for('batch_search_progress', task_id=job['task_id']))
+    return redirect(url_for('batch_queue_list'))
 
 
 @app.route('/api/search/suggest-titles', methods=['POST'])
@@ -1520,7 +1564,7 @@ def batch_search_complete(task_id):
     )
 
 
-def _batch_queue_form_payload() -> dict:
+def _batch_queue_form_payload(sources: str) -> dict:
     """Parse shared batch queue create/edit form fields."""
     titles = parse_lines(request.form.get('titles_text') or '')
     locations = parse_lines(request.form.get('locations_text') or '')
@@ -1531,9 +1575,29 @@ def _batch_queue_form_payload() -> dict:
         'schedule_type': request.form.get('schedule_type', 'once'),
         'shuffle_queue': request.form.get('shuffle_queue') == 'on',
         'max_jobs': int(request.form.get('max_jobs', 5)),
-        'sources': request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed'),
+        'sources': sources,
         'mode': request.form.get('mode', 'both'),
         'search_filters': SearchFilters.from_mapping(request.form),
+    }
+
+
+def _batch_queue_form_from_request(sources: str | None = None) -> dict:
+    """Build template form dict from the current request (for validation errors)."""
+    filters = SearchFilters.from_mapping(request.form)
+    source_ids = request.form.getlist('sources') if request.form.get('job_sources_field') == '1' else None
+    return {
+        'name': (request.form.get('name') or '').strip(),
+        'titles_text': request.form.get('titles_text') or '',
+        'locations_text': request.form.get('locations_text') or '',
+        'schedule_type': request.form.get('schedule_type', 'once'),
+        'shuffle_queue': request.form.get('shuffle_queue') == 'on',
+        'max_jobs': int(request.form.get('max_jobs', 5) or 5),
+        'sources': sources if sources is not None else format_sources_csv(source_ids or []),
+        'source_ids': source_ids if source_ids is not None else None,
+        'mode': request.form.get('mode', 'both'),
+        'filter_remote': filters.remote,
+        'filter_relocation': filters.relocation,
+        'filter_visa_sponsorship': filters.visa_sponsorship,
     }
 
 
@@ -1553,9 +1617,19 @@ def batch_queue_list():
 def batch_queue_create():
     """Create a batch search queue job."""
     if request.method == 'POST':
-        payload = _batch_queue_form_payload()
         try:
-            batch_queue_repo.create_job(
+            sources = _parse_job_sources_from_form()
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return render_template(
+                'batch_queue_form.html',
+                job=None,
+                form=_batch_queue_form_from_request(),
+                schedule_labels=SCHEDULE_LABELS,
+            )
+        payload = _batch_queue_form_payload(sources)
+        try:
+            jobs = batch_queue_repo.create_jobs(
                 name=payload['name'],
                 titles=payload['titles'],
                 locations=payload['locations'],
@@ -1583,7 +1657,15 @@ def batch_queue_create():
                 },
                 schedule_labels=SCHEDULE_LABELS,
             )
-        flash('Batch search job queued.', 'success')
+        total_combinations = len(payload['titles']) * len(payload['locations'])
+        if len(jobs) == 1:
+            flash('Batch search job queued.', 'success')
+        else:
+            flash(
+                f'Large batch split into {len(jobs)} queue jobs '
+                f'({total_combinations} searches total).',
+                'success',
+            )
         return redirect(url_for('batch_queue_list'))
 
     return render_template(
@@ -1606,7 +1688,17 @@ def batch_queue_edit(job_id):
         return redirect(url_for('batch_queue_list'))
 
     if request.method == 'POST':
-        payload = _batch_queue_form_payload()
+        try:
+            sources = _parse_job_sources_from_form()
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return render_template(
+                'batch_queue_form.html',
+                job=job,
+                form=_batch_queue_form_from_request(),
+                schedule_labels=SCHEDULE_LABELS,
+            )
+        payload = _batch_queue_form_payload(sources)
         try:
             batch_queue_repo.update_job(
                 job_id,

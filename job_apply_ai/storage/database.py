@@ -186,7 +186,7 @@ def init_db(db_path: str | None = None) -> None:
                 locations_json TEXT NOT NULL DEFAULT '[]',
                 shuffle_queue INTEGER NOT NULL DEFAULT 0,
                 max_jobs INTEGER NOT NULL DEFAULT 5,
-                sources TEXT NOT NULL DEFAULT 'linkedin-mcp,adzuna,reed,indeed',
+                sources TEXT NOT NULL DEFAULT 'linkedin-mcp,linkedin,adzuna,reed,indeed,totaljobs,cv-library,remoteok,arbeitnow',
                 mode TEXT NOT NULL DEFAULT 'both',
                 search_filters_json TEXT NOT NULL DEFAULT '{}',
                 total_combinations INTEGER NOT NULL DEFAULT 0,
