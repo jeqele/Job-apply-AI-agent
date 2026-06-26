@@ -1,130 +1,144 @@
 {# Shared job card. Set manage_mode=true and pass folder/search/sort context for /jobs/manage. #}
 {% set manage_mode = manage_mode|default(false) %}
-{% set btn_size = 'btn-sm' if manage_mode else '' %}
+{% set btn_size = 'btn-sm' %}
 {% set match_analysis = job|profile_match_analysis %}
 {% set match_score = job|profile_match_score %}
 {% set ats_analysis = job|job_ats_analysis %}
 {% set workflow_status = job.workflow_status or 'new' %}
+{% set desc = job.description|default('', true)|trim %}
+{% set has_long_desc = desc|length > 140 %}
+{% set has_match_detail = match_analysis and (match_analysis.match_paragraph or match_analysis.mismatch_paragraph or match_analysis.reason) %}
+{% set has_details = has_match_detail or job.relocation_info or job.emails or job.matched_skills or has_long_desc %}
 
-<div class="card job-card">
-    <div class="card-header d-flex justify-content-between align-items-start gap-3 flex-wrap">
-        <div class="min-width-0 d-flex align-items-start gap-2">
+<article class="job-card" id="job-card-{{ job.id }}">
+    <div class="job-card-inner">
+        <div class="job-card-row d-flex align-items-start gap-2">
             {% if bulk_select|default(false) %}
                 <input type="checkbox"
                        class="form-check-input mt-1 job-select-checkbox flex-shrink-0"
                        value="{{ job.id }}"
                        aria-label="Select {{ job.title }}">
             {% endif %}
-            <div>
-                <h5 class="mb-1">{{ job.title }}</h5>
-                {% if manage_mode %}
-                    <span class="badge bg-light text-dark">#{{ job.id }}</span>
+            <div class="job-card-content flex-grow-1 min-width-0">
+                <div class="job-card-header-line d-flex flex-wrap align-items-start justify-content-between gap-2">
+                    <div class="min-width-0 flex-grow-1">
+                        <h6 class="job-card-title mb-0" title="{{ job.title }}">{{ job.title }}</h6>
+                        <div class="job-card-subline">
+                            <span class="job-card-company">{{ job.company }}</span>
+                            {% if manage_mode %}
+                                <span class="job-card-sep" aria-hidden="true">·</span>
+                                <span class="text-muted">#{{ job.id }}</span>
+                            {% endif %}
+                            {% if job.location %}
+                                <span class="job-card-sep" aria-hidden="true">·</span>
+                                <span class="job-card-location">{{ job.location }}</span>
+                            {% endif %}
+                            {% if manage_mode and job.updated_at %}
+                                <span class="job-card-sep" aria-hidden="true">·</span>
+                                <span>{{ job.updated_at }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="job-card-badges d-flex flex-wrap gap-1 justify-content-end flex-shrink-0">
+                        {% if manage_mode %}
+                            <span class="badge job-badge {{ status_badges.get(workflow_status, 'bg-secondary') }}">
+                                <i class="fas {{ status_icons.get(workflow_status, 'fa-folder') }} me-1"></i>{{ status_labels.get(workflow_status, workflow_status|job_status_label) }}
+                            </span>
+                        {% endif %}
+                        {% if job.source %}
+                            <span class="badge job-badge bg-dark">{{ job.source }}</span>
+                        {% endif %}
+                        {% if match_score is not none %}
+                            <span class="badge job-badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}"
+                                  title="{{ match_analysis.reason if match_analysis else 'Profile match' }}">
+                                <i class="fas fa-user-check me-1"></i>{{ match_score|round(0)|int }}%
+                                {% if manage_mode and match_analysis and match_analysis.method == 'ai' %}
+                                    <span class="opacity-75">AI</span>
+                                {% elif manage_mode and match_analysis and match_analysis.method == 'heuristic' %}
+                                    <span class="opacity-75">KW</span>
+                                {% endif %}
+                            </span>
+                        {% endif %}
+                        {% with compact=true %}
+                            {% include '_job_ats_score_badge.html' %}
+                        {% endwith %}
+                        {% if job.posted_days_ago is not none %}
+                            <span class="badge job-badge bg-light text-dark" title="Posted {{ job.posted_days_ago }} days ago">{{ job.posted_days_ago }}d</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                {% if job.work_type or job.salary or job.employment_type or job.seniority_level or job.visa_sponsorship or job.relocation_support or job.listing_benefit %}
+                    <div class="job-card-chips">
+                        {% if job.work_type %}
+                            <span class="job-card-chip bg-primary">{{ job.work_type }}</span>
+                        {% endif %}
+                        {% if job.salary %}
+                            <span class="job-card-chip bg-success">{{ job.salary }}</span>
+                        {% endif %}
+                        {% if job.employment_type %}
+                            <span class="job-card-chip bg-secondary">{{ job.employment_type }}</span>
+                        {% endif %}
+                        {% if job.seniority_level %}
+                            <span class="job-card-chip bg-info text-dark">{{ job.seniority_level }}</span>
+                        {% endif %}
+                        {% if job.visa_sponsorship %}
+                            <span class="job-card-chip {% if job.visa_sponsorship == 'Yes' %}bg-success{% elif job.visa_sponsorship == 'No' %}bg-danger{% else %}bg-light text-dark{% endif %}">Visa {{ job.visa_sponsorship }}</span>
+                        {% endif %}
+                        {% if job.relocation_support %}
+                            <span class="job-card-chip {% if job.relocation_support in ['Yes', 'Mentioned'] %}bg-success{% elif job.relocation_support == 'No' %}bg-danger{% else %}bg-light text-dark{% endif %}">Relo {{ job.relocation_support }}</span>
+                        {% endif %}
+                        {% if job.listing_benefit %}
+                            <span class="job-card-chip bg-warning text-dark">{{ job.listing_benefit }}</span>
+                        {% endif %}
+                    </div>
+                {% endif %}
+
+                {% if desc and not has_long_desc %}
+                    <p class="job-card-snippet mb-0">{{ desc }}</p>
+                {% elif desc %}
+                    <p class="job-card-snippet mb-0">{{ desc[:140] }}…</p>
+                {% endif %}
+
+                {% if has_details %}
+                    <button class="job-card-details-toggle btn btn-link btn-sm p-0"
+                            type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#job-details-{{ job.id }}"
+                            aria-expanded="false"
+                            aria-controls="job-details-{{ job.id }}">
+                        <i class="fas fa-chevron-down me-1 job-card-chevron"></i>Details
+                    </button>
+                    <div class="collapse job-card-details" id="job-details-{{ job.id }}">
+                        {% if has_long_desc %}
+                            <p class="job-card-desc-full">{{ desc }}</p>
+                        {% endif %}
+                        {% if has_match_detail %}
+                            {% include '_job_match_analysis_sections.html' %}
+                        {% endif %}
+                        {% if job.relocation_info %}
+                            <p class="job-card-note"><strong>Relocation:</strong> {{ job.relocation_info }}</p>
+                        {% endif %}
+                        {% if job.emails %}
+                            <p class="job-card-note mb-0">
+                                <i class="fas fa-envelope me-1"></i>
+                                <a href="mailto:{{ job.emails.split(',')[0].strip() }}">{{ job.emails }}</a>
+                            </p>
+                        {% endif %}
+                        {% if job.matched_skills %}
+                            <div class="job-card-skills">
+                                {% for skill in job.matched_skills %}
+                                    <span class="skills-badge">{{ skill }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
                 {% endif %}
             </div>
         </div>
-        <div class="d-flex flex-wrap gap-1 justify-content-end">
-            {% if manage_mode %}
-                <span class="badge {{ status_badges.get(workflow_status, 'bg-secondary') }}">
-                    <i class="fas {{ status_icons.get(workflow_status, 'fa-folder') }} me-1"></i>
-                    {{ status_labels.get(workflow_status, workflow_status|job_status_label) }}
-                </span>
-            {% endif %}
-            {% if job.source %}
-                <span class="badge bg-dark">{{ job.source }}</span>
-            {% endif %}
-            {% if match_score is not none %}
-                <span class="badge {% if match_score >= 70 %}bg-success{% elif match_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}"
-                      title="{{ match_analysis.reason if match_analysis else 'AI profile match rating' }}">
-                    <i class="fas fa-user-check me-1"></i>{{ match_score|round(0)|int }}% match
-                    {% if manage_mode and match_analysis and match_analysis.method == 'ai' %}
-                        <span class="opacity-75">· AI</span>
-                    {% elif manage_mode and match_analysis and match_analysis.method == 'heuristic' %}
-                        <span class="opacity-75">· KW</span>
-                    {% endif %}
-                </span>
-            {% endif %}
-            {% include '_job_ats_score_badge.html' %}
-            {% if job.posted_days_ago is not none %}
-                <span class="badge bg-light text-dark">{{ job.posted_days_ago }} days ago</span>
-            {% endif %}
-        </div>
-    </div>
-    <div class="card-body">
-        <div class="company-badge">
-            <i class="fas fa-building me-1"></i>{{ job.company }}
-            {% if job.location %}
-                <span class="ms-2"><i class="fas fa-location-dot me-1"></i>{{ job.location }}</span>
-            {% endif %}
-        </div>
 
-        {% if manage_mode and job.updated_at %}
-            <div class="job-meta-row">
-                <span><i class="fas fa-clock me-1"></i>Updated {{ job.updated_at }}</span>
-            </div>
-        {% endif %}
-
-        <div class="d-flex flex-wrap gap-2 mb-3">
-            {% if job.work_type %}
-                <span class="badge bg-primary">{{ job.work_type }}</span>
-            {% endif %}
-            {% if job.salary %}
-                <span class="badge bg-success">{{ job.salary }}</span>
-            {% endif %}
-            {% if job.employment_type %}
-                <span class="badge bg-secondary">{{ job.employment_type }}</span>
-            {% endif %}
-            {% if job.seniority_level %}
-                <span class="badge bg-info text-dark">{{ job.seniority_level }}</span>
-            {% endif %}
-            {% if job.visa_sponsorship %}
-                <span class="badge {% if job.visa_sponsorship == 'Yes' %}bg-success{% elif job.visa_sponsorship == 'No' %}bg-danger{% else %}bg-light text-dark{% endif %}">
-                    Visa: {{ job.visa_sponsorship }}
-                </span>
-            {% endif %}
-            {% if job.relocation_support %}
-                <span class="badge {% if job.relocation_support in ['Yes', 'Mentioned'] %}bg-success{% elif job.relocation_support == 'No' %}bg-danger{% else %}bg-light text-dark{% endif %}">
-                    Relocation: {{ job.relocation_support }}
-                </span>
-            {% endif %}
-            {% if job.listing_benefit %}
-                <span class="badge bg-warning text-dark">{{ job.listing_benefit }}</span>
-            {% endif %}
-        </div>
-
-        {% if job.relocation_info %}
-            <p class="text-muted small mb-3"><strong>Relocation note:</strong> {{ job.relocation_info }}</p>
-        {% endif %}
-
-        {% if match_analysis %}
-            <div class="mb-3">
-                {% include '_job_match_analysis_sections.html' %}
-            </div>
-        {% endif %}
-
-        {% if job.emails %}
-            <div class="mb-3">
-                <h6><i class="fas fa-envelope me-2"></i>Contact emails</h6>
-                <p class="mb-0"><a href="mailto:{{ job.emails.split(',')[0].strip() }}">{{ job.emails }}</a></p>
-            </div>
-        {% else %}
-            <p class="text-muted small mb-3">
-                <i class="fas fa-envelope-open-text me-1"></i>No direct email found. Apply via the job link.
-            </p>
-        {% endif %}
-
-        {% if job.matched_skills %}
-            <div class="mt-3">
-                <h6><i class="fas fa-tools me-2"></i>Matched Skills</h6>
-                <div>
-                    {% for skill in job.matched_skills %}
-                        <span class="skills-badge">{{ skill }}</span>
-                    {% endfor %}
-                </div>
-            </div>
-        {% endif %}
-
-        <div class="job-actions">
+        <div class="job-card-actions">
             {% include '_job_item_actions.html' %}
         </div>
     </div>
-</div>
+</article>
