@@ -112,6 +112,16 @@ def main():
         action='store_true',
         help='Randomize the order of title × location searches',
     )
+
+    worker_parser = subparsers.add_parser(
+        'batch-worker',
+        help='Run the batch search queue worker (polls jobs.db)',
+    )
+    worker_parser.add_argument(
+        '--once',
+        action='store_true',
+        help='Process at most one pending job then exit',
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -320,6 +330,11 @@ def main():
             len(queue),
             failed,
         )
+
+    elif args.command == 'batch-worker':
+        from job_apply_ai.worker.batch_search_worker import run_worker
+
+        run_worker(once=args.once)
     
     else:
         parser.print_help()

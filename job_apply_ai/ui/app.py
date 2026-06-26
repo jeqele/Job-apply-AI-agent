@@ -19,7 +19,6 @@ from job_apply_ai.scraper.linkedin import LinkedInScraper
 from job_apply_ai.scraper.linkedin_job_url import parse_linkedin_job_url
 from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.batch_search import (
-    batch_search_pause,
     build_search_queue,
     decode_uploaded_text,
     parse_lines,
@@ -103,6 +102,13 @@ from job_apply_ai.ui.cv_tasks import (
 )
 from job_apply_ai.utils.helpers import ensure_directory_exists, sanitize_filename
 from job_apply_ai.storage.database import init_db
+from job_apply_ai.storage.batch_queue_repository import (
+    BatchQueueRepository,
+    SCHEDULE_LABELS,
+    STATUS_LABELS,
+    TERMINAL_STATUSES,
+    to_task_snapshot,
+)
 from job_apply_ai.storage.job_repository import JobRepository
 from job_apply_ai.storage.user_profile import (
     UserProfileRepository,
@@ -173,6 +179,7 @@ ensure_directory_exists(app.config['JOBS_OUTPUT_DIR'])
 # Initialize SQLite database
 init_db()
 job_repo = JobRepository()
+batch_queue_repo = BatchQueueRepository()
 profile_repo = UserProfileRepository()
 app_settings_repo = AppSettingsRepository()
 
@@ -190,10 +197,32 @@ BACKGROUND_TASK_SESSION_KEYS = (
 app.config['SESSION_TYPE'] = 'filesystem'
 
 
+def _resolve_task(task_id: str) -> dict | None:
+    """Return an in-memory task or a queue-backed batch search snapshot."""
+    task = get_task(task_id)
+    if task:
+        return task
+    queue_job = batch_queue_repo.get_job_by_task_id(task_id)
+    if queue_job:
+        return to_task_snapshot(queue_job)
+    return None
+
+
 def _sync_session_background_task(session_key: str) -> str | None:
     """Drop stale session task pointers and return the task id only if still active."""
     task_id = session.get(session_key)
     if not task_id:
+        return None
+
+    if session_key == 'batch_search_active':
+        queue_job = batch_queue_repo.get_job_by_task_id(task_id)
+        if queue_job:
+            if queue_job['status'] in TERMINAL_STATUSES:
+                session.pop(session_key, None)
+                return None
+            if queue_job['status'] in ('pending', 'running', 'paused'):
+                return task_id
+        session.pop(session_key, None)
         return None
 
     task = get_task(task_id)
@@ -273,7 +302,7 @@ def _active_background_tasks() -> list[dict]:
         task_id = session.get(session_key)
         if not task_id:
             continue
-        task = get_task(task_id)
+        task = _resolve_task(task_id)
         if not task or task.get('status') not in ('pending', 'running', 'paused'):
             continue
         progress_url = _background_task_progress_url(task_id, task)
@@ -1038,146 +1067,6 @@ def _run_single_search_task(
     )
 
 
-def _run_batch_search_task(
-    task_id: str,
-    queue: list[tuple[str, str]],
-    max_jobs: int,
-    sources: str,
-    source_list: list[str],
-    mode: str,
-    profile: dict,
-    search_filters: SearchFilters | None = None,
-) -> None:
-    total = len(queue)
-    unique_titles = len({keyword for keyword, _ in queue})
-    unique_locations = len({location for _, location in queue})
-    search_run_id = job_repo.create_search_run(
-        f'batch: {unique_titles} title(s)',
-        f'batch: {unique_locations} location(s)',
-        sources,
-        mode,
-    )
-
-    total_jobs_saved = 0
-    failed_searches: list[dict] = []
-    stopped = False
-    searches_completed = 0
-
-    update_task(
-        task_id,
-        status='running',
-        step='searching',
-        message=f'Starting batch search ({total} combinations)…',
-        percent=1,
-        meta={'total_searches': total},
-    )
-
-    for index, (keyword, location) in enumerate(queue, start=1):
-        try:
-            task_control_checkpoint(task_id)
-        except TaskStopped:
-            stopped = True
-            break
-
-        percent = max(1, min(99, int(((index - 1) / total) * 100)))
-        update_task(
-            task_id,
-            status='running',
-            step='searching',
-            message=f'Searching {index} of {total}',
-            percent=percent,
-            meta={
-                'current_index': index,
-                'total_searches': total,
-                'keyword': keyword,
-                'location': location,
-            },
-        )
-
-        try:
-            jobs = aggregate_search_jobs(
-                keyword,
-                location,
-                max_jobs=max_jobs,
-                sources=source_list,
-                mode=mode,
-                enrich_details=True,
-                search_filters=search_filters,
-            )
-            if jobs:
-                processed_jobs = _enrich_jobs_with_skills(jobs)
-                processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
-                job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
-                total_jobs_saved += len(processed_jobs)
-            searches_completed += 1
-        except Exception as exc:
-            logger.error(
-                'Batch search failed for %r in %r: %s',
-                keyword,
-                location,
-                exc,
-            )
-            failed_searches.append(
-                {
-                    'keyword': keyword,
-                    'location': location,
-                    'error': str(exc),
-                }
-            )
-            searches_completed += 1
-
-        if index < total:
-            batch_search_pause(source_list)
-
-    if stopped:
-        if total_jobs_saved == 0:
-            fail_task(task_id, 'Batch search stopped before saving any jobs.')
-            return
-
-        message = (
-            f'Batch search stopped — saved {total_jobs_saved} jobs '
-            f'after {searches_completed} of {total} searches'
-        )
-        if failed_searches:
-            message += f' ({len(failed_searches)} searches failed)'
-        complete_task(
-            task_id,
-            {
-                'search_run_id': search_run_id,
-                'total_jobs': total_jobs_saved,
-                'searches_run': searches_completed,
-                'failed_searches': failed_searches,
-                'stopped': True,
-            },
-            message=message,
-        )
-        return
-
-    if total_jobs_saved == 0:
-        detail = (
-            f'{len(failed_searches)} of {total} searches failed.'
-            if failed_searches
-            else 'No jobs matched any title/location combination.'
-        )
-        fail_task(task_id, f'Batch search found no jobs. {detail}')
-        return
-
-    message = f'Batch search complete — saved {total_jobs_saved} jobs'
-    if failed_searches:
-        message += f' ({len(failed_searches)} searches failed)'
-
-    complete_task(
-        task_id,
-        {
-            'search_run_id': search_run_id,
-            'total_jobs': total_jobs_saved,
-            'searches_run': total,
-            'failed_searches': failed_searches,
-        },
-        message=message,
-    )
-
-
 def _read_batch_lines_from_request(field_name: str, text_field_name: str) -> list[str]:
     """Read newline-separated values from an uploaded file or text area."""
     upload = request.files.get(field_name)
@@ -1512,7 +1401,7 @@ def search_jobs():
 
 @app.route('/search/batch', methods=['POST'])
 def batch_search_jobs():
-    """Queue a batch search: every job title × every location."""
+    """Enqueue a one-time batch search for the worker process."""
     titles = _read_batch_lines_from_request('titles_file', 'titles_text')
     locations = _read_batch_lines_from_request('locations_file', 'locations_text')
     queue = build_search_queue(titles, locations)
@@ -1528,32 +1417,31 @@ def batch_search_jobs():
     sources = request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed')
     mode = request.form.get('mode', 'both')
     search_filters = SearchFilters.from_mapping(request.form)
-    source_list = [source.strip() for source in sources.split(',') if source.strip()]
-    profile = profile_repo.get_profile()
 
-    task_id = create_task(
-        'batch_search',
-        meta={
-            'total_searches': len(queue),
-            'titles': len(titles),
-            'locations': len(locations),
-        },
+    try:
+        job = batch_queue_repo.create_job(
+            name=f"Dashboard batch ({len(queue)} searches)",
+            titles=titles,
+            locations=locations,
+            schedule_type='once',
+            shuffle_queue=request.form.get('shuffle_queue') == 'on',
+            max_jobs=max_jobs,
+            sources=sources,
+            mode=mode,
+            search_filters=search_filters,
+            run_immediately=True,
+        )
+    except ValueError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('index'))
+
+    session['batch_search_active'] = job['task_id']
+    flash(
+        'Batch search queued. The worker will pick it up shortly — '
+        'start it with: python -m job_apply_ai batch-worker',
+        'success',
     )
-    session['batch_search_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_batch_search_task(
-            task_id,
-            queue,
-            max_jobs,
-            sources,
-            source_list,
-            mode,
-            profile,
-            search_filters,
-        ),
-    )
-    return redirect(url_for('batch_search_progress', task_id=task_id))
+    return redirect(url_for('batch_search_progress', task_id=job['task_id']))
 
 
 @app.route('/api/search/suggest-titles', methods=['POST'])
@@ -1574,7 +1462,7 @@ def suggest_search_titles():
 @app.route('/search/batch/<task_id>')
 def batch_search_progress(task_id):
     """Show progress while batch job search runs."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task:
         flash('Batch search task not found', 'error')
         return redirect(url_for('index'))
@@ -1595,7 +1483,7 @@ def batch_search_progress(task_id):
 @app.route('/search/batch/complete/<task_id>')
 def batch_search_complete(task_id):
     """Show jobs found by a completed batch search."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Batch search result not found', 'error')
         return redirect(url_for('index'))
@@ -1630,6 +1518,187 @@ def batch_search_complete(task_id):
         current_sort='match_desc',
         job_sort_options=JOB_SORT_OPTIONS,
     )
+
+
+def _batch_queue_form_payload() -> dict:
+    """Parse shared batch queue create/edit form fields."""
+    titles = parse_lines(request.form.get('titles_text') or '')
+    locations = parse_lines(request.form.get('locations_text') or '')
+    return {
+        'name': (request.form.get('name') or '').strip(),
+        'titles': titles,
+        'locations': locations,
+        'schedule_type': request.form.get('schedule_type', 'once'),
+        'shuffle_queue': request.form.get('shuffle_queue') == 'on',
+        'max_jobs': int(request.form.get('max_jobs', 5)),
+        'sources': request.form.get('sources', 'linkedin-mcp,adzuna,reed,indeed'),
+        'mode': request.form.get('mode', 'both'),
+        'search_filters': SearchFilters.from_mapping(request.form),
+    }
+
+
+@app.route('/batch-queue')
+def batch_queue_list():
+    """List batch search queue jobs."""
+    jobs = batch_queue_repo.list_jobs()
+    return render_template(
+        'batch_queue.html',
+        jobs=jobs,
+        status_labels=STATUS_LABELS,
+        schedule_labels=SCHEDULE_LABELS,
+    )
+
+
+@app.route('/batch-queue/new', methods=['GET', 'POST'])
+def batch_queue_create():
+    """Create a batch search queue job."""
+    if request.method == 'POST':
+        payload = _batch_queue_form_payload()
+        try:
+            batch_queue_repo.create_job(
+                name=payload['name'],
+                titles=payload['titles'],
+                locations=payload['locations'],
+                schedule_type=payload['schedule_type'],
+                shuffle_queue=payload['shuffle_queue'],
+                max_jobs=payload['max_jobs'],
+                sources=payload['sources'],
+                mode=payload['mode'],
+                search_filters=payload['search_filters'],
+                run_immediately=True,
+            )
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            filters = payload['search_filters']
+            return render_template(
+                'batch_queue_form.html',
+                job=None,
+                form={
+                    **payload,
+                    'titles_text': '\n'.join(payload['titles']),
+                    'locations_text': '\n'.join(payload['locations']),
+                    'filter_remote': filters.remote,
+                    'filter_relocation': filters.relocation,
+                    'filter_visa_sponsorship': filters.visa_sponsorship,
+                },
+                schedule_labels=SCHEDULE_LABELS,
+            )
+        flash('Batch search job queued.', 'success')
+        return redirect(url_for('batch_queue_list'))
+
+    return render_template(
+        'batch_queue_form.html',
+        job=None,
+        form={},
+        schedule_labels=SCHEDULE_LABELS,
+    )
+
+
+@app.route('/batch-queue/<int:job_id>/edit', methods=['GET', 'POST'])
+def batch_queue_edit(job_id):
+    """Edit a pending or paused batch search queue job."""
+    job = batch_queue_repo.get_job(job_id)
+    if not job:
+        flash('Queue job not found', 'error')
+        return redirect(url_for('batch_queue_list'))
+    if job['status'] not in ('pending', 'paused'):
+        flash('Only pending or paused jobs can be edited.', 'error')
+        return redirect(url_for('batch_queue_list'))
+
+    if request.method == 'POST':
+        payload = _batch_queue_form_payload()
+        try:
+            batch_queue_repo.update_job(
+                job_id,
+                name=payload['name'],
+                titles=payload['titles'],
+                locations=payload['locations'],
+                schedule_type=payload['schedule_type'],
+                shuffle_queue=payload['shuffle_queue'],
+                max_jobs=payload['max_jobs'],
+                sources=payload['sources'],
+                mode=payload['mode'],
+                search_filters=payload['search_filters'],
+            )
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return render_template(
+                'batch_queue_form.html',
+                job=job,
+                form=payload,
+                schedule_labels=SCHEDULE_LABELS,
+            )
+        flash('Batch search job updated.', 'success')
+        return redirect(url_for('batch_queue_list'))
+
+    form = {
+        'name': job['name'],
+        'titles_text': '\n'.join(job['titles']),
+        'locations_text': '\n'.join(job['locations']),
+        'schedule_type': job['schedule_type'],
+        'shuffle_queue': job['shuffle_queue'],
+        'max_jobs': job['max_jobs'],
+        'sources': job['sources'],
+        'mode': job['mode'],
+        'filter_remote': job['search_filters'].get('remote'),
+        'filter_relocation': job['search_filters'].get('relocation'),
+        'filter_visa_sponsorship': job['search_filters'].get('visa_sponsorship'),
+    }
+    return render_template(
+        'batch_queue_form.html',
+        job=job,
+        form=form,
+        schedule_labels=SCHEDULE_LABELS,
+    )
+
+
+@app.route('/batch-queue/<int:job_id>/delete', methods=['POST'])
+def batch_queue_delete(job_id):
+    """Delete a batch search queue job."""
+    try:
+        if not batch_queue_repo.delete_job(job_id):
+            flash('Queue job not found', 'error')
+        else:
+            flash('Batch search job deleted.', 'success')
+    except ValueError as exc:
+        flash(str(exc), 'error')
+    return redirect(url_for('batch_queue_list'))
+
+
+@app.route('/batch-queue/<int:job_id>/pause', methods=['POST'])
+def batch_queue_pause(job_id):
+    """Pause a running batch search queue job."""
+    if batch_queue_repo.pause_job(job_id):
+        flash('Batch search paused.', 'success')
+    else:
+        flash('Job is not running.', 'warning')
+    return redirect(url_for('batch_queue_list'))
+
+
+@app.route('/batch-queue/<int:job_id>/resume', methods=['POST'])
+def batch_queue_resume(job_id):
+    """Resume a paused batch search queue job."""
+    if batch_queue_repo.resume_job(job_id):
+        flash('Batch search resumed.', 'success')
+    else:
+        flash('Job is not paused.', 'warning')
+    return redirect(url_for('batch_queue_list'))
+
+
+@app.route('/batch-queue/<int:job_id>/stop', methods=['POST'])
+def batch_queue_stop(job_id):
+    """Request stop for a batch search queue job."""
+    job = batch_queue_repo.get_job(job_id)
+    if not job:
+        flash('Queue job not found', 'error')
+    elif job['status'] == 'pending':
+        batch_queue_repo.cancel_job(job_id)
+        flash('Pending job cancelled.', 'success')
+    elif batch_queue_repo.request_stop(job_id):
+        flash('Stop requested — worker will halt after the current search.', 'success')
+    else:
+        flash('Job cannot be stopped in its current state.', 'warning')
+    return redirect(url_for('batch_queue_list'))
 
 
 @app.route('/search/<task_id>')
@@ -3117,7 +3186,7 @@ def release_ats_friendly_lock():
 @app.route('/api/cv_tasks/<task_id>/status')
 def cv_task_status(task_id):
     """Poll background CV generation progress."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task:
         return jsonify({'error': 'Task not found'}), 404
     return jsonify(task)
@@ -3126,6 +3195,23 @@ def cv_task_status(task_id):
 @app.route('/api/cv_tasks/<task_id>/control', methods=['POST'])
 def control_background_task(task_id):
     """Pause, resume, or stop a controllable background task."""
+    queue_job = batch_queue_repo.get_job_by_task_id(task_id)
+    if queue_job:
+        payload = request.get_json(silent=True) or {}
+        action = (payload.get('action') or request.form.get('action', '')).strip().lower()
+        handlers = {
+            'pause': lambda: batch_queue_repo.pause_job(queue_job['id']),
+            'resume': lambda: batch_queue_repo.resume_job(queue_job['id']),
+            'stop': lambda: batch_queue_repo.request_stop(queue_job['id']),
+        }
+        handler = handlers.get(action)
+        if not handler:
+            return jsonify({'error': 'Invalid action'}), 400
+        if not handler():
+            return jsonify({'error': f'Cannot {action} task in its current state'}), 409
+        updated = to_task_snapshot(batch_queue_repo.get_job_by_task_id(task_id))
+        return jsonify(updated)
+
     task = get_task(task_id)
     if not task or task.get('task_type') not in CONTROLLABLE_TASK_TYPES:
         return jsonify({'error': 'Task not found'}), 404

@@ -295,8 +295,13 @@
                                             </div>
                                         </div>
                                         <button type="submit" class="btn btn-primary mt-3">
-                                            <i class="fas fa-play me-2"></i>Start batch search
+                                            <i class="fas fa-clock me-2"></i>Queue batch search
                                         </button>
+                                        <div class="form-text mt-2">
+                                            Runs in the background worker — start with
+                                            <code>python -m job_apply_ai batch-worker</code>.
+                                            <a href="{{ url_for('batch_queue_list') }}">Manage queue</a>
+                                        </div>
                                     </form>
                                 </div>
                             </div>

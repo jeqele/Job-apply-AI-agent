@@ -175,6 +175,41 @@ def init_db(db_path: str | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_dev_logs_category ON dev_logs(category);
             CREATE INDEX IF NOT EXISTS idx_dev_logs_task_id ON dev_logs(task_id);
             CREATE INDEX IF NOT EXISTS idx_dev_logs_created_at ON dev_logs(created_at);
+
+            CREATE TABLE IF NOT EXISTS batch_search_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                control TEXT,
+                schedule_type TEXT NOT NULL DEFAULT 'once',
+                titles_json TEXT NOT NULL DEFAULT '[]',
+                locations_json TEXT NOT NULL DEFAULT '[]',
+                shuffle_queue INTEGER NOT NULL DEFAULT 0,
+                max_jobs INTEGER NOT NULL DEFAULT 5,
+                sources TEXT NOT NULL DEFAULT 'linkedin-mcp,adzuna,reed,indeed',
+                mode TEXT NOT NULL DEFAULT 'both',
+                search_filters_json TEXT NOT NULL DEFAULT '{}',
+                total_combinations INTEGER NOT NULL DEFAULT 0,
+                current_index INTEGER NOT NULL DEFAULT 0,
+                progress_percent INTEGER NOT NULL DEFAULT 0,
+                progress_message TEXT NOT NULL DEFAULT '',
+                progress_step TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                search_run_id INTEGER,
+                task_id TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                next_run_at TEXT,
+                last_run_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_batch_search_jobs_status
+            ON batch_search_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_batch_search_jobs_task_id
+            ON batch_search_jobs(task_id);
+            CREATE INDEX IF NOT EXISTS idx_batch_search_jobs_next_run
+            ON batch_search_jobs(next_run_at);
             """
         )
         conn.commit()

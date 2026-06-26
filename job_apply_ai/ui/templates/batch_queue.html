@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'Batch Search Queue' %}
+    {% include '_app_head.html' %}
+</head>
+<body>
+    {% include '_config_nav.html' %}
+
+    <div class="container config-page">
+        <div class="page-intro d-flex flex-wrap justify-content-between align-items-start gap-3">
+            <div>
+                <h1>Batch search queue</h1>
+                <p class="mb-0">
+                    Manage scheduled and one-time batch searches. Jobs run in the
+                    <strong>batch-worker</strong> process, separate from the web UI.
+                </p>
+            </div>
+            <a href="{{ url_for('batch_queue_create') }}" class="btn btn-primary">
+                <i class="fas fa-plus me-2"></i>New queue job
+            </a>
+        </div>
+
+        {% include '_flashes.html' %}
+
+        <div class="section-card">
+            <div class="section-card-header">
+                <span><i class="fas fa-list me-2 text-primary"></i>Queue jobs</span>
+            </div>
+            <div class="section-card-body p-0">
+                {% if jobs %}
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0 align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Schedule</th>
+                                    <th>Status</th>
+                                    <th>Searches</th>
+                                    <th>Progress</th>
+                                    <th>Next run</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for job in jobs %}
+                                    <tr>
+                                        <td>
+                                            <div class="fw-semibold">{{ job.name or ('Job #' ~ job.id) }}</div>
+                                            <div class="small text-muted">#{{ job.id }}</div>
+                                        </td>
+                                        <td>{{ schedule_labels.get(job.schedule_type, job.schedule_type) }}</td>
+                                        <td>
+                                            <span class="badge bg-secondary">{{ status_labels.get(job.status, job.status) }}</span>
+                                        </td>
+                                        <td>{{ job.total_combinations }}</td>
+                                        <td style="min-width: 140px;">
+                                            {% if job.status == 'running' %}
+                                                <div class="small">{{ job.progress_message or 'Running…' }}</div>
+                                                <div class="progress mt-1" style="height: 6px;">
+                                                    <div class="progress-bar" style="width: {{ job.progress_percent }}%;"></div>
+                                                </div>
+                                            {% elif job.status == 'completed' and job.result.total_jobs is defined %}
+                                                <span class="small text-muted">{{ job.result.total_jobs }} jobs saved</span>
+                                            {% else %}
+                                                <span class="small text-muted">{{ job.progress_message or '—' }}</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if job.next_run_at %}
+                                                <span class="small">{{ job.next_run_at }}</span>
+                                            {% else %}
+                                                <span class="text-muted">—</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="text-end">
+                                            <div class="d-flex flex-wrap gap-1 justify-content-end">
+                                                {% if job.status in ('pending', 'running', 'paused') and job.task_id %}
+                                                    <a href="{{ url_for('batch_search_progress', task_id=job.task_id) }}" class="btn btn-sm btn-outline-primary">Progress</a>
+                                                {% elif job.status == 'completed' and job.task_id %}
+                                                    <a href="{{ url_for('batch_search_complete', task_id=job.task_id) }}" class="btn btn-sm btn-outline-primary">Results</a>
+                                                {% endif %}
+                                                {% if job.status in ('pending', 'paused') %}
+                                                    <a href="{{ url_for('batch_queue_edit', job_id=job.id) }}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                                                {% endif %}
+                                                {% if job.status == 'running' %}
+                                                    <form method="post" action="{{ url_for('batch_queue_pause', job_id=job.id) }}" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-outline-warning">Pause</button>
+                                                    </form>
+                                                {% elif job.status == 'paused' %}
+                                                    <form method="post" action="{{ url_for('batch_queue_resume', job_id=job.id) }}" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-outline-success">Resume</button>
+                                                    </form>
+                                                {% endif %}
+                                                {% if job.status in ('pending', 'running', 'paused') %}
+                                                    <form method="post" action="{{ url_for('batch_queue_stop', job_id=job.id) }}" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger">Stop</button>
+                                                    </form>
+                                                {% endif %}
+                                                {% if job.status != 'running' %}
+                                                    <form method="post" action="{{ url_for('batch_queue_delete', job_id=job.id) }}" class="d-inline" onsubmit="return confirm('Delete this queue job?');">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                                    </form>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="p-4 text-center text-muted">
+                        No batch search jobs yet.
+                        <a href="{{ url_for('batch_queue_create') }}">Create one</a>
+                        or queue a search from the dashboard.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="alert alert-light border mt-4 mb-0">
+            <strong>Worker command:</strong>
+            <code>python -m job_apply_ai batch-worker</code>
+            <span class="text-muted ms-2">Poll interval: <code>BATCH_WORKER_POLL_SECONDS</code> (default 5s)</span>
+        </div>
+    </div>
+</body>
+</html>

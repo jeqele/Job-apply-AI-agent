@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'Batch Queue Job' %}
+    {% include '_app_head.html' %}
+</head>
+<body>
+    {% include '_config_nav.html' %}
+
+    <div class="container config-page">
+        <div class="page-intro">
+            <h1>{% if job %}Edit{% else %}New{% endif %} batch search job</h1>
+            <p>Every job title is searched in every location. Recurring jobs re-queue after each successful run.</p>
+        </div>
+
+        {% include '_flashes.html' %}
+
+        <form method="post" class="section-card">
+            <div class="section-card-body">
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label for="name" class="form-label">Job name</label>
+                        <input type="text" class="form-control" id="name" name="name"
+                               value="{{ form.name or (job.name if job else '') }}"
+                               placeholder="e.g. Weekly remote sweep">
+                    </div>
+                    <div class="col-md-6">
+                        <label for="titles_text" class="form-label">Job titles</label>
+                        <textarea class="form-control font-monospace" id="titles_text" name="titles_text" rows="8" required>{% if form.titles_text is defined %}{{ form.titles_text }}{% elif form.titles is defined %}{{ form.titles | join('\n') }}{% elif job %}{{ job.titles | join('\n') }}{% endif %}</textarea>
+                        <div class="form-text">One title per line. Lines starting with # are ignored.</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="locations_text" class="form-label">Locations</label>
+                        <textarea class="form-control font-monospace" id="locations_text" name="locations_text" rows="8" required>{% if form.locations_text is defined %}{{ form.locations_text }}{% elif form.locations is defined %}{{ form.locations | join('\n') }}{% elif job %}{{ job.locations | join('\n') }}{% endif %}</textarea>
+                    </div>
+                    <div class="col-sm-6 col-md-4">
+                        <label for="schedule_type" class="form-label">Schedule</label>
+                        <select class="form-select" id="schedule_type" name="schedule_type">
+                            {% for value, label in schedule_labels.items() %}
+                                <option value="{{ value }}" {% if (form.schedule_type or (job.schedule_type if job else 'once')) == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-sm-6 col-md-4">
+                        <label for="max_jobs" class="form-label">Jobs per search</label>
+                        <input type="number" class="form-control" id="max_jobs" name="max_jobs"
+                               value="{{ form.max_jobs or (job.max_jobs if job else 5) }}" min="1" max="20">
+                    </div>
+                    <div class="col-sm-6 col-md-4">
+                        <label for="mode" class="form-label">Fetch mode</label>
+                        <select class="form-select" id="mode" name="mode">
+                            {% set current_mode = form.mode or (job.mode if job else 'both') %}
+                            <option value="both" {% if current_mode == 'both' %}selected{% endif %}>API + scrape</option>
+                            <option value="api" {% if current_mode == 'api' %}selected{% endif %}>API only</option>
+                            <option value="scrape" {% if current_mode == 'scrape' %}selected{% endif %}>Scrape only</option>
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <label for="sources" class="form-label">Job sources</label>
+                        <input type="text" class="form-control" id="sources" name="sources"
+                               value="{{ form.sources or (job.sources if job else 'linkedin-mcp,adzuna,reed,indeed') }}">
+                    </div>
+                    {% set id_prefix = 'queue_' %}
+                    {% set filter_remote = form.filter_remote if form.filter_remote is defined else (job.search_filters.remote if job else false) %}
+                    {% set filter_relocation = form.filter_relocation if form.filter_relocation is defined else (job.search_filters.relocation if job else false) %}
+                    {% set filter_visa = form.filter_visa_sponsorship if form.filter_visa_sponsorship is defined else (job.search_filters.visa_sponsorship if job else false) %}
+                    <div class="col-12">
+                        <fieldset class="search-filter-fieldset border rounded p-3">
+                            <legend class="form-label mb-2">Job preferences</legend>
+                            <div class="d-flex flex-wrap gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="queue_filter_remote" name="filter_remote" {% if filter_remote %}checked{% endif %}>
+                                    <label class="form-check-label" for="queue_filter_remote">Remote</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="queue_filter_relocation" name="filter_relocation" {% if filter_relocation %}checked{% endif %}>
+                                    <label class="form-check-label" for="queue_filter_relocation">Relocation support</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="queue_filter_visa_sponsorship" name="filter_visa_sponsorship" {% if filter_visa %}checked{% endif %}>
+                                    <label class="form-check-label" for="queue_filter_visa_sponsorship">Visa sponsorship</label>
+                                </div>
+                            </div>
+                        </fieldset>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="shuffle_queue" name="shuffle_queue"
+                                   {% if form.shuffle_queue or (job.shuffle_queue if job else false) %}checked{% endif %}>
+                            <label class="form-check-label" for="shuffle_queue">Randomize search order</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        {% if job %}Save changes{% else %}Queue job{% endif %}
+                    </button>
+                    <a href="{{ url_for('batch_queue_list') }}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </div>
+        </form>
+    </div>
+</body>
+</html>
