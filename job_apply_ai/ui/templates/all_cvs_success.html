@@ -3,6 +3,7 @@
 <head>
     {% set page_title = 'Batch CVs Complete' %}
     {% include '_app_head.html' %}
+    {% include '_job_card_styles.html' %}
     <style>
         .success-header {
             background: var(--hh-success-bg);
@@ -210,6 +211,12 @@
                                             </a>
                                             {% endif %}
                                         </div>
+                                        {% set match_analysis = job|profile_match_analysis %}
+                                        {% if match_analysis %}
+                                            <div class="mt-2">
+                                                {% include '_job_match_analysis_sections.html' %}
+                                            </div>
+                                        {% endif %}
                                     </div>
                                 {% endfor %}
                             </div>
@@ -240,6 +247,12 @@
                                                 <i class="fas fa-external-link-alt"></i>
                                             </a>
                                         </div>
+                                        {% set match_analysis = job|profile_match_analysis %}
+                                        {% if match_analysis %}
+                                            <div class="mt-2">
+                                                {% include '_job_match_analysis_sections.html' %}
+                                            </div>
+                                        {% endif %}
                                     </div>
                                 {% endfor %}
                             </div>

@@ -5,7 +5,8 @@
 $ErrorActionPreference = "Stop"
 
 $hostAddr = if ($env:LINKEDIN_MCP_HOST) { $env:LINKEDIN_MCP_HOST } else { "127.0.0.1" }
-$port = if ($env:LINKEDIN_MCP_PORT) { $env:LINKEDIN_MCP_PORT } else { "8080" }
+# Default 8765 — 8080 is often taken by Docker on Windows.
+$port = if ($env:LINKEDIN_MCP_PORT) { $env:LINKEDIN_MCP_PORT } else { "8765" }
 $path = if ($env:LINKEDIN_MCP_PATH) { $env:LINKEDIN_MCP_PATH } else { "/mcp" }
 
 Write-Host "Starting LinkedIn MCP sidecar at http://${hostAddr}:${port}${path}"

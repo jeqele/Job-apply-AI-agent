@@ -11,7 +11,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MCP_URL = "http://127.0.0.1:8080/mcp"
+DEFAULT_MCP_URL = "http://127.0.0.1:8765/mcp"
 
 
 class LinkedInMcpError(RuntimeError):

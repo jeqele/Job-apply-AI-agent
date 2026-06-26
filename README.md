@@ -143,7 +143,9 @@ HermesHire can search LinkedIn through a local [linkedin-mcp-server](https://git
 ./scripts/start-linkedin-mcp.sh
 ```
 
-**Use in searches:** include `linkedin-mcp` in job sources (it is the default in the web UI). Configure the sidecar URL in `.env` if needed (`LINKEDIN_MCP_URL=http://127.0.0.1:8080/mcp`).
+**Use in searches:** include `linkedin-mcp` in job sources (it is the default in the web UI). Configure the sidecar URL in `.env` if needed (`LINKEDIN_MCP_URL=http://127.0.0.1:8765/mcp`).
+
+**Port conflict on Windows:** Docker often binds port 8080. The start scripts default to **8765** instead. If you change the port, set both `LINKEDIN_MCP_PORT` when starting the sidecar and `LINKEDIN_MCP_URL` in `.env`.
 
 **Rate limits and account safety:** LinkedIn does not publish a safe requests-per-hour limit. The MCP server queues tool calls sequentially, but batch searches still issue many requests. Use conservative settings when `linkedin-mcp` is enabled:
 

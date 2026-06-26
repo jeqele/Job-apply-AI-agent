@@ -6,7 +6,8 @@
 set -euo pipefail
 
 HOST="${LINKEDIN_MCP_HOST:-127.0.0.1}"
-PORT="${LINKEDIN_MCP_PORT:-8080}"
+# Default 8765 — 8080 is often taken by Docker.
+PORT="${LINKEDIN_MCP_PORT:-8765}"
 PATH_SUFFIX="${LINKEDIN_MCP_PATH:-/mcp}"
 
 echo "Starting LinkedIn MCP sidecar at http://${HOST}:${PORT}${PATH_SUFFIX}"
