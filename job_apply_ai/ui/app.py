@@ -2398,6 +2398,64 @@ def import_profile_json():
     return redirect(url_for('user_profile'))
 
 
+@app.route('/backup/export')
+def export_backup_route():
+    """Download a full backup zip (profile, jobs, search history, CV artifacts)."""
+    from job_apply_ai.storage.backup import backup_filename, export_backup
+
+    profile = profile_repo.get_profile()
+    buffer = export_backup(data_dir=app.config['UPLOAD_FOLDER'])
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=backup_filename(profile),
+        mimetype='application/zip',
+    )
+
+
+@app.route('/backup/import', methods=['POST'])
+def import_backup_route():
+    """Restore profile, jobs, and CV artifacts from a backup zip."""
+    from job_apply_ai.storage.backup import restore_backup
+
+    if 'backup_file' not in request.files:
+        flash('No backup file selected', 'error')
+        return redirect(url_for('user_profile'))
+
+    file = request.files['backup_file']
+    if not file.filename:
+        flash('No backup file selected', 'error')
+        return redirect(url_for('user_profile'))
+    if not file.filename.lower().endswith('.zip'):
+        flash('Please upload a .zip backup file', 'error')
+        return redirect(url_for('user_profile'))
+
+    replace = request.form.get('replace') == '1'
+    try:
+        stats = restore_backup(
+            file.read(),
+            data_dir=app.config['UPLOAD_FOLDER'],
+            replace=replace,
+            merge_profile=not replace,
+        )
+    except (ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+        flash(f'Could not restore backup: {exc}', 'error')
+        return redirect(url_for('user_profile'))
+
+    flash(
+        (
+            f"Backup restored: {stats['jobs_restored']} job(s), "
+            f"{stats['search_runs_restored']} search run(s), "
+            f"{stats['cv_sidecars_restored']} CV history file(s), "
+            f"{stats['dev_logs_restored']} dev log(s), "
+            f"{stats['batch_jobs_restored']} batch job(s), "
+            f"{stats['files_restored']} file(s)."
+        ),
+        'success',
+    )
+    return redirect(url_for('user_profile'))
+
+
 @app.route('/profile/import/start', methods=['POST'])
 def start_profile_import():
     """Upload a CV and extract profile data in the background."""

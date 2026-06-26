@@ -9,6 +9,7 @@ import argparse
 import logging
 import sys
 import os
+import tempfile
 from datetime import datetime
 
 # Configure logging
@@ -121,6 +122,37 @@ def main():
         '--once',
         action='store_true',
         help='Process at most one pending job then exit',
+    )
+
+    backup_parser = subparsers.add_parser('backup', help='Export profile, jobs, and CV history to a zip file')
+    backup_parser.add_argument(
+        '--output',
+        '-o',
+        help='Output zip path (default: ./profile_backup_YYYY-MM-DD.zip)',
+    )
+    backup_parser.add_argument(
+        '--data-dir',
+        help='Application data directory (default: temp job_apply_ai)',
+    )
+    backup_parser.add_argument(
+        '--cv-dir',
+        help='Directory containing generated CVs (default: <data-dir>/cvs)',
+    )
+
+    restore_parser = subparsers.add_parser('restore', help='Restore profile, jobs, and CV history from a backup zip')
+    restore_parser.add_argument('backup_file', help='Path to a backup .zip file')
+    restore_parser.add_argument(
+        '--replace',
+        action='store_true',
+        help='Replace all jobs and profile instead of merging',
+    )
+    restore_parser.add_argument(
+        '--data-dir',
+        help='Application data directory (default: temp job_apply_ai)',
+    )
+    restore_parser.add_argument(
+        '--cv-dir',
+        help='Directory for generated CVs (default: <data-dir>/cvs)',
     )
     
     # Parse arguments
@@ -335,6 +367,54 @@ def main():
         from job_apply_ai.worker.batch_search_worker import run_worker
 
         run_worker(once=args.once)
+
+    elif args.command == 'backup':
+        from job_apply_ai.storage.backup import backup_filename, export_backup
+        from job_apply_ai.storage.user_profile import UserProfileRepository
+
+        data_dir = args.data_dir or os.path.join(tempfile.gettempdir(), 'job_apply_ai')
+        cv_dir = args.cv_dir or os.path.join(data_dir, 'cvs')
+        os.makedirs(cv_dir, exist_ok=True)
+        profile = UserProfileRepository().get_profile()
+        output_path = args.output or backup_filename(profile)
+        if args.data_dir or not args.cv_dir:
+            buffer = export_backup(data_dir=data_dir, cv_output_dir=args.cv_dir)
+        else:
+            buffer = export_backup(cv_output_dir=args.cv_dir)
+        with open(output_path, 'wb') as handle:
+            handle.write(buffer.getvalue())
+        logger.info("Backup saved to %s", output_path)
+
+    elif args.command == 'restore':
+        from job_apply_ai.storage.backup import restore_backup
+
+        data_dir = args.data_dir or os.path.join(tempfile.gettempdir(), 'job_apply_ai')
+        cv_dir = args.cv_dir or os.path.join(data_dir, 'cvs')
+        os.makedirs(cv_dir, exist_ok=True)
+        if not os.path.isfile(args.backup_file):
+            logger.error("Backup file not found: %s", args.backup_file)
+            sys.exit(1)
+        try:
+            stats = restore_backup(
+                args.backup_file,
+                cv_output_dir=args.cv_dir,
+                data_dir=data_dir,
+                replace=args.replace,
+                merge_profile=not args.replace,
+            )
+        except (ValueError, OSError) as exc:
+            logger.error("Restore failed: %s", exc)
+            sys.exit(1)
+        logger.info(
+            "Restored %s job(s), %s search run(s), %s CV history file(s), "
+            "%s dev log(s), %s batch job(s), %s file(s)",
+            stats['jobs_restored'],
+            stats['search_runs_restored'],
+            stats['cv_sidecars_restored'],
+            stats['dev_logs_restored'],
+            stats['batch_jobs_restored'],
+            stats['files_restored'],
+        )
     
     else:
         parser.print_help()

@@ -115,8 +115,12 @@ class JobRepository:
                 if not is_valid_job_status(workflow_status):
                     workflow_status = DEFAULT_JOB_STATUS
 
+                job_search_run_id = job.get("search_run_id", search_run_id)
+                if job_search_run_id is not None:
+                    job_search_run_id = int(job_search_run_id)
+
                 insert_values = (
-                    search_run_id,
+                    job_search_run_id,
                     workflow_status,
                     dedupe_key,
                     *(values[column] for column in JOB_COLUMNS),

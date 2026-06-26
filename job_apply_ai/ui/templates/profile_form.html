@@ -199,9 +199,9 @@
                 </div>
             </div>
             <div class="section-card">
-                <div class="section-card-header">Backup &amp; restore</div>
+                <div class="section-card-header">Profile JSON</div>
                 <div class="section-card-body">
-                    <p class="section-lead">Export or import your full profile as JSON (skills, experience, email accounts).</p>
+                    <p class="section-lead">Export or import only your profile as JSON (skills, experience, email accounts).</p>
                     <a href="{{ url_for('export_profile') }}" class="btn btn-outline-secondary mb-3">
                         <i class="fas fa-download me-2"></i>Export JSON
                     </a>
@@ -213,6 +213,29 @@
                         </div>
                         <button type="submit" class="btn btn-outline-primary align-self-start">
                             <i class="fas fa-upload me-2"></i>Import JSON
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <div class="section-card">
+                <div class="section-card-header">Full backup</div>
+                <p class="text-muted small mb-3">
+                    Includes profile, all jobs and search history, CV files and chat history,
+                    batch search queue, app settings (without API keys), dev logs, and exported job files.
+                </p>
+                <div class="section-card-body">
+                    <p class="section-lead">Download or restore everything: profile, discovered jobs, search history, tailored CV content, and generated documents.</p>
+                    <a href="{{ url_for('export_backup_route') }}" class="btn btn-outline-secondary mb-3">
+                        <i class="fas fa-file-archive me-2"></i>Download backup (.zip)
+                    </a>
+                    <form method="POST" action="{{ url_for('import_backup_route') }}" enctype="multipart/form-data" class="d-flex flex-column gap-2">
+                        <input type="file" class="form-control" name="backup_file" accept=".zip,application/zip" required>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="replace" value="1" id="backup_replace">
+                            <label class="form-check-label" for="backup_replace">Replace all jobs and profile instead of merging</label>
+                        </div>
+                        <button type="submit" class="btn btn-outline-primary align-self-start">
+                            <i class="fas fa-upload me-2"></i>Restore backup
                         </button>
                     </form>
                 </div>
