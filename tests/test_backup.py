@@ -225,6 +225,86 @@ class BackupRestoreTests(unittest.TestCase):
         with self.assertRaises((ValueError, zipfile.BadZipFile)):
             restore_backup(b"not-a-zip", data_dir=self.data_dir, db_path=self.db_path)
 
+    def test_restore_excludes_task_queue(self):
+        self._seed_data()
+        buffer = export_backup(data_dir=self.data_dir, db_path=self.db_path)
+
+        with get_connection(self.db_path) as conn:
+            conn.execute("DELETE FROM batch_search_jobs")
+
+        stats = restore_backup(
+            buffer.getvalue(),
+            data_dir=self.data_dir,
+            include_task_queue=False,
+            db_path=self.db_path,
+        )
+        self.assertEqual(stats["batch_jobs_restored"], 0)
+        with get_connection(self.db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM batch_search_jobs").fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_restore_excludes_settings(self):
+        self._seed_data()
+        buffer = export_backup(data_dir=self.data_dir, db_path=self.db_path)
+
+        self.settings_repo.save_llm_settings(
+            {
+                "llm_provider": "alibaba",
+                "dev_mode": False,
+                "alibaba": {"api_key": "local-key", "base_url": "", "fast_model": "", "main_model": ""},
+            }
+        )
+
+        restore_backup(
+            buffer.getvalue(),
+            data_dir=self.data_dir,
+            include_settings=False,
+            db_path=self.db_path,
+        )
+        settings = self.settings_repo.get_settings()
+        self.assertFalse(settings["dev_mode"])
+        self.assertEqual(settings["alibaba"]["api_key"], "local-key")
+
+    def test_restore_excludes_all_others(self):
+        self._seed_data()
+        buffer = export_backup(data_dir=self.data_dir, db_path=self.db_path)
+
+        self.profile_repo.save_profile({"full_name": "Local User", "email": "local@example.com"})
+        self.job_repo.upsert_jobs(
+            [{"title": "Local Role", "company": "LocalCo", "location": "Remote", "link": "https://example.com/local"}]
+        )
+
+        stats = restore_backup(
+            buffer.getvalue(),
+            data_dir=self.data_dir,
+            include_all_others=False,
+            include_task_queue=False,
+            include_settings=True,
+            db_path=self.db_path,
+        )
+        self.assertEqual(stats["jobs_restored"], 0)
+        self.assertEqual(stats["settings_restored"], 1)
+
+        profile = self.profile_repo.get_profile()
+        self.assertEqual(profile["full_name"], "Local User")
+        self.assertEqual(self.job_repo.count_jobs(), 2)
+        titles = {job["title"] for job in self.job_repo.list_jobs()}
+        self.assertIn("Local Role", titles)
+        self.assertIn("Backend Engineer", titles)
+
+    def test_restore_rejects_empty_scope(self):
+        self._seed_data()
+        buffer = export_backup(data_dir=self.data_dir, db_path=self.db_path)
+        with self.assertRaises(ValueError):
+            restore_backup(
+                buffer.getvalue(),
+                data_dir=self.data_dir,
+                include_task_queue=False,
+                include_settings=False,
+                include_all_others=False,
+                db_path=self.db_path,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

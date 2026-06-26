@@ -230,6 +230,19 @@
                     </a>
                     <form method="POST" action="{{ url_for('import_backup_route') }}" enctype="multipart/form-data" class="d-flex flex-column gap-2">
                         <input type="file" class="form-control" name="backup_file" accept=".zip,application/zip" required>
+                        <p class="text-muted small mb-1">Choose what to restore (unchecked sections are skipped):</p>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="restore_task_queue" value="1" id="restore_task_queue" checked>
+                            <label class="form-check-label" for="restore_task_queue">Task queue (batch search jobs)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="restore_settings" value="1" id="restore_settings" checked>
+                            <label class="form-check-label" for="restore_settings">Settings and API keys</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="restore_all_others" value="1" id="restore_all_others" checked>
+                            <label class="form-check-label" for="restore_all_others">Everything else (profile, jobs, search history, CVs, dev logs, files)</label>
+                        </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" name="replace" value="1" id="backup_replace">
                             <label class="form-check-label" for="backup_replace">Replace all jobs and profile instead of merging</label>

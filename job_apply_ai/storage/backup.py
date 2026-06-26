@@ -8,6 +8,7 @@ import logging
 import os
 import zipfile
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, BinaryIO
 
@@ -39,6 +40,19 @@ FILES_PROJECT_JOBS_PREFIX = "files/project_outputs/jobs/"
 _JOB_JSON_FIELDS = ("matched_skills", "matched_categories")
 _API_KEY_PROVIDERS = ("alibaba", "freellmapi")
 _DOC_EXTENSIONS = (".docx", ".pdf", ".doc")
+
+
+@dataclass(frozen=True)
+class RestoreScope:
+    """Which backup sections to restore."""
+
+    include_task_queue: bool = True
+    include_settings: bool = True
+    include_all_others: bool = True
+
+    def validate(self) -> None:
+        if not (self.include_task_queue or self.include_settings or self.include_all_others):
+            raise ValueError("Select at least one section to restore.")
 
 
 def _utc_now() -> str:
@@ -621,11 +635,21 @@ def restore_backup(
     *,
     replace: bool = False,
     merge_profile: bool = True,
+    include_task_queue: bool = True,
+    include_settings: bool = True,
+    include_all_others: bool = True,
     db_path: str | None = None,
     data_dir: str | None = None,
     jobs_output_dir: str | None = None,
 ) -> dict[str, int]:
     """Restore profile, database state, and on-disk artifacts from a backup zip."""
+    scope = RestoreScope(
+        include_task_queue=include_task_queue,
+        include_settings=include_settings,
+        include_all_others=include_all_others,
+    )
+    scope.validate()
+
     cv_dir, jobs_dir = _resolve_backup_dirs(
         data_dir=data_dir,
         cv_output_dir=cv_output_dir,
@@ -642,6 +666,7 @@ def restore_backup(
                 jobs_dir,
                 replace=replace,
                 merge_profile=merge_profile,
+                scope=scope,
                 db_path=db_path,
             )
 
@@ -657,6 +682,7 @@ def restore_backup(
             jobs_dir,
             replace=replace,
             merge_profile=merge_profile,
+            scope=scope,
             db_path=db_path,
         )
 
@@ -668,6 +694,7 @@ def _restore_from_archive(
     *,
     replace: bool,
     merge_profile: bool,
+    scope: RestoreScope,
     db_path: str | None,
 ) -> dict[str, int]:
     if MANIFEST_NAME not in archive.namelist():
@@ -678,48 +705,55 @@ def _restore_from_archive(
     job_repo = JobRepository()
     settings_repo = AppSettingsRepository()
 
-    if replace:
+    if replace and scope.include_all_others:
         _clear_jobs_and_search_runs(db_path)
         _clear_dev_logs(db_path)
+    if replace and scope.include_task_queue:
         _clear_batch_search_jobs(db_path)
-        search_run_id_map = _restore_search_runs(manifest["search_runs"], db_path)
+
+    search_run_id_map: dict[int, int] = {}
+    dev_logs_restored = 0
+    if scope.include_all_others:
+        if replace:
+            search_run_id_map = _restore_search_runs(manifest["search_runs"], db_path)
         dev_logs_restored = _restore_dev_logs(manifest.get("dev_logs", []), db_path)
-        batch_jobs_restored = _restore_batch_search_jobs(
-            manifest.get("batch_search_jobs", []),
-            db_path,
-        )
-    else:
-        search_run_id_map = {}
-        dev_logs_restored = _restore_dev_logs(manifest.get("dev_logs", []), db_path)
+
+    batch_jobs_restored = 0
+    if scope.include_task_queue:
         batch_jobs_restored = _restore_batch_search_jobs(
             manifest.get("batch_search_jobs", []),
             db_path,
         )
 
-    incoming_settings = manifest.get("app_settings") or {}
     settings_restored = 0
-    if incoming_settings:
-        _merge_settings_preserving_api_keys(incoming_settings, settings_repo.get_settings())
-        settings_restored = 1
+    if scope.include_settings:
+        incoming_settings = manifest.get("app_settings") or {}
+        if incoming_settings:
+            _merge_settings_preserving_api_keys(incoming_settings, settings_repo.get_settings())
+            settings_restored = 1
 
-    jobs = manifest["jobs"]
-    restore_jobs = [
-        _job_for_restore(job, search_run_id_map, preserve_search_runs=replace)
-        for job in jobs
-    ]
-    restored_job_ids = job_repo.upsert_jobs(restore_jobs)
+    restored_job_ids: list[int] = []
+    files_restored = 0
+    restored_sidecars = 0
+    if scope.include_all_others:
+        jobs = manifest["jobs"]
+        restore_jobs = [
+            _job_for_restore(job, search_run_id_map, preserve_search_runs=replace)
+            for job in jobs
+        ]
+        restored_job_ids = job_repo.upsert_jobs(restore_jobs)
 
-    incoming_profile = normalize_profile(manifest["profile"])
-    if replace or not merge_profile:
-        profile_repo.save_profile(incoming_profile)
-    else:
-        current = profile_repo.get_profile()
-        merged, _changes = merge_profiles(current, incoming_profile)
-        profile_repo.save_profile(merged)
+        incoming_profile = normalize_profile(manifest["profile"])
+        if replace or not merge_profile:
+            profile_repo.save_profile(incoming_profile)
+        else:
+            current = profile_repo.get_profile()
+            merged, _changes = merge_profiles(current, incoming_profile)
+            profile_repo.save_profile(merged)
 
-    files_restored = _restore_data_files(archive, cv_output_dir, jobs_output_dir)
-    cv_content = manifest.get("cv_content", {})
-    restored_sidecars = _restore_cv_artifacts(cv_output_dir, jobs, cv_content, archive)
+        files_restored = _restore_data_files(archive, cv_output_dir, jobs_output_dir)
+        cv_content = manifest.get("cv_content", {})
+        restored_sidecars = _restore_cv_artifacts(cv_output_dir, jobs, cv_content, archive)
 
     stats = {
         "jobs_restored": len(restored_job_ids),
@@ -728,7 +762,7 @@ def _restore_from_archive(
         "dev_logs_restored": dev_logs_restored,
         "batch_jobs_restored": batch_jobs_restored,
         "files_restored": files_restored,
-        "settings_restored": 1 if incoming_settings else 0,
+        "settings_restored": settings_restored,
     }
     logger.info("Restored backup: %s", stats)
     return stats

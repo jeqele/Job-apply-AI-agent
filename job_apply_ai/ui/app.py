@@ -2431,28 +2431,41 @@ def import_backup_route():
         return redirect(url_for('user_profile'))
 
     replace = request.form.get('replace') == '1'
+    include_task_queue = request.form.get('restore_task_queue') == '1'
+    include_settings = request.form.get('restore_settings') == '1'
+    include_all_others = request.form.get('restore_all_others') == '1'
+    if not (include_task_queue or include_settings or include_all_others):
+        flash('Select at least one section to restore.', 'error')
+        return redirect(url_for('user_profile'))
+
     try:
         stats = restore_backup(
             file.read(),
             data_dir=app.config['UPLOAD_FOLDER'],
             replace=replace,
             merge_profile=not replace,
+            include_task_queue=include_task_queue,
+            include_settings=include_settings,
+            include_all_others=include_all_others,
         )
     except (ValueError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         flash(f'Could not restore backup: {exc}', 'error')
         return redirect(url_for('user_profile'))
 
-    flash(
-        (
-            f"Backup restored: {stats['jobs_restored']} job(s), "
-            f"{stats['search_runs_restored']} search run(s), "
-            f"{stats['cv_sidecars_restored']} CV history file(s), "
-            f"{stats['dev_logs_restored']} dev log(s), "
-            f"{stats['batch_jobs_restored']} batch job(s), "
-            f"{stats['files_restored']} file(s)."
-        ),
-        'success',
-    )
+    parts: list[str] = []
+    if include_all_others:
+        parts.extend([
+            f"{stats['jobs_restored']} job(s)",
+            f"{stats['search_runs_restored']} search run(s)",
+            f"{stats['cv_sidecars_restored']} CV history file(s)",
+            f"{stats['dev_logs_restored']} dev log(s)",
+            f"{stats['files_restored']} file(s)",
+        ])
+    if include_task_queue:
+        parts.append(f"{stats['batch_jobs_restored']} batch job(s)")
+    if include_settings and stats['settings_restored']:
+        parts.append('settings updated')
+    flash(f"Backup restored: {', '.join(parts) or 'no changes'}.", 'success')
     return redirect(url_for('user_profile'))
 
 
