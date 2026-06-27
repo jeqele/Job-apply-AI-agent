@@ -6,7 +6,9 @@ from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
     apply_suggestion_to_content,
     normalize_ats_analysis,
     normalize_ats_score,
+    pending_suggestions,
     update_suggestion_status,
+    update_suggestions_status,
     ATSFriendlyAnalyzer,
 )
 
@@ -159,3 +161,139 @@ def test_analyzer_apply_suggestion_calls_llm_and_merges_changes():
     prompt = ollama.generate_json.call_args[0][0]
     assert "Strengthen summary" in prompt
     assert "CURRENT CV CONTENT" in prompt
+
+
+def test_update_suggestions_status_bulk():
+    analysis = normalize_ats_analysis(
+        {
+            "ats_score": 50,
+            "score_summary": "Needs work",
+            "keyword_bank": [],
+            "matched_keywords": [],
+            "missing_keywords": [],
+            "suggestions": [
+                {
+                    "id": "abc123",
+                    "title": "Fix bullets",
+                    "description": "Add metrics",
+                    "rationale": "ATS",
+                    "category": "experience",
+                    "changes": {},
+                },
+                {
+                    "id": "def456",
+                    "title": "Fix summary",
+                    "description": "Add keywords",
+                    "rationale": "ATS",
+                    "category": "summary",
+                    "changes": {},
+                },
+            ],
+        }
+    )
+    updated = update_suggestions_status(analysis, ["abc123", "def456"], status="applied")
+    assert updated["suggestions"][0]["status"] == "applied"
+    assert updated["suggestions"][1]["status"] == "applied"
+
+
+def test_pending_suggestions_filters_statuses():
+    analysis = normalize_ats_analysis(
+        {
+            "ats_score": 50,
+            "score_summary": "Needs work",
+            "keyword_bank": [],
+            "matched_keywords": [],
+            "missing_keywords": [],
+            "suggestions": [
+                {
+                    "id": "s1",
+                    "title": "One",
+                    "description": "d",
+                    "rationale": "r",
+                    "category": "general",
+                    "changes": {},
+                    "status": "pending",
+                },
+                {
+                    "id": "s2",
+                    "title": "Two",
+                    "description": "d",
+                    "rationale": "r",
+                    "category": "general",
+                    "changes": {},
+                    "status": "applied",
+                },
+                {
+                    "id": "s3",
+                    "title": "Three",
+                    "description": "d",
+                    "rationale": "r",
+                    "category": "general",
+                    "changes": {},
+                    "status": "failed",
+                },
+            ],
+        }
+    )
+    pending = pending_suggestions(analysis)
+    assert [item["id"] for item in pending] == ["s1", "s3"]
+
+
+def test_analyzer_apply_all_suggestions_single_llm_call():
+    ollama = MagicMock()
+    ollama.is_available.return_value = True
+    ollama.validate_models.return_value = {"main": "test-model"}
+    ollama.generate_json.return_value = {
+        "reply": "Applied all suggestions.",
+        "changes": {
+            "professional_summary": "Cloud-focused Python engineer with SQL experience.",
+            "technical_skills": ["Python", "SQL"],
+        },
+    }
+
+    current = {
+        "professional_title": "Engineer",
+        "professional_summary": "Old summary.",
+        "technical_skills": ["Python"],
+        "tools_platforms": [],
+        "experience_highlights": [],
+        "personal_projects": [],
+        "soft_skills": [],
+        "languages": [],
+        "job_matched_skills": [],
+        "job_skills_not_in_cv": [],
+    }
+    suggestions = [
+        {
+            "id": "s1",
+            "title": "Strengthen summary",
+            "description": "Add cloud keywords naturally.",
+            "rationale": "Better ATS keyword match",
+            "category": "summary",
+            "changes": {"professional_summary": "Hint one."},
+        },
+        {
+            "id": "s2",
+            "title": "Add SQL skill",
+            "description": "Include SQL in skills.",
+            "rationale": "Job requires SQL",
+            "category": "skills",
+            "changes": {"technical_skills": ["Python", "SQL"]},
+        },
+    ]
+
+    analyzer = ATSFriendlyAnalyzer(llm=ollama)
+    updated = analyzer.apply_all_suggestions(
+        job={"title": "Cloud Engineer", "description": "Python and SQL"},
+        cv_content=current,
+        profile={"full_name": "Jane Doe", "technical_skills": ["Python", "SQL"]},
+        suggestions=suggestions,
+    )
+
+    assert updated["professional_summary"] == "Cloud-focused Python engineer with SQL experience."
+    assert "SQL" in updated["technical_skills"]
+    ollama.generate_json.assert_called_once()
+    prompt = ollama.generate_json.call_args[0][0]
+    assert "Apply ALL" in prompt
+    assert "Strengthen summary" in prompt
+    assert "Add SQL skill" in prompt

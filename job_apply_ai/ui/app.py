@@ -10,6 +10,7 @@ import logging
 import secrets
 import tempfile
 from datetime import datetime
+from typing import Any
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session, jsonify, Response
 import zipfile
 import io
@@ -78,8 +79,10 @@ from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
     ATSFriendlyAnalyzer,
     get_suggestion,
     normalize_ats_analysis,
+    pending_suggestions,
     replace_suggestion,
     update_suggestion_status,
+    update_suggestions_status,
 )
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
 from job_apply_ai.cv_modifier.cv_content_store import (
@@ -197,6 +200,7 @@ BACKGROUND_TASK_STALE_SECONDS = 900
 BACKGROUND_TASK_SESSION_KEYS = (
     'cv_generation_active',
     'ats_friendly_active',
+    'batch_ats_friendly_active',
     'single_search_active',
     'batch_search_active',
     'job_match_analyze_active',
@@ -277,6 +281,7 @@ def _background_task_progress_label(task: dict) -> str:
         'single_cv': 'Generating AI CV',
         'batch_cv': 'Generating AI CVs',
         'ats_friendly': 'ATS Friendly Analysis',
+        'batch_ats_friendly': 'Batch ATS Optimization',
     }
     return labels.get(task.get('task_type', ''), 'Background task')
 
@@ -301,6 +306,8 @@ def _background_task_progress_url(task_id: str, task: dict) -> str | None:
         job_id = task.get('job_id')
         if job_id:
             return url_for('ats_friendly_progress', job_id=job_id)
+    if task_type == 'batch_ats_friendly':
+        return url_for('batch_ats_friendly_progress', task_id=task_id)
     return None
 
 
@@ -951,6 +958,243 @@ def _run_ats_friendly_task(
     )
 
 
+def _jobs_with_cv(jobs: list[dict]) -> list[dict]:
+    """Return jobs in folder order that have a generated CV file on disk."""
+    return [job for job in jobs if _job_has_sendable_cv(job)]
+
+
+def _run_ats_pass_for_job(
+    *,
+    job: dict,
+    job_id: int,
+    profile: dict,
+    cv_filename: str,
+    analyzer: ATSFriendlyAnalyzer,
+    apply_all: bool,
+) -> dict[str, Any]:
+    """Run one ATS pass for a job: analyze, optionally accept all suggestions."""
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    profile_name = profile.get('full_name', '')
+    cv_content = resolve_effective_tailored_content(
+        store.get('tailored_content', {}),
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
+    if not cv_content:
+        return {'status': 'skipped', 'reason': 'CV content not found'}
+
+    with dev_agent("ATSFriendlyAnalyzer", job_id=job_id):
+        analysis = analyzer.analyze(job=job, cv_content=cv_content, profile=profile)
+    analysis['analyzed_at'] = datetime.utcnow().isoformat(timespec='seconds')
+
+    result: dict[str, Any] = {
+        'status': 'ok',
+        'analyzed': True,
+        'applied': 0,
+        'suggestion_count': len(analysis.get('suggestions', [])),
+    }
+
+    if apply_all:
+        to_apply = pending_suggestions(analysis)
+        if not to_apply:
+            result['apply_skipped'] = True
+        else:
+            suggestion_ids = [item['id'] for item in to_apply]
+            try:
+                with dev_agent("ATSFriendlyAnalyzer", job_id=job_id):
+                    updated_content = analyzer.apply_all_suggestions(
+                        job=job,
+                        cv_content=cv_content,
+                        profile=profile,
+                        suggestions=to_apply,
+                    )
+                editor = CVChatEditor()
+                editor.rebuild_document(cv_path, updated_content, profile)
+                matched_categories = CVChatEditor.content_to_matched_categories(updated_content)
+                job['matched_categories'] = matched_categories
+                job_repo.update_job(job_id, job)
+
+                analysis = update_suggestions_status(analysis, suggestion_ids, status='applied')
+                cv_content = updated_content
+                _clear_cv_preview_customization(store, updated_content)
+                result['applied'] = len(suggestion_ids)
+            except Exception as exc:
+                logger.error('Batch ATS apply_all failed for job %s: %s', job_id, exc)
+                try:
+                    analysis = update_suggestions_status(
+                        analysis,
+                        suggestion_ids,
+                        status='failed',
+                        error=str(exc),
+                    )
+                except KeyError:
+                    pass
+                store['ats_analysis'] = analysis
+                _save_job_cv_content(cv_filename, cv_content, store=store)
+                result['status'] = 'apply_failed'
+                result['error'] = str(exc)
+                return result
+
+    store['ats_analysis'] = analysis
+    _save_job_cv_content(cv_filename, cv_content, store=store)
+    return result
+
+
+def _run_batch_ats_friendly_task(
+    task_id: str,
+    jobs: list[dict],
+    profile: dict,
+    return_folder: str,
+    return_search: str,
+    return_sort: str = '',
+) -> None:
+    """Run three ATS passes on every job in the folder that has a CV."""
+    with dev_task(task_id, "batch_ats_friendly"):
+        jobs_with_cv = _jobs_with_cv(jobs)
+        if not jobs_with_cv:
+            fail_task(task_id, 'No jobs with generated CVs found in this folder.')
+            return
+
+        analyzer = ATSFriendlyAnalyzer()
+        if not analyzer.llm.is_available():
+            fail_task(
+                task_id,
+                f'{analyzer.llm.provider_label} is not reachable. Check your LLM settings.',
+            )
+            return
+
+        try:
+            analyzer.llm.validate_models()
+        except Exception as exc:
+            fail_task(task_id, str(exc))
+            return
+
+        total_passes = len(BATCH_ATS_FRIENDLY_PASSES)
+        total_steps = len(jobs_with_cv) * total_passes
+        stats: dict[str, Any] = {
+            'total_jobs': len(jobs_with_cv),
+            'passes': total_passes,
+            'analyzed': 0,
+            'apply_passes': 0,
+            'suggestions_applied': 0,
+            'apply_skipped_no_suggestions': 0,
+            'skipped': 0,
+            'failed': 0,
+            'failed_jobs': [],
+        }
+
+        step = 0
+        for pass_index, pass_config in enumerate(BATCH_ATS_FRIENDLY_PASSES, start=1):
+            apply_all = bool(pass_config['apply_all'])
+            pass_label = pass_config['label']
+
+            for job_index, job in enumerate(jobs_with_cv, start=1):
+                try:
+                    task_control_checkpoint(task_id)
+                except TaskStopped:
+                    current_task = get_task(task_id)
+                    stopped = bool(current_task and current_task.get('control') == 'stop')
+                    if stats['analyzed'] == 0:
+                        fail_task(task_id, 'Batch ATS optimization stopped before any jobs were processed.')
+                        return
+                    complete_task(
+                        task_id,
+                        {
+                            'stats': stats,
+                            'return_folder': return_folder,
+                            'return_search': return_search,
+                            'return_sort': return_sort,
+                            'stopped': stopped,
+                        },
+                        message=(
+                            f'Batch ATS optimization stopped — processed {stats["analyzed"]} '
+                            f'analysis pass(es) across {stats["total_jobs"]} job(s)'
+                        ),
+                    )
+                    return
+
+                step += 1
+                job_id = job.get('id')
+                title = job.get('title', 'Untitled')
+                cv_filename = job.get('cv_filename', '')
+                percent = 5 + int((step / max(total_steps, 1)) * 90)
+                action_label = 'accepting suggestions' if apply_all else 'analyzing'
+                update_task(
+                    task_id,
+                    status='running',
+                    step='batch_ats',
+                    message=(
+                        f'Pass {pass_index} of {total_passes} — job {job_index} of '
+                        f'{len(jobs_with_cv)}: {title} — {action_label}…'
+                    ),
+                    percent=percent,
+                    meta={
+                        'current_pass': pass_index,
+                        'total_passes': total_passes,
+                        'current_index': job_index,
+                        'total_jobs': len(jobs_with_cv),
+                        'current_job_title': title,
+                        'apply_all': apply_all,
+                    },
+                )
+
+                if not job_id or not cv_filename:
+                    stats['skipped'] += 1
+                    continue
+
+                try:
+                    pass_result = _run_ats_pass_for_job(
+                        job=job,
+                        job_id=job_id,
+                        profile=profile,
+                        cv_filename=cv_filename,
+                        analyzer=analyzer,
+                        apply_all=apply_all,
+                    )
+                except Exception as exc:
+                    logger.error('Batch ATS pass failed for job %s: %s', job_id, exc)
+                    stats['failed'] += 1
+                    stats['failed_jobs'].append({'job_id': job_id, 'title': title, 'error': str(exc)})
+                    continue
+
+                if pass_result.get('status') == 'skipped':
+                    stats['skipped'] += 1
+                    continue
+                if pass_result.get('status') == 'apply_failed':
+                    stats['failed'] += 1
+                    stats['failed_jobs'].append({
+                        'job_id': job_id,
+                        'title': title,
+                        'error': pass_result.get('error', 'Apply all failed'),
+                    })
+                    stats['analyzed'] += 1
+                    continue
+
+                stats['analyzed'] += 1
+                if apply_all:
+                    stats['apply_passes'] += 1
+                    if pass_result.get('apply_skipped'):
+                        stats['apply_skipped_no_suggestions'] += 1
+                    else:
+                        stats['suggestions_applied'] += pass_result.get('applied', 0)
+
+        complete_task(
+            task_id,
+            {
+                'stats': stats,
+                'return_folder': return_folder,
+                'return_search': return_search,
+                'return_sort': return_sort,
+            },
+            message=(
+                f'Batch ATS optimization complete — {stats["analyzed"]} analysis pass(es) on '
+                f'{stats["total_jobs"]} job(s), {stats["suggestions_applied"]} suggestion(s) applied'
+            ),
+        )
+
+
 def _ats_friendly_results_context(
     job: dict,
     ats_analysis: dict,
@@ -1005,7 +1249,13 @@ def _ats_friendly_results_context(
     }
 
 
-CONTROLLABLE_TASK_TYPES = frozenset({'single_search', 'batch_search', 'job_match_analyze'})
+CONTROLLABLE_TASK_TYPES = frozenset({'single_search', 'batch_search', 'job_match_analyze', 'batch_ats_friendly'})
+
+BATCH_ATS_FRIENDLY_PASSES = (
+    {'label': 'Analyze & accept all', 'apply_all': True},
+    {'label': 'Analyze & accept all', 'apply_all': True},
+    {'label': 'Analyze only', 'apply_all': False},
+)
 
 
 def _run_single_search_task(
@@ -2642,6 +2892,8 @@ def manage_jobs(folder='all'):
         folder_counts[status] = status_counts.get(status, 0)
 
     sort_query = sort_by if sort_by != DEFAULT_JOB_SORT else None
+    jobs_with_cv_count = sum(1 for job in jobs if _job_has_sendable_cv(job))
+    profile = profile_repo.get_profile()
 
     return render_template(
         'manage_jobs.html',
@@ -2656,7 +2908,9 @@ def manage_jobs(folder='all'):
         status_labels=JOB_STATUS_LABELS,
         status_icons=JOB_STATUS_ICONS,
         status_badges=JOB_STATUS_BADGE_CLASSES,
-        profile_has_matchable_skills=profile_has_matchable_skills(profile_repo.get_profile()),
+        profile_has_matchable_skills=profile_has_matchable_skills(profile),
+        profile_ready=profile_is_ready(profile),
+        jobs_with_cv_count=jobs_with_cv_count,
     )
 
 
@@ -2885,6 +3139,122 @@ def job_match_analyze_complete(task_id):
         result.get('return_folder', 'all'),
         result.get('return_search', ''),
         result.get('return_sort') or 'match_desc',
+    )
+
+
+@app.route('/jobs/manage/batch-ats-friendly', methods=['POST'])
+def batch_ats_friendly():
+    """Run three ATS passes on every job in the folder that has a generated CV."""
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '').strip()
+    return_sort = request.form.get('return_sort', '').strip()
+
+    profile = profile_repo.get_profile()
+    if not profile_is_ready(profile):
+        flash('Please complete your CV profile before running batch ATS optimization.', 'warning')
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    if _sync_session_background_task('batch_ats_friendly_active'):
+        flash('Batch ATS optimization is already in progress.', 'warning')
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    jobs = _jobs_for_manage_folder(return_folder, return_search)
+    jobs_with_cv = _jobs_with_cv(jobs)
+    if not jobs_with_cv:
+        flash('No jobs with generated CVs found in this folder.', 'warning')
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    task_id = create_task(
+        'batch_ats_friendly',
+        meta={
+            'total_jobs': len(jobs_with_cv),
+            'passes': len(BATCH_ATS_FRIENDLY_PASSES),
+            'return_folder': return_folder,
+            'return_search': return_search,
+            'return_sort': return_sort,
+        },
+    )
+    session['batch_ats_friendly_active'] = task_id
+    start_background_task(
+        task_id,
+        lambda: _run_batch_ats_friendly_task(
+            task_id,
+            jobs_with_cv,
+            profile,
+            return_folder,
+            return_search,
+            return_sort,
+        ),
+    )
+    return redirect(url_for('batch_ats_friendly_progress', task_id=task_id))
+
+
+@app.route('/jobs/manage/batch-ats-friendly/<task_id>')
+def batch_ats_friendly_progress(task_id):
+    """Show progress while batch ATS optimization runs."""
+    task = get_task(task_id)
+    if not task or task.get('task_type') != 'batch_ats_friendly':
+        flash('Batch ATS optimization task not found', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    meta = task.get('meta', {})
+    return_folder = meta.get('return_folder') or 'all'
+    return_search = meta.get('return_search') or ''
+    return_sort = meta.get('return_sort') or ''
+
+    return render_template(
+        'batch_ats_friendly_progress.html',
+        task_id=task_id,
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=url_for('batch_ats_friendly_complete', task_id=task_id),
+        control_url=url_for('control_background_task', task_id=task_id),
+        back_url=url_for(
+            'manage_jobs',
+            **_manage_jobs_url_kwargs(return_folder, return_search, return_sort),
+        ),
+        back_label='Back to Manage Jobs',
+        job_count=meta.get('total_jobs', 0),
+        pass_count=meta.get('passes', len(BATCH_ATS_FRIENDLY_PASSES)),
+    )
+
+
+@app.route('/jobs/manage/batch-ats-friendly/complete/<task_id>')
+def batch_ats_friendly_complete(task_id):
+    """Finish batch ATS optimization and return to manage jobs."""
+    task = get_task(task_id)
+    if not task or task.get('status') != 'complete' or not task.get('result'):
+        flash('Batch ATS optimization result not found', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    result = task['result']
+    stats = result.get('stats', {})
+    total_jobs = stats.get('total_jobs', 0)
+    suggestions_applied = stats.get('suggestions_applied', 0)
+    failed = stats.get('failed', 0)
+
+    session.pop('batch_ats_friendly_active', None)
+
+    if result.get('stopped'):
+        flash(task.get('message', 'Batch ATS optimization stopped.'), 'warning')
+    elif failed:
+        flash(
+            f'Batch ATS optimization finished for {total_jobs} job(s) with {failed} failure(s). '
+            f'Applied {suggestions_applied} suggestion(s) in passes 1 and 2. '
+            f'Pass 3 left suggestions for manual review.',
+            'warning',
+        )
+    else:
+        flash(
+            f'Batch ATS optimization complete for {total_jobs} job(s). '
+            f'Applied {suggestions_applied} suggestion(s) in passes 1 and 2. '
+            f'Pass 3 left suggestions for manual review.',
+            'success',
+        )
+
+    return _manage_jobs_redirect(
+        result.get('return_folder', 'all'),
+        result.get('return_search', ''),
+        result.get('return_sort', ''),
     )
 
 
@@ -3672,7 +4042,7 @@ def ats_friendly_complete(job_id, task_id):
 
 @app.route('/api/jobs/<int:job_id>/ats-friendly/suggestions', methods=['POST'])
 def ats_suggestion_action(job_id):
-    """Apply, deny, or regenerate an ATS improvement suggestion."""
+    """Apply, deny, regenerate, or bulk-apply ATS improvement suggestions."""
     job = job_repo.get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
@@ -3685,10 +4055,8 @@ def ats_suggestion_action(job_id):
     payload = request.get_json(silent=True) or {}
     action = str(payload.get('action', '')).strip().lower()
     suggestion_id = str(payload.get('suggestion_id', '')).strip()
-    if action not in {'apply', 'deny', 'reapply'}:
+    if action not in {'apply', 'deny', 'reapply', 'apply_all'}:
         return jsonify({'error': 'Invalid action'}), 400
-    if not suggestion_id:
-        return jsonify({'error': 'suggestion_id is required'}), 400
 
     store = normalize_store(_load_job_cv_store(cv_filename) or {})
     analysis = normalize_ats_analysis(store.get('ats_analysis', {}))
@@ -3703,6 +4071,64 @@ def ats_suggestion_action(job_id):
         stored_lines=store.get('cv_preview_lines'),
         customized=bool(store.get('cv_preview_customized')),
     )
+
+    if action == 'apply_all':
+        if not current_content:
+            return jsonify({'error': 'CV content not available for editing'}), 404
+        to_apply = pending_suggestions(analysis)
+        if not to_apply:
+            return jsonify({'error': 'No pending suggestions to apply'}), 400
+        suggestion_ids = [item['id'] for item in to_apply]
+        try:
+            analyzer = ATSFriendlyAnalyzer()
+            with dev_agent("ATSFriendlyAnalyzer", job_id=job_id):
+                updated_content = analyzer.apply_all_suggestions(
+                    job=job,
+                    cv_content=current_content,
+                    profile=profile,
+                    suggestions=to_apply,
+                )
+            editor = CVChatEditor()
+            editor.rebuild_document(cv_path, updated_content, profile)
+            matched_categories = CVChatEditor.content_to_matched_categories(updated_content)
+            job['matched_categories'] = matched_categories
+            job_repo.update_job(job_id, job)
+
+            analysis = update_suggestions_status(analysis, suggestion_ids, status='applied')
+            store['ats_analysis'] = analysis
+            _clear_cv_preview_customization(store, updated_content)
+            _save_job_cv_content(cv_filename, updated_content, store=store)
+
+            session['current_cv'] = cv_path
+            session['current_cv_filename'] = cv_filename
+
+            return jsonify({
+                'ok': True,
+                'ats_analysis': analysis,
+                'content': updated_content,
+                'cv_preview_lines': cv_content_to_preview_lines(
+                    updated_content,
+                    profile_name,
+                ),
+                'matched_categories': matched_categories,
+            })
+        except Exception as exc:
+            logger.error('ATS apply_all failed for job %s: %s', job_id, exc)
+            try:
+                analysis = update_suggestions_status(
+                    analysis,
+                    suggestion_ids,
+                    status='failed',
+                    error=str(exc),
+                )
+                store['ats_analysis'] = analysis
+                _save_job_cv_content(cv_filename, current_content, store=store)
+            except KeyError:
+                pass
+            return jsonify({'error': str(exc), 'ats_analysis': analysis}), 500
+
+    if not suggestion_id:
+        return jsonify({'error': 'suggestion_id is required'}), 400
     if action in {'apply', 'reapply'} and not current_content:
         return jsonify({'error': 'CV content not available for editing'}), 404
 

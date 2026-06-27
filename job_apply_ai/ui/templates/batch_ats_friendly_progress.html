@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'Batch ATS Optimization' %}
+    {% include '_app_head.html' %}
+    {% include '_progress_styles.html' %}
+</head>
+<body class="progress-page">
+    <div class="progress-shell">
+        <div class="progress-card">
+            <div class="progress-header">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="fs-2"><i class="fas fa-file-circle-check"></i></div>
+                    <div>
+                        <h1 class="h3 mb-1">Batch ATS Optimization</h1>
+                        <p class="mb-0 opacity-75">
+                            {{ job_count }} job{% if job_count != 1 %}s{% endif %} with CVs
+                            · {{ pass_count }} passes each
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="progress-body">
+                <p class="text-muted small mb-3">
+                    Passes 1 and 2 analyze and accept all suggestions. Pass 3 analyzes only so you can review and accept manually.
+                </p>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong id="progress-label">Starting…</strong>
+                    <span id="progress-percent" class="text-muted">0%</span>
+                </div>
+                <div class="progress-bar-wrap mb-3">
+                    <div id="progress-bar" class="progress-bar-fill"></div>
+                </div>
+                <p id="progress-message" class="text-muted mb-0">Preparing batch ATS optimization…</p>
+                <div id="error-panel" class="alert alert-danger mt-4 d-none" role="alert"></div>
+                {% include '_batch_flow_controls.html' %}
+                <div class="mt-4">
+                    <a href="{{ back_url }}" class="btn btn-outline-secondary">{{ back_label }}</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const taskId = {{ task_id|tojson }};
+        const statusUrl = {{ status_url|tojson }};
+        const completeUrl = {{ complete_url|tojson }};
+        let pollTimer = null;
+
+        function updateUi(data) {
+            document.getElementById('progress-label').textContent = data.message || 'Working…';
+            document.getElementById('progress-message').textContent = data.message || '';
+            document.getElementById('progress-percent').textContent = `${data.percent || 0}%`;
+            document.getElementById('progress-bar').style.width = `${data.percent || 0}%`;
+
+            if (window.updateBatchFlowControls) {
+                window.updateBatchFlowControls(data);
+            }
+        }
+        window.updateBatchFlowUi = updateUi;
+
+        async function pollStatus() {
+            const response = await fetch(statusUrl);
+            if (response.status === 404) {
+                clearInterval(pollTimer);
+                showError('Batch ATS session was lost. Please try again.');
+                return;
+            }
+
+            const data = await response.json();
+            updateUi(data);
+
+            if (data.status === 'complete') {
+                clearInterval(pollTimer);
+                window.location.href = completeUrl;
+                return;
+            }
+
+            if (data.status === 'error') {
+                clearInterval(pollTimer);
+                showError(data.error || data.message || 'Batch ATS optimization failed.');
+            }
+        }
+
+        function showError(message) {
+            const panel = document.getElementById('error-panel');
+            panel.textContent = message;
+            panel.classList.remove('d-none');
+        }
+
+        pollTimer = setInterval(pollStatus, 900);
+        pollStatus();
+    </script>
+    {% include '_dev_log_panel.html' %}
+</body>
+</html>

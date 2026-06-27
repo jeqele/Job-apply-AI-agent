@@ -431,6 +431,108 @@ Return JSON with this exact shape:
             job=job,
         )
 
+    def apply_all_suggestions(
+        self,
+        *,
+        job: dict[str, Any],
+        cv_content: dict[str, Any],
+        profile: dict[str, Any],
+        suggestions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Rewrite the current CV by applying multiple ATS suggestions in one LLM call."""
+        if not suggestions:
+            raise ValueError("No suggestions to apply.")
+        if not self.llm.is_available():
+            raise RuntimeError(
+                f"{self.llm.provider_label} is not reachable. "
+                "Check your LLM settings to apply ATS suggestions."
+            )
+        self.llm.validate_models()
+
+        job_context = build_job_context(job)
+        profile_name = str(profile.get("full_name", "") or "")
+        cv_text = _cv_content_as_text(cv_content, profile_name)
+        compact_cv = json.dumps(cv_content, separators=(",", ":"), ensure_ascii=False)
+        profile_text = profile_to_text(profile).strip()
+        suggestions_block = json.dumps(
+            [
+                {
+                    "id": item.get("id", ""),
+                    "title": item.get("title", ""),
+                    "category": item.get("category", "general"),
+                    "description": item.get("description", ""),
+                    "rationale": item.get("rationale", ""),
+                    "changes": item.get("changes") or {},
+                }
+                for item in suggestions
+            ],
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+        prompt = f"""
+Apply ALL of the following ATS improvement suggestions to the candidate's current CV for this job application in a single coherent edit.
+
+TARGET JOB:
+{job_context}
+
+CURRENT CV (plain-text preview):
+{cv_text}
+
+CURRENT CV CONTENT (JSON — source of truth; do not invent facts beyond this and the profile):
+{compact_cv}
+
+FULL CANDIDATE PROFILE (factual grounding only):
+{profile_text}
+
+ATS SUGGESTIONS TO IMPLEMENT (apply every item below):
+{suggestions_block}
+
+Instructions:
+1. Implement every suggestion against the CURRENT CV content above, not a stale snapshot.
+2. Merge all edits into one set of changes — resolve overlaps so the final CV is consistent.
+3. Put only modified top-level fields inside "changes". Omit unchanged fields.
+4. Allowed change keys: {", ".join(sorted(CONTENT_CHANGE_KEYS))}
+5. When experience or project bullets change, include the full updated array in "changes".
+6. Never invent employers, dates, degrees, certifications, achievements, or skills.
+7. Keep edits minimal — change only what these suggestions require.
+
+Return JSON with this exact shape:
+{{
+  "reply": "brief note on what you changed across all suggestions",
+  "changes": {{
+    "professional_summary": "only when changed"
+  }}
+}}
+"""
+        with dev_llm_context(
+            operation="ats_suggestion_apply_all",
+            context={
+                "job_title": job.get("title", ""),
+                "job_company": job.get("company", ""),
+                "suggestion_count": len(suggestions),
+            },
+        ):
+            result = self.llm.generate_json(
+                prompt,
+                model=self.llm.main_model,
+                system=ATS_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_attempts=3,
+                schema=CV_CHAT_RESPONSE_SCHEMA,
+            )
+
+        changes = result.get("changes") if isinstance(result.get("changes"), dict) else {}
+        if not changes:
+            raise ValueError("The AI did not return applicable CV changes for these suggestions.")
+
+        updated = CVChatEditor._apply_content_changes(cv_content, changes)
+        return RAGCVGenerator._normalize_generated_content(
+            updated,
+            profile=profile,
+            job=job,
+        )
+
 
 def apply_suggestion_to_content(
     cv_content: dict[str, Any],
@@ -460,20 +562,49 @@ def update_suggestion_status(
     error: str = "",
 ) -> dict[str, Any]:
     """Return analysis with one suggestion's status updated."""
+    return update_suggestions_status(
+        analysis,
+        [suggestion_id],
+        status=status,
+        error=error,
+    )
+
+
+def update_suggestions_status(
+    analysis: dict[str, Any],
+    suggestion_ids: list[str],
+    *,
+    status: str,
+    error: str = "",
+) -> dict[str, Any]:
+    """Return analysis with multiple suggestions' statuses updated."""
     if status not in SUGGESTION_STATUSES:
         raise ValueError(f"Unsupported suggestion status: {status}")
 
+    id_set = set(suggestion_ids)
+    if not id_set:
+        raise ValueError("At least one suggestion_id is required")
+
     updated = deepcopy(normalize_ats_analysis(analysis))
-    found = False
+    found: set[str] = set()
     for item in updated["suggestions"]:
-        if item.get("id") == suggestion_id:
+        if item.get("id") in id_set:
             item["status"] = status
             item["error"] = error
-            found = True
-            break
-    if not found:
-        raise KeyError(f"Suggestion not found: {suggestion_id}")
+            found.add(item["id"])
+    missing = id_set - found
+    if missing:
+        raise KeyError(f"Suggestion not found: {next(iter(missing))}")
     return updated
+
+
+def pending_suggestions(analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return suggestions that can still be applied or denied."""
+    return [
+        item
+        for item in normalize_ats_analysis(analysis).get("suggestions", [])
+        if item.get("status") in {"pending", "failed"}
+    ]
 
 
 def replace_suggestion(

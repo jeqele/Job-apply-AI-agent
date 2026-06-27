@@ -53,6 +53,62 @@
                     <i class="fas fa-user-check me-2"></i>AI Analyze Match
                 </button>
                 {% endif %}
+                {% if profile_ready and jobs_with_cv_count > 0 %}
+                <button type="button"
+                        class="btn btn-outline-success"
+                        data-bs-toggle="modal"
+                        data-bs-target="#batchAtsModal">
+                    <i class="fas fa-file-circle-check me-2"></i>ATS Optimize All ({{ jobs_with_cv_count }})
+                </button>
+                {% else %}
+                <button type="button"
+                        class="btn btn-outline-secondary"
+                        title="{% if not profile_ready %}Complete your CV profile first{% else %}No jobs with CVs in this folder{% endif %}"
+                        disabled>
+                    <i class="fas fa-file-circle-check me-2"></i>ATS Optimize All
+                </button>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="modal fade" id="batchAtsModal" tabindex="-1" aria-labelledby="batchAtsModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form method="post" action="{{ url_for('batch_ats_friendly') }}">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="batchAtsModalLabel">
+                                <i class="fas fa-file-circle-check me-2"></i>Batch ATS Optimization
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="text-muted">
+                                Run ATS-friendly analysis on <strong>{{ jobs_with_cv_count }}</strong> job{% if jobs_with_cv_count != 1 %}s{% endif %}
+                                in this folder that {% if jobs_with_cv_count != 1 %}have{% else %}has{% endif %} a generated CV.
+                                Each job goes through three passes:
+                            </p>
+                            <ol class="small text-muted mb-3">
+                                <li><strong>Pass 1</strong> — analyze and accept all suggestions</li>
+                                <li><strong>Pass 2</strong> — re-analyze and accept all suggestions</li>
+                                <li><strong>Pass 3</strong> — analyze only; review and accept suggestions manually</li>
+                            </ol>
+                            <p class="small text-muted mb-0">
+                                This may take several minutes depending on job count and your LLM speed.
+                            </p>
+                            <input type="hidden" name="return_folder" value="{{ current_folder }}">
+                            <input type="hidden" name="return_search" value="{{ search_query }}">
+                            {% if sort_query %}
+                            <input type="hidden" name="return_sort" value="{{ sort_query }}">
+                            {% endif %}
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-success">
+                                <i class="fas fa-play me-2"></i>Start Batch ATS
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
 
