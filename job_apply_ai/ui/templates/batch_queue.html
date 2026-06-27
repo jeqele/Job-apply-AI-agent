@@ -16,9 +16,19 @@
                     <strong>batch-worker</strong> process, separate from the web UI.
                 </p>
             </div>
-            <a href="{{ url_for('batch_queue_create') }}" class="btn btn-primary">
-                <i class="fas fa-plus me-2"></i>New queue job
-            </a>
+            <div class="d-flex flex-wrap gap-2">
+                {% if finished_count %}
+                    <form method="post" action="{{ url_for('batch_queue_clear') }}" class="d-inline"
+                          onsubmit="return confirm('Remove {{ finished_count }} finished job(s) from the queue?');">
+                        <button type="submit" class="btn btn-outline-danger">
+                            <i class="fas fa-eraser me-2"></i>Clear finished
+                        </button>
+                    </form>
+                {% endif %}
+                <a href="{{ url_for('batch_queue_create') }}" class="btn btn-primary">
+                    <i class="fas fa-plus me-2"></i>New queue job
+                </a>
+            </div>
         </div>
 
         {% include '_flashes.html' %}

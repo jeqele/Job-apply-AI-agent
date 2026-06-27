@@ -360,6 +360,16 @@ class BatchQueueRepository:
             conn.execute("DELETE FROM batch_search_jobs WHERE id = ?", (job_id,))
         return True
 
+    def clear_finished_jobs(self) -> int:
+        """Delete all completed, failed, and cancelled queue jobs."""
+        placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
+        with get_connection() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM batch_search_jobs WHERE status IN ({placeholders})",
+                tuple(TERMINAL_STATUSES),
+            )
+        return cursor.rowcount
+
     def pause_job(self, job_id: int) -> bool:
         with get_connection() as conn:
             updated = conn.execute(

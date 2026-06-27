@@ -192,6 +192,40 @@ class BatchQueueRepositoryTests(unittest.TestCase):
         self.assertEqual(job["name"], "Single batch")
         self.assertNotIn("part", job["name"])
 
+    def test_clear_finished_jobs_removes_terminal_only(self):
+        running = self.repo.create_job(
+            name="In progress",
+            titles=["Engineer"],
+            locations=["Berlin"],
+        )
+        failed = self.repo.create_job(
+            name="Broken",
+            titles=["Analyst"],
+            locations=["Remote"],
+        )
+        pending = self.repo.create_job(
+            name="Waiting",
+            titles=["QA"],
+            locations=["London"],
+        )
+        claimed = self.repo.claim_next_pending()
+        self.assertEqual(claimed["id"], running["id"])
+        self.repo.complete_job(
+            running["id"],
+            search_run_id=1,
+            result={"search_run_id": 1, "total_jobs": 1},
+            message="Done",
+            reschedule=False,
+        )
+        self.repo.fail_job(failed["id"], "Worker error")
+
+        deleted = self.repo.clear_finished_jobs()
+        self.assertEqual(deleted, 2)
+        remaining = self.repo.list_jobs()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["id"], pending["id"])
+        self.assertEqual(remaining[0]["status"], "pending")
+
 
 class QueueCheckpointTests(unittest.TestCase):
     def test_stop_raises(self):

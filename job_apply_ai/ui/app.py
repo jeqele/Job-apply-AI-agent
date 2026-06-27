@@ -1618,9 +1618,13 @@ def _batch_queue_form_from_request(sources: str | None = None) -> dict:
 def batch_queue_list():
     """List batch search queue jobs."""
     jobs = batch_queue_repo.list_jobs()
+    finished_count = sum(
+        1 for job in jobs if job['status'] in ('completed', 'failed', 'cancelled')
+    )
     return render_template(
         'batch_queue.html',
         jobs=jobs,
+        finished_count=finished_count,
         status_labels=STATUS_LABELS,
         schedule_labels=SCHEDULE_LABELS,
     )
@@ -1755,6 +1759,17 @@ def batch_queue_edit(job_id):
         form=form,
         schedule_labels=SCHEDULE_LABELS,
     )
+
+
+@app.route('/batch-queue/clear', methods=['POST'])
+def batch_queue_clear():
+    """Remove finished batch search queue jobs (completed, failed, cancelled)."""
+    deleted = batch_queue_repo.clear_finished_jobs()
+    if deleted:
+        flash(f'Removed {deleted} finished batch search job(s).', 'success')
+    else:
+        flash('No finished batch search jobs to clear.', 'info')
+    return redirect(url_for('batch_queue_list'))
 
 
 @app.route('/batch-queue/<int:job_id>/delete', methods=['POST'])
