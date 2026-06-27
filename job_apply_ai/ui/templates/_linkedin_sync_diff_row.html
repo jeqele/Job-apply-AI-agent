@@ -1,0 +1,50 @@
+<tr data-diff-id="{{ diff.id }}">
+    <td><strong>{{ diff.label }}</strong></td>
+    <td>
+        {% if diff.status == 'local_only' %}
+            <span class="badge status-badge bg-info text-dark">Only in profile</span>
+        {% elif diff.status == 'linkedin_only' %}
+            <span class="badge status-badge bg-warning text-dark">Only on LinkedIn</span>
+        {% else %}
+            <span class="badge status-badge bg-danger">Different</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if diff.local_display %}
+            <div class="diff-value">{{ diff.local_display }}</div>
+        {% else %}
+            <span class="diff-empty">—</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if diff.linkedin_display %}
+            <div class="diff-value">{{ diff.linkedin_display }}</div>
+        {% else %}
+            <span class="diff-empty">—</span>
+        {% endif %}
+    </td>
+    <td>
+        <div class="action-group">
+            {% if diff.status in ('linkedin_only', 'different') %}
+                <button type="button" class="btn btn-sm btn-outline-success sync-action" data-action="add_to_profile" data-diff-id="{{ diff.id }}">
+                    <i class="fas fa-arrow-left me-1"></i>Add to profile
+                </button>
+            {% endif %}
+            {% if diff.status in ('local_only', 'different') %}
+                <button type="button" class="btn btn-sm btn-outline-secondary sync-action" data-action="remove_from_profile" data-diff-id="{{ diff.id }}">
+                    <i class="fas fa-times me-1"></i>Remove from profile
+                </button>
+            {% endif %}
+            {% if diff.status in ('local_only', 'different') %}
+                <button type="button" class="btn btn-sm btn-outline-primary sync-action" data-action="add_to_linkedin" data-diff-id="{{ diff.id }}">
+                    <i class="fab fa-linkedin me-1"></i>Add to LinkedIn
+                </button>
+            {% endif %}
+            {% if diff.status in ('linkedin_only', 'different') %}
+                <button type="button" class="btn btn-sm btn-outline-danger sync-action" data-action="remove_from_linkedin" data-diff-id="{{ diff.id }}">
+                    <i class="fas fa-trash me-1"></i>Remove from LinkedIn
+                </button>
+            {% endif %}
+        </div>
+    </td>
+</tr>

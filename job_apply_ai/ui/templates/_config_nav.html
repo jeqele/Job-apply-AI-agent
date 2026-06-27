@@ -20,7 +20,7 @@
                     <span class="label">Jobs</span>
                 </a>
                 <a href="{{ url_for('user_profile') }}"
-                   class="nav-link-btn {{ 'active' if request.endpoint in ('user_profile', 'upload_cv', 'start_profile_import') else '' }}">
+                   class="nav-link-btn {{ 'active' if request.endpoint in ('user_profile', 'upload_cv', 'start_profile_import', 'linkedin_profile_sync', 'linkedin_profile_sync_fetch', 'linkedin_profile_sync_apply') else '' }}">
                     <i class="fas fa-user"></i>
                     <span class="label">Profile</span>
                 </a>

@@ -25,6 +25,13 @@ from job_apply_ai.job_sources import (
 )
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
 from job_apply_ai.scraper.linkedin_job_url import parse_linkedin_job_url
+from job_apply_ai.scraper.linkedin_mcp_client import LinkedInMcpError, check_linkedin_mcp_health
+from job_apply_ai.scraper.linkedin_profile_parser import fetch_linkedin_profile
+from job_apply_ai.scraper.linkedin_profile_sync import (
+    apply_sync_action,
+    compare_profiles,
+    diff_summary,
+)
 from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.batch_search import (
     build_search_queue,
@@ -2730,6 +2737,85 @@ def oauth_set_default_account(account_id):
     profile_repo.save_profile(profile)
     flash('Default sending account updated.', 'success')
     return redirect(url_for('user_profile'))
+
+
+LINKEDIN_SYNC_SESSION_KEY = 'linkedin_sync_profile'
+
+
+def _linkedin_sync_snapshot() -> dict[str, Any] | None:
+    raw = session.get(LINKEDIN_SYNC_SESSION_KEY)
+    return raw if isinstance(raw, dict) else None
+
+
+def _store_linkedin_sync_snapshot(profile: dict[str, Any]) -> None:
+    snapshot = dict(profile)
+    snapshot.pop('_raw_sections', None)
+    session[LINKEDIN_SYNC_SESSION_KEY] = snapshot
+
+
+def _linkedin_sync_response(local_profile: dict[str, Any], linkedin_profile: dict[str, Any]) -> dict[str, Any]:
+    diffs = compare_profiles(local_profile, linkedin_profile)
+    return {
+        'ok': True,
+        'diffs': diffs,
+        'summary': diff_summary(diffs),
+        'linkedin_url': linkedin_profile.get('_linkedin_url') or linkedin_profile.get('linkedin') or '',
+    }
+
+
+@app.route('/profile/linkedin-sync')
+def linkedin_profile_sync():
+    """Compare HermesHire profile with LinkedIn and reconcile differences."""
+    local_profile = profile_repo.get_profile()
+    linkedin_profile = _linkedin_sync_snapshot()
+    initial_diffs = compare_profiles(local_profile, linkedin_profile) if linkedin_profile else []
+    return render_template(
+        'profile_linkedin_sync.html',
+        mcp_healthy=check_linkedin_mcp_health(),
+        initial_diffs=initial_diffs,
+        initial_summary=diff_summary(initial_diffs) if initial_diffs else None,
+        linkedin_url=(linkedin_profile or {}).get('_linkedin_url') or (linkedin_profile or {}).get('linkedin') or '',
+    )
+
+
+@app.route('/profile/linkedin-sync/fetch', methods=['POST'])
+def linkedin_profile_sync_fetch():
+    """Fetch LinkedIn profile via MCP and return diff rows."""
+    try:
+        linkedin_profile = fetch_linkedin_profile()
+    except LinkedInMcpError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 503
+
+    _store_linkedin_sync_snapshot(linkedin_profile)
+    local_profile = profile_repo.get_profile()
+    return jsonify(_linkedin_sync_response(local_profile, linkedin_profile))
+
+
+@app.route('/profile/linkedin-sync/apply', methods=['POST'])
+def linkedin_profile_sync_apply():
+    """Apply one sync action to the local profile or prepare a manual LinkedIn edit."""
+    payload = request.get_json(silent=True) or {}
+    diff_id = str(payload.get('diff_id') or '').strip()
+    action = str(payload.get('action') or '').strip()
+    if not diff_id or not action:
+        return jsonify({'ok': False, 'error': 'diff_id and action are required.'}), 400
+
+    linkedin_profile = _linkedin_sync_snapshot()
+    if not linkedin_profile:
+        return jsonify({'ok': False, 'error': 'Fetch your LinkedIn profile first.'}), 400
+
+    local_profile = profile_repo.get_profile()
+    try:
+        updated_profile, result = apply_sync_action(local_profile, linkedin_profile, diff_id, action)
+    except ValueError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+
+    if result.get('applied'):
+        profile_repo.save_profile(updated_profile)
+
+    response = _linkedin_sync_response(updated_profile if result.get('applied') else local_profile, linkedin_profile)
+    response['result'] = result
+    return jsonify(response)
 
 
 @app.route('/profile/export')

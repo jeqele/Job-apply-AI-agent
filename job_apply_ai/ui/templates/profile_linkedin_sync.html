@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'LinkedIn Profile Sync' %}
+    {% include '_app_head.html' %}
+    <style>
+        .sync-summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        .sync-stat {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.75rem;
+            padding: 0.75rem 1rem;
+            min-width: 8rem;
+        }
+        .sync-stat .value {
+            font-size: 1.35rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        .sync-stat .label {
+            color: #64748b;
+            font-size: 0.85rem;
+        }
+        .diff-table td {
+            vertical-align: top;
+        }
+        .diff-value {
+            white-space: pre-wrap;
+            font-size: 0.92rem;
+            max-width: 28rem;
+        }
+        .diff-empty {
+            color: #94a3b8;
+            font-style: italic;
+        }
+        .status-badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .action-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            min-width: 11rem;
+        }
+        .action-group .btn {
+            text-align: left;
+            white-space: normal;
+        }
+        .sync-loading {
+            display: none;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem 0;
+            color: #475569;
+        }
+        .sync-loading.active {
+            display: flex;
+        }
+        .manual-modal .clipboard-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+            max-height: 12rem;
+            overflow: auto;
+        }
+    </style>
+</head>
+<body>
+    {% include '_config_nav.html' %}
+
+    <div class="container page-shell">
+        <div class="page-intro d-flex flex-wrap justify-content-between align-items-start gap-3 mt-3">
+            <div>
+                <h1>LinkedIn profile sync</h1>
+                <p>Compare your HermesHire CV profile with your live LinkedIn profile and reconcile differences.</p>
+            </div>
+            <a href="{{ url_for('user_profile') }}" class="btn btn-ghost btn-sm">
+                <i class="fas fa-arrow-left me-2"></i>Back to profile
+            </a>
+        </div>
+
+        {% include '_flashes.html' %}
+
+        <div class="hh-card mb-3">
+            <div class="hh-card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <span>LinkedIn MCP connection</span>
+                <span class="badge {{ 'bg-success' if mcp_healthy else 'bg-secondary' }}">
+                    {{ 'Connected' if mcp_healthy else 'Unavailable' }}
+                </span>
+            </div>
+            <div class="hh-card-body">
+                {% if not mcp_healthy %}
+                    <p class="mb-2">Start the LinkedIn MCP sidecar before syncing:</p>
+                    <code class="d-block mb-3">scripts/start-linkedin-mcp.ps1</code>
+                    <p class="small text-muted mb-0">Log in once with <code>uvx mcp-server-linkedin@latest --login</code> if needed.</p>
+                {% else %}
+                    <p class="mb-3">The sidecar is reachable. Fetching your profile may take up to a minute while LinkedIn sections load.</p>
+                    <button type="button" class="btn btn-primary" id="fetchLinkedInBtn" {% if not mcp_healthy %}disabled{% endif %}>
+                        <i class="fab fa-linkedin me-2"></i>Fetch LinkedIn profile
+                    </button>
+                {% endif %}
+                <div class="sync-loading" id="syncLoading">
+                    <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
+                    <span>Reading LinkedIn profile sections (experience, skills, contact info)…</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="syncResults" {% if not initial_diffs %}class="d-none"{% endif %}>
+            <div class="hh-card mb-3">
+                <div class="hh-card-header">Summary</div>
+                <div class="hh-card-body">
+                    <div class="sync-summary" id="syncSummary">
+                        <div class="sync-stat">
+                            <div class="value" id="statTotal">{{ initial_summary.total if initial_summary else 0 }}</div>
+                            <div class="label">Differences</div>
+                        </div>
+                        <div class="sync-stat">
+                            <div class="value" id="statLocalOnly">{{ initial_summary.local_only if initial_summary else 0 }}</div>
+                            <div class="label">Only in profile</div>
+                        </div>
+                        <div class="sync-stat">
+                            <div class="value" id="statLinkedinOnly">{{ initial_summary.linkedin_only if initial_summary else 0 }}</div>
+                            <div class="label">Only on LinkedIn</div>
+                        </div>
+                        <div class="sync-stat">
+                            <div class="value" id="statDifferent">{{ initial_summary.different if initial_summary else 0 }}</div>
+                            <div class="label">Different values</div>
+                        </div>
+                    </div>
+                    {% if linkedin_url %}
+                        <p class="small text-muted mt-3 mb-0">
+                            LinkedIn profile: <a href="{{ linkedin_url }}" target="_blank" rel="noopener">{{ linkedin_url }}</a>
+                        </p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="hh-card">
+                <div class="hh-card-header">Differences</div>
+                <div class="hh-card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover diff-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Field</th>
+                                    <th>Status</th>
+                                    <th>HermesHire profile</th>
+                                    <th>LinkedIn</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="diffTableBody">
+                                {% for diff in initial_diffs or [] %}
+                                    {% include '_linkedin_sync_diff_row.html' %}
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="p-4 text-center text-muted d-none" id="noDiffsMessage">
+                        <i class="fas fa-check-circle fa-2x mb-2 d-block text-success"></i>
+                        Your HermesHire profile matches LinkedIn for the fields we compare.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade manual-modal" id="manualLinkedInModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Update LinkedIn manually</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p id="manualLinkedInMessage" class="mb-3"></p>
+                    <div class="clipboard-box mb-3" id="manualLinkedInClipboard"></div>
+                    <a href="#" target="_blank" rel="noopener" class="btn btn-primary" id="manualLinkedInEditLink">
+                        <i class="fab fa-linkedin me-2"></i>Open LinkedIn editor
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const fetchUrl = {{ url_for('linkedin_profile_sync_fetch')|tojson }};
+        const applyUrl = {{ url_for('linkedin_profile_sync_apply')|tojson }};
+        const fetchBtn = document.getElementById('fetchLinkedInBtn');
+        const syncLoading = document.getElementById('syncLoading');
+        const syncResults = document.getElementById('syncResults');
+        const diffTableBody = document.getElementById('diffTableBody');
+        const noDiffsMessage = document.getElementById('noDiffsMessage');
+        const manualModal = new bootstrap.Modal(document.getElementById('manualLinkedInModal'));
+
+        function statusBadge(status) {
+            const labels = {
+                local_only: ['Only in profile', 'bg-info text-dark'],
+                linkedin_only: ['Only on LinkedIn', 'bg-warning text-dark'],
+                different: ['Different', 'bg-danger'],
+            };
+            const [label, cls] = labels[status] || ['Changed', 'bg-secondary'];
+            return `<span class="badge status-badge ${cls}">${label}</span>`;
+        }
+
+        function renderValue(value) {
+            if (!value) {
+                return '<span class="diff-empty">—</span>';
+            }
+            return `<div class="diff-value">${escapeHtml(value)}</div>`;
+        }
+
+        function escapeHtml(text) {
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function renderDiffRow(diff) {
+            const canAddProfile = diff.status === 'linkedin_only' || diff.status === 'different';
+            const canRemoveProfile = diff.status === 'local_only' || diff.status === 'different';
+            const canAddLinkedin = diff.status === 'local_only' || diff.status === 'different';
+            const canRemoveLinkedin = diff.status === 'linkedin_only' || diff.status === 'different';
+            return `
+                <tr data-diff-id="${escapeHtml(diff.id)}">
+                    <td><strong>${escapeHtml(diff.label)}</strong></td>
+                    <td>${statusBadge(diff.status)}</td>
+                    <td>${renderValue(diff.local_display)}</td>
+                    <td>${renderValue(diff.linkedin_display)}</td>
+                    <td>
+                        <div class="action-group">
+                            ${canAddProfile ? `<button type="button" class="btn btn-sm btn-outline-success sync-action" data-action="add_to_profile" data-diff-id="${escapeHtml(diff.id)}"><i class="fas fa-arrow-left me-1"></i>Add to profile</button>` : ''}
+                            ${canRemoveProfile ? `<button type="button" class="btn btn-sm btn-outline-secondary sync-action" data-action="remove_from_profile" data-diff-id="${escapeHtml(diff.id)}"><i class="fas fa-times me-1"></i>Remove from profile</button>` : ''}
+                            ${canAddLinkedin ? `<button type="button" class="btn btn-sm btn-outline-primary sync-action" data-action="add_to_linkedin" data-diff-id="${escapeHtml(diff.id)}"><i class="fab fa-linkedin me-1"></i>Add to LinkedIn</button>` : ''}
+                            ${canRemoveLinkedin ? `<button type="button" class="btn btn-sm btn-outline-danger sync-action" data-action="remove_from_linkedin" data-diff-id="${escapeHtml(diff.id)}"><i class="fas fa-trash me-1"></i>Remove from LinkedIn</button>` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+
+        function updateSummary(summary) {
+            document.getElementById('statTotal').textContent = summary.total || 0;
+            document.getElementById('statLocalOnly').textContent = summary.local_only || 0;
+            document.getElementById('statLinkedinOnly').textContent = summary.linkedin_only || 0;
+            document.getElementById('statDifferent').textContent = summary.different || 0;
+        }
+
+        function renderDiffs(diffs, summary, linkedinUrl) {
+            syncResults.classList.remove('d-none');
+            updateSummary(summary);
+            diffTableBody.innerHTML = diffs.map(renderDiffRow).join('');
+            noDiffsMessage.classList.toggle('d-none', diffs.length > 0);
+            if (linkedinUrl) {
+                const link = document.querySelector('#syncSummary + p a, .hh-card-body a[href*="linkedin.com"]');
+            }
+        }
+
+        async function fetchLinkedInProfile() {
+            if (!fetchBtn) return;
+            fetchBtn.disabled = true;
+            syncLoading.classList.add('active');
+            try {
+                const response = await fetch(fetchUrl, {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    throw new Error(data.error || 'Failed to fetch LinkedIn profile.');
+                }
+                renderDiffs(data.diffs || [], data.summary || {}, data.linkedin_url || '');
+            } catch (error) {
+                alert(error.message || 'Failed to fetch LinkedIn profile.');
+            } finally {
+                fetchBtn.disabled = false;
+                syncLoading.classList.remove('active');
+            }
+        }
+
+        async function applySyncAction(button) {
+            const diffId = button.dataset.diffId;
+            const action = button.dataset.action;
+            button.disabled = true;
+            try {
+                const response = await fetch(applyUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body: JSON.stringify({ diff_id: diffId, action }),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    throw new Error(data.error || 'Sync action failed.');
+                }
+                if (data.result && data.result.manual) {
+                    document.getElementById('manualLinkedInMessage').textContent = data.result.message || '';
+                    document.getElementById('manualLinkedInClipboard').textContent = data.result.clipboard_text || '';
+                    const editLink = document.getElementById('manualLinkedInEditLink');
+                    editLink.href = data.result.edit_url || 'https://www.linkedin.com/in/me/';
+                    manualModal.show();
+                } else {
+                    renderDiffs(data.diffs || [], data.summary || {}, data.linkedin_url || '');
+                }
+            } catch (error) {
+                alert(error.message || 'Sync action failed.');
+                button.disabled = false;
+            }
+        }
+
+        if (fetchBtn) {
+            fetchBtn.addEventListener('click', fetchLinkedInProfile);
+        }
+
+        document.addEventListener('click', (event) => {
+            const button = event.target.closest('.sync-action');
+            if (button) {
+                applySyncAction(button);
+            }
+        });
+
+        {% if initial_diffs %}
+        noDiffsMessage.classList.toggle('d-none', {{ initial_diffs|length }} > 0);
+        {% endif %}
+    </script>
+</body>
+</html>
