@@ -72,6 +72,20 @@ DEFAULT_FAST_MODEL_PROVIDER = os.environ.get("LLM_FAST_PROVIDER", DEFAULT_LLM_PR
 DEFAULT_MAIN_MODEL_PROVIDER = os.environ.get("LLM_MAIN_PROVIDER", DEFAULT_LLM_PROVIDER)
 DEFAULT_DEV_MODE = os.environ.get("DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
 
+DEFAULT_WORKER_SETTINGS: dict[str, Any] = {
+    "ai_worker_concurrency": int(os.environ.get("AI_WORKER_CONCURRENCY", "3")),
+    "ai_worker_poll_seconds": float(os.environ.get("AI_WORKER_POLL_SECONDS", "2")),
+    "urgent_worker_concurrency": int(os.environ.get("URGENT_WORKER_CONCURRENCY", "2")),
+    "urgent_worker_poll_seconds": float(os.environ.get("URGENT_WORKER_POLL_SECONDS", "1")),
+}
+
+WORKER_SETTING_LIMITS = {
+    "ai_worker_concurrency": (1, 16),
+    "urgent_worker_concurrency": (1, 8),
+    "ai_worker_poll_seconds": (0.5, 30.0),
+    "urgent_worker_poll_seconds": (0.25, 30.0),
+}
+
 OLLAMA_SETTING_KEYS = ("base_url", "fast_model", "main_model", "num_predict")
 ALIBABA_SETTING_KEYS = ("api_key", "base_url", "fast_model", "main_model", "num_predict", "model_mode")
 FREELLMAPI_SETTING_KEYS = ALIBABA_SETTING_KEYS
@@ -361,6 +375,45 @@ def normalize_dev_mode(value: Any) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def normalize_worker_settings(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge stored background worker settings with defaults."""
+    settings = deepcopy(DEFAULT_WORKER_SETTINGS)
+    if not data:
+        return settings
+
+    for key, (minimum, maximum) in WORKER_SETTING_LIMITS.items():
+        if key not in data:
+            continue
+        try:
+            raw = data[key]
+            if isinstance(minimum, float):
+                value = float(raw)
+            else:
+                value = int(raw)
+            settings[key] = max(minimum, min(maximum, value))
+        except (TypeError, ValueError):
+            pass
+
+    return settings
+
+
+def worker_settings_from_form(form_data: Any) -> dict[str, Any]:
+    """Build worker settings from a submitted settings form."""
+    if hasattr(form_data, "to_dict"):
+        scalar_data = form_data.to_dict()
+    else:
+        scalar_data = dict(form_data)
+
+    return normalize_worker_settings(
+        {
+            "ai_worker_concurrency": scalar_data.get("ai_worker_concurrency", ""),
+            "ai_worker_poll_seconds": scalar_data.get("ai_worker_poll_seconds", ""),
+            "urgent_worker_concurrency": scalar_data.get("urgent_worker_concurrency", ""),
+            "urgent_worker_poll_seconds": scalar_data.get("urgent_worker_poll_seconds", ""),
+        }
+    )
+
+
 def llm_settings_from_form(
     form_data: Any,
     *,
@@ -421,6 +474,7 @@ class AppSettingsRepository:
             "ollama": normalize_ollama_settings(data.get("ollama")),
             "alibaba": normalize_alibaba_settings(data.get("alibaba")),
             "freellmapi": normalize_freellmapi_settings(data.get("freellmapi")),
+            "workers": normalize_worker_settings(data.get("workers")),
         }
 
     def _default_settings(self) -> dict[str, Any]:
@@ -432,6 +486,7 @@ class AppSettingsRepository:
             "ollama": normalize_ollama_settings(None),
             "alibaba": normalize_alibaba_settings(None),
             "freellmapi": normalize_freellmapi_settings(None),
+            "workers": normalize_worker_settings(None),
         }
 
     def get_dev_mode(self) -> bool:
@@ -450,6 +505,9 @@ class AppSettingsRepository:
 
     def get_freellmapi_settings(self) -> dict[str, Any]:
         return self.get_settings()["freellmapi"]
+
+    def get_worker_settings(self) -> dict[str, Any]:
+        return self.get_settings()["workers"]
 
     def get_llm_provider(self) -> str:
         return self.get_settings()["llm_provider"]
@@ -524,6 +582,13 @@ class AppSettingsRepository:
             current["freellmapi"] = incoming
         if "dev_mode" in data:
             current["dev_mode"] = normalize_dev_mode(data["dev_mode"])
+        if "workers" in data:
+            current["workers"] = normalize_worker_settings(data["workers"])
+        return self._persist(current)
+
+    def save_worker_settings(self, worker_settings: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_settings()
+        current["workers"] = normalize_worker_settings(worker_settings)
         return self._persist(current)
 
     def save_settings(self, data: dict[str, Any]) -> dict[str, Any]:

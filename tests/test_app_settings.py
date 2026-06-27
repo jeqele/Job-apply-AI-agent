@@ -8,8 +8,10 @@ from job_apply_ai.storage.app_settings import (
     normalize_llm_provider,
     normalize_model_providers,
     normalize_ollama_settings,
+    normalize_worker_settings,
     ollama_settings_from_form,
     uses_alibaba_provider,
+    worker_settings_from_form,
 )
 from job_apply_ai.storage.database import init_db
 
@@ -284,3 +286,62 @@ def test_dev_mode_round_trip(monkeypatch, tmp_path):
     assert repo.get_dev_mode() is True
     repo.save_llm_settings({"dev_mode": False})
     assert repo.get_dev_mode() is False
+
+
+def test_normalize_worker_settings_uses_defaults():
+    settings = normalize_worker_settings(None)
+    assert settings["ai_worker_concurrency"] == 3
+    assert settings["ai_worker_poll_seconds"] == 2.0
+    assert settings["urgent_worker_concurrency"] == 2
+    assert settings["urgent_worker_poll_seconds"] == 1.0
+
+
+def test_normalize_worker_settings_clamps_values():
+    settings = normalize_worker_settings(
+        {
+            "ai_worker_concurrency": 99,
+            "ai_worker_poll_seconds": 0.1,
+            "urgent_worker_concurrency": 0,
+            "urgent_worker_poll_seconds": 100,
+        }
+    )
+    assert settings["ai_worker_concurrency"] == 16
+    assert settings["ai_worker_poll_seconds"] == 0.5
+    assert settings["urgent_worker_concurrency"] == 1
+    assert settings["urgent_worker_poll_seconds"] == 30.0
+
+
+def test_worker_settings_from_form():
+    settings = worker_settings_from_form(
+        {
+            "ai_worker_concurrency": "5",
+            "ai_worker_poll_seconds": "3",
+            "urgent_worker_concurrency": "4",
+            "urgent_worker_poll_seconds": "0.5",
+        }
+    )
+    assert settings["ai_worker_concurrency"] == 5
+    assert settings["ai_worker_poll_seconds"] == 3.0
+    assert settings["urgent_worker_concurrency"] == 4
+    assert settings["urgent_worker_poll_seconds"] == 0.5
+
+
+def test_worker_settings_round_trip(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setenv("JOB_APPLY_AI_DB", db_path)
+    init_db(db_path)
+
+    repo = AppSettingsRepository()
+    saved = repo.save_worker_settings(
+        {
+            "ai_worker_concurrency": 6,
+            "ai_worker_poll_seconds": 4,
+            "urgent_worker_concurrency": 3,
+            "urgent_worker_poll_seconds": 0.75,
+        }
+    )
+    assert saved["workers"]["ai_worker_concurrency"] == 6
+    assert repo.get_worker_settings()["urgent_worker_poll_seconds"] == 0.75
+
+    full = repo.get_settings()
+    assert full["workers"]["ai_worker_poll_seconds"] == 4

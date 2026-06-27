@@ -24,7 +24,6 @@ from job_apply_ai.job_sources import (
     selected_source_ids_from_csv,
 )
 from job_apply_ai.scraper.aggregator import search_jobs as aggregate_search_jobs
-from job_apply_ai.scraper.linkedin import LinkedInScraper
 from job_apply_ai.scraper.linkedin_job_url import parse_linkedin_job_url
 from job_apply_ai.scraper.search_filters import SearchFilters
 from job_apply_ai.batch_search import (
@@ -98,7 +97,7 @@ from job_apply_ai.cv_modifier.cv_content_store import (
     start_chat_session,
 )
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
-from job_apply_ai.cv_modifier.profile_importer import ProfileImporter
+from job_apply_ai.cv_workflows import BATCH_ATS_FRIENDLY_PASSES
 from job_apply_ai.ui.cv_tasks import (
     complete_task,
     create_task,
@@ -112,6 +111,7 @@ from job_apply_ai.ui.cv_tasks import (
     TaskStopped,
     update_task,
 )
+from job_apply_ai.paths import get_data_dir
 from job_apply_ai.utils.helpers import ensure_directory_exists, sanitize_filename
 from job_apply_ai.storage.database import init_db
 from job_apply_ai.storage.batch_queue_repository import (
@@ -120,6 +120,18 @@ from job_apply_ai.storage.batch_queue_repository import (
     STATUS_LABELS,
     TERMINAL_STATUSES,
     to_task_snapshot,
+)
+from job_apply_ai.storage.ai_task_queue_repository import (
+    AiTaskQueueRepository,
+    AI_STATUS_LABELS,
+    AI_TASK_TYPE_LABELS,
+    CONTROLLABLE_AI_TASK_TYPES,
+    to_ai_task_snapshot,
+)
+from job_apply_ai.storage.urgent_task_queue_repository import (
+    UrgentTaskQueueRepository,
+    CONTROLLABLE_URGENT_TASK_TYPES,
+    to_urgent_task_snapshot,
 )
 from job_apply_ai.storage.job_repository import JobRepository
 from job_apply_ai.storage.user_profile import (
@@ -144,6 +156,7 @@ from job_apply_ai.storage.app_settings import (
     llm_settings_from_form,
     uses_alibaba_provider,
     uses_freellmapi_provider,
+    worker_settings_from_form,
 )
 from job_apply_ai.storage.dev_log import DEV_LOG_CATEGORIES, DevLogRepository
 from job_apply_ai.dev_logging import dev_agent, dev_task, dev_llm_context, invalidate_dev_mode_cache
@@ -179,7 +192,7 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_key_for_testing')
-app.config['UPLOAD_FOLDER'] = os.path.join(tempfile.gettempdir(), 'job_apply_ai')
+app.config['UPLOAD_FOLDER'] = get_data_dir()
 ensure_directory_exists(app.config['UPLOAD_FOLDER'])
 
 # Create output directories
@@ -192,6 +205,8 @@ ensure_directory_exists(app.config['JOBS_OUTPUT_DIR'])
 init_db()
 job_repo = JobRepository()
 batch_queue_repo = BatchQueueRepository()
+ai_task_queue_repo = AiTaskQueueRepository()
+urgent_task_queue_repo = UrgentTaskQueueRepository()
 profile_repo = UserProfileRepository()
 app_settings_repo = AppSettingsRepository()
 
@@ -211,13 +226,130 @@ app.config['SESSION_TYPE'] = 'filesystem'
 
 
 def _resolve_task(task_id: str) -> dict | None:
-    """Return an in-memory task or a queue-backed batch search snapshot."""
+    """Return an in-memory task or a queue-backed task snapshot."""
     task = get_task(task_id)
     if task:
         return task
     queue_job = batch_queue_repo.get_job_by_task_id(task_id)
     if queue_job:
         return to_task_snapshot(queue_job)
+    ai_job = ai_task_queue_repo.get_job_by_task_id(task_id)
+    if ai_job:
+        return to_ai_task_snapshot(ai_job)
+    urgent_job = urgent_task_queue_repo.get_job_by_task_id(task_id)
+    if urgent_job:
+        return to_urgent_task_snapshot(urgent_job)
+    return None
+
+
+def _enqueue_urgent_task(
+    task_type: str,
+    payload: dict,
+    *,
+    job_id: int | None = None,
+) -> str:
+    """Enqueue an urgent UI I/O task for the urgent-worker process."""
+    job = urgent_task_queue_repo.create_job(
+        task_type=task_type,
+        payload=payload,
+        job_id=job_id,
+    )
+    return job['task_id']
+
+
+def _enqueue_ai_task(
+    task_type: str,
+    payload: dict,
+    *,
+    job_id: int | None = None,
+) -> str:
+    """Enqueue an AI task for the separate ai-worker process."""
+    job = ai_task_queue_repo.create_job(
+        task_type=task_type,
+        payload=payload,
+        job_id=job_id,
+    )
+    return job['task_id']
+
+
+def _ai_cv_complete_url(task: dict) -> str:
+    task_id = task['task_id']
+    if task.get('task_type') == 'single_cv':
+        return url_for('make_cv_complete', task_id=task_id)
+    meta = task.get('meta') or {}
+    if meta.get('selected'):
+        return url_for('batch_make_cvs_complete', task_id=task_id)
+    return url_for('make_all_cvs_complete', task_id=task_id)
+
+
+def _ai_cv_back_context(task: dict) -> tuple[str, str]:
+    meta = task.get('meta') or {}
+    if task.get('task_type') == 'single_cv':
+        payload = ai_task_queue_repo.get_job_by_task_id(task['task_id'])
+        payload_data = (payload or {}).get('payload') or {}
+        return (
+            _cv_generation_back_url(
+                bool(payload_data.get('return_from_manage')),
+                payload_data.get('return_folder', 'all'),
+                payload_data.get('return_search', ''),
+                payload_data.get('return_sort', ''),
+            ),
+            'Back to Jobs',
+        )
+    back_url = session.get('batch_cv_back_url') or url_for('job_list')
+    back_label = session.get('batch_cv_back_label') or 'Back to Job List'
+    return back_url, back_label
+
+
+def _ai_task_progress_url(task: dict) -> str | None:
+    task_id = task.get('task_id')
+    if not task_id:
+        return None
+    task_type = task.get('task_type')
+    if task_type in ('single_cv', 'batch_cv'):
+        return url_for('ai_cv_task_progress', task_id=task_id)
+    if task_type == 'job_match_analyze':
+        return url_for('job_match_analyze_progress', task_id=task_id)
+    if task_type == 'batch_ats_friendly':
+        return url_for('batch_ats_friendly_progress', task_id=task_id)
+    if task_type == 'ats_friendly':
+        job_id = task.get('job_id')
+        if job_id:
+            return url_for('ats_friendly_progress', job_id=job_id)
+    if task_type == 'profile_import':
+        return url_for('profile_import_progress', task_id=task_id)
+    if task_type == 'single_search':
+        return url_for('single_search_progress', task_id=task_id)
+    if task_type == 'batch_search':
+        return url_for('batch_search_progress', task_id=task_id)
+    if task_type == 'linkedin_job_import':
+        return url_for('linkedin_job_import_progress', task_id=task_id)
+    return None
+
+
+def _sync_queue_task(task_id: str) -> str | None:
+    """Return task_id if a queue-backed task is still active."""
+    batch_job = batch_queue_repo.get_job_by_task_id(task_id)
+    if batch_job:
+        if batch_job['status'] in TERMINAL_STATUSES:
+            return None
+        if batch_job['status'] in ('pending', 'running', 'paused'):
+            return task_id
+        return None
+
+    ai_job = ai_task_queue_repo.get_job_by_task_id(task_id)
+    if ai_job:
+        if ai_job['status'] in TERMINAL_STATUSES:
+            return None
+        if ai_job['status'] in ('pending', 'running', 'paused'):
+            return task_id
+
+    urgent_job = urgent_task_queue_repo.get_job_by_task_id(task_id)
+    if urgent_job:
+        if urgent_job['status'] in TERMINAL_STATUSES:
+            return None
+        if urgent_job['status'] in ('pending', 'running', 'paused'):
+            return task_id
     return None
 
 
@@ -228,13 +360,22 @@ def _sync_session_background_task(session_key: str) -> str | None:
         return None
 
     if session_key == 'batch_search_active':
-        queue_job = batch_queue_repo.get_job_by_task_id(task_id)
-        if queue_job:
-            if queue_job['status'] in TERMINAL_STATUSES:
-                session.pop(session_key, None)
-                return None
-            if queue_job['status'] in ('pending', 'running', 'paused'):
-                return task_id
+        active = _sync_queue_task(task_id)
+        if active:
+            return active
+        session.pop(session_key, None)
+        return None
+
+    if session_key in (
+        'cv_generation_active',
+        'ats_friendly_active',
+        'batch_ats_friendly_active',
+        'job_match_analyze_active',
+        'single_search_active',
+    ):
+        active = _sync_queue_task(task_id)
+        if active:
+            return active
         session.pop(session_key, None)
         return None
 
@@ -282,6 +423,8 @@ def _background_task_progress_label(task: dict) -> str:
         'batch_cv': 'Generating AI CVs',
         'ats_friendly': 'ATS Friendly Analysis',
         'batch_ats_friendly': 'Batch ATS Optimization',
+        'profile_import': 'Profile import',
+        'linkedin_job_import': 'LinkedIn job import',
     }
     return labels.get(task.get('task_type', ''), 'Background task')
 
@@ -295,13 +438,9 @@ def _background_task_progress_url(task_id: str, task: dict) -> str | None:
     if task_type == 'job_match_analyze':
         return url_for('job_match_analyze_progress', task_id=task_id)
     if task_type == 'single_cv':
-        job_id = task.get('job_id')
-        if job_id:
-            return url_for('make_cv', job_id=job_id)
+        return url_for('ai_cv_task_progress', task_id=task_id)
     if task_type == 'batch_cv':
-        if session.get('batch_cv_job_ids'):
-            return url_for('batch_make_cvs_progress')
-        return url_for('make_all_cvs')
+        return url_for('ai_cv_task_progress', task_id=task_id)
     if task_type == 'ats_friendly':
         job_id = task.get('job_id')
         if job_id:
@@ -329,8 +468,6 @@ def _active_background_tasks() -> list[dict]:
             'progress_url': progress_url,
             'message': task.get('message', ''),
         }
-        if session_key == 'cv_generation_active':
-            entry['release_url'] = url_for('release_cv_generation_lock')
         active_tasks.append(entry)
     return active_tasks
 
@@ -1249,113 +1386,15 @@ def _ats_friendly_results_context(
     }
 
 
-CONTROLLABLE_TASK_TYPES = frozenset({'single_search', 'batch_search', 'job_match_analyze', 'batch_ats_friendly'})
-
-BATCH_ATS_FRIENDLY_PASSES = (
-    {'label': 'Analyze & accept all', 'apply_all': True},
-    {'label': 'Analyze & accept all', 'apply_all': True},
-    {'label': 'Analyze only', 'apply_all': False},
-)
-
-
-def _run_single_search_task(
-    task_id: str,
-    keyword: str,
-    location: str,
-    max_jobs: int,
-    sources: str,
-    source_list: list[str],
-    mode: str,
-    profile: dict,
-    search_filters: SearchFilters | None = None,
-) -> None:
-    update_task(
-        task_id,
-        status='running',
-        step='searching',
-        message=f'Searching for {keyword} in {location}…',
-        percent=5,
-        meta={'keyword': keyword, 'location': location},
-    )
-
-    try:
-        task_control_checkpoint(task_id)
-    except TaskStopped:
-        fail_task(task_id, 'Job search stopped before fetching results.')
-        return
-
-    search_run_id = job_repo.create_search_run(keyword, location, sources, mode)
-
-    update_task(
-        task_id,
-        status='running',
-        step='fetching',
-        message='Fetching jobs from sources…',
-        percent=20,
-        meta={'keyword': keyword, 'location': location},
-    )
-
-    try:
-        jobs = aggregate_search_jobs(
-            keyword,
-            location,
-            max_jobs=max_jobs,
-            sources=source_list,
-            mode=mode,
-            enrich_details=True,
-            search_filters=search_filters,
-        )
-    except Exception as exc:
-        logger.error('Single search failed for %r in %r: %s', keyword, location, exc)
-        fail_task(task_id, f'Job search failed: {exc}')
-        return
-
-    try:
-        task_control_checkpoint(task_id)
-    except TaskStopped:
-        if not jobs:
-            fail_task(task_id, 'Job search stopped before saving any jobs.')
-            return
-
-        processed_jobs = _enrich_jobs_with_skills(jobs)
-        processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
-        job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
-        complete_task(
-            task_id,
-            {
-                'search_run_id': search_run_id,
-                'total_jobs': len(processed_jobs),
-                'stopped': True,
-            },
-            message=f'Search stopped — saved {len(processed_jobs)} jobs',
-        )
-        return
-
-    if not jobs:
-        fail_task(task_id, 'No jobs found. Try different search terms or adjust filters.')
-        return
-
-    update_task(
-        task_id,
-        status='running',
-        step='processing',
-        message='Matching skills and profile…',
-        percent=75,
-        meta={'keyword': keyword, 'location': location},
-    )
-
-    processed_jobs = _enrich_jobs_with_skills(jobs)
-    processed_jobs = classify_jobs_by_profile_match(processed_jobs, profile)
-    job_repo.upsert_jobs(processed_jobs, search_run_id=search_run_id)
-
-    complete_task(
-        task_id,
-        {
-            'search_run_id': search_run_id,
-            'total_jobs': len(processed_jobs),
-        },
-        message=f'Search complete — saved {len(processed_jobs)} jobs',
-    )
+CONTROLLABLE_TASK_TYPES = frozenset(
+    {
+        'single_search',
+        'batch_search',
+        'job_match_analyze',
+        'batch_ats_friendly',
+        'batch_cv',
+    }
+) | CONTROLLABLE_AI_TASK_TYPES | CONTROLLABLE_URGENT_TASK_TYPES
 
 
 def _read_batch_lines_from_request(field_name: str, text_field_name: str) -> list[str]:
@@ -1668,26 +1707,29 @@ def search_jobs():
             return redirect(url_for('index'))
 
         source_list = parse_sources_csv(sources)
-        profile = profile_repo.get_profile()
 
-        task_id = create_task(
+        task_id = _enqueue_urgent_task(
             'single_search',
-            meta={'keyword': keyword, 'location': location},
+            {
+                'keyword': keyword,
+                'location': location,
+                'max_jobs': max_jobs,
+                'sources': sources,
+                'source_list': source_list,
+                'mode': mode,
+                'search_filters': {
+                    'remote': search_filters.remote,
+                    'relocation': search_filters.relocation,
+                    'visa_sponsorship': search_filters.visa_sponsorship,
+                },
+                'meta': {'keyword': keyword, 'location': location},
+            },
         )
         session['single_search_active'] = task_id
-        start_background_task(
-            task_id,
-            lambda: _run_single_search_task(
-                task_id,
-                keyword,
-                location,
-                max_jobs,
-                sources,
-                source_list,
-                mode,
-                profile,
-                search_filters,
-            ),
+        flash(
+            'Job search queued — the urgent worker will start it immediately '
+            '(run: job-apply-ai urgent-worker)',
+            'success',
         )
         return redirect(url_for('single_search_progress', task_id=task_id))
 
@@ -1749,6 +1791,92 @@ def batch_search_jobs():
         'success',
     )
     return redirect(url_for('batch_queue_list'))
+
+
+@app.route('/ai-queue')
+def ai_queue_list():
+    """List and manage AI tasks in the worker queue."""
+    jobs = ai_task_queue_repo.list_jobs()
+    for job in jobs:
+        snapshot = to_ai_task_snapshot(job)
+        job['progress_url'] = _ai_task_progress_url(snapshot)
+    finished_count = sum(1 for job in jobs if job['status'] in TERMINAL_STATUSES)
+    stoppable_count = sum(1 for job in jobs if job['status'] in ('pending', 'running', 'paused'))
+    return render_template(
+        'ai_queue.html',
+        jobs=jobs,
+        task_type_labels=AI_TASK_TYPE_LABELS,
+        status_labels=AI_STATUS_LABELS,
+        finished_count=finished_count,
+        stoppable_count=stoppable_count,
+    )
+
+
+@app.route('/ai-queue/clear', methods=['POST'])
+def ai_queue_clear():
+    deleted = ai_task_queue_repo.clear_finished_jobs()
+    flash(f'Removed {deleted} finished AI task(s) from the queue.', 'success')
+    return redirect(url_for('ai_queue_list'))
+
+
+@app.route('/ai-queue/stop-all', methods=['POST'])
+def ai_queue_stop_all():
+    cancelled, stop_requested = ai_task_queue_repo.stop_all_active_jobs()
+    parts = []
+    if cancelled:
+        parts.append(f'{cancelled} pending cancelled')
+    if stop_requested:
+        parts.append(f'{stop_requested} running/paused stopping')
+    flash(
+        f'AI queue: {", ".join(parts) or "no active tasks to stop"}.',
+        'success' if parts else 'info',
+    )
+    return redirect(url_for('ai_queue_list'))
+
+
+@app.route('/ai-queue/<int:job_id>/delete', methods=['POST'])
+def ai_queue_delete(job_id):
+    try:
+        if not ai_task_queue_repo.delete_job(job_id):
+            flash('AI task not found.', 'warning')
+    except ValueError as exc:
+        flash(str(exc), 'error')
+    else:
+        flash('AI task deleted.', 'success')
+    return redirect(url_for('ai_queue_list'))
+
+
+@app.route('/ai-queue/<int:job_id>/pause', methods=['POST'])
+def ai_queue_pause(job_id):
+    if ai_task_queue_repo.pause_job(job_id):
+        flash('AI task paused.', 'success')
+    else:
+        flash('Task cannot be paused in its current state.', 'warning')
+    return redirect(url_for('ai_queue_list'))
+
+
+@app.route('/ai-queue/<int:job_id>/resume', methods=['POST'])
+def ai_queue_resume(job_id):
+    if ai_task_queue_repo.resume_job(job_id):
+        flash('AI task resumed.', 'success')
+    else:
+        flash('Task cannot be resumed in its current state.', 'warning')
+    return redirect(url_for('ai_queue_list'))
+
+
+@app.route('/ai-queue/<int:job_id>/stop', methods=['POST'])
+def ai_queue_stop(job_id):
+    job = ai_task_queue_repo.get_job(job_id)
+    if not job:
+        flash('AI task not found.', 'warning')
+    elif job['status'] == 'pending':
+        ai_task_queue_repo.cancel_job(job_id)
+        flash('Pending AI task cancelled.', 'success')
+    elif ai_task_queue_repo.request_stop(job_id):
+        flash('Stop requested — worker will halt when possible.', 'success')
+    else:
+        flash('Task cannot be stopped in its current state.', 'warning')
+    return redirect(url_for('ai_queue_list'))
 
 
 @app.route('/api/search/suggest-titles', methods=['POST'])
@@ -2096,7 +2224,7 @@ def batch_queue_stop(job_id):
 @app.route('/search/<task_id>')
 def single_search_progress(task_id):
     """Show progress while a single job search runs."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task:
         flash('Job search task not found', 'error')
         return redirect(url_for('index'))
@@ -2118,7 +2246,7 @@ def single_search_progress(task_id):
 @app.route('/search/complete/<task_id>')
 def single_search_complete(task_id):
     """Show jobs found by a completed single search."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Job search result not found', 'error')
         return redirect(url_for('index'))
@@ -2152,37 +2280,6 @@ def single_search_complete(task_id):
 def _clear_profile_import_session() -> None:
     session.pop('profile_draft', None)
     session.pop('profile_import_summary', None)
-
-
-def _run_profile_import_task(task_id: str, cv_path: str, current_profile: dict) -> None:
-    try:
-        with dev_task(task_id, "profile_import"):
-            update_task(task_id, status='running', step='extracting', message='Reading CV document…', percent=10)
-            importer = ProfileImporter()
-            with dev_agent("ProfileImporter"):
-                extracted = importer.extract_from_docx(cv_path)
-
-            update_task(
-                task_id,
-                step='merging',
-                message='Merging new details into your profile…',
-                percent=70,
-            )
-            merged_profile, changes = merge_profiles(current_profile, extracted)
-            summary_lines = summarize_import_changes(changes)
-
-            complete_task(
-                task_id,
-                {
-                    'form': profile_to_form_fields(merged_profile),
-                    'import_summary': summary_lines,
-                    'has_changes': import_has_changes(changes),
-                    'merged_profile': merged_profile,
-                },
-            )
-    finally:
-        if os.path.exists(cv_path):
-            os.remove(cv_path)
 
 
 @app.route('/profile', methods=['GET', 'POST'], endpoint='user_profile')
@@ -2317,6 +2414,7 @@ def _llm_settings_context() -> dict:
         "freellmapi_main_rotating_count": freellmapi_main_rotating_count,
         "settings": ollama_settings,
         "dev_mode": all_settings.get("dev_mode", False),
+        "worker_settings": all_settings["workers"],
     }
 
 
@@ -2365,9 +2463,10 @@ def app_settings():
                     break
 
         llm_settings["dev_mode"] = request.form.get("dev_mode") == "on"
+        llm_settings["workers"] = worker_settings_from_form(request.form)
         app_settings_repo.save_llm_settings(llm_settings)
         invalidate_dev_mode_cache()
-        flash('Settings saved. New model choices apply to the next AI task.', 'success')
+        flash('Settings saved. Model and worker changes apply to the next AI task.', 'success')
         return redirect(url_for('app_settings'))
 
     current = app_settings_repo.get_settings()
@@ -2787,11 +2886,9 @@ def start_profile_import():
     temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'profile_import_{datetime.utcnow().strftime("%Y%m%d%H%M%S")}.docx')
     file.save(temp_path)
 
-    task_id = create_task('profile_import')
-    current_profile = profile_repo.get_profile()
-    start_background_task(
-        task_id,
-        lambda: _run_profile_import_task(task_id, temp_path, current_profile),
+    task_id = _enqueue_ai_task(
+        'profile_import',
+        {'cv_path': temp_path},
     )
     return redirect(url_for('profile_import_progress', task_id=task_id))
 
@@ -2799,7 +2896,7 @@ def start_profile_import():
 @app.route('/profile/import/<task_id>')
 def profile_import_progress(task_id):
     """Show progress while a CV import is being parsed."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task:
         flash('Import task not found', 'error')
         return redirect(url_for('user_profile'))
@@ -2822,7 +2919,7 @@ def profile_import_status(task_id):
 @app.route('/profile/import/complete/<task_id>')
 def profile_import_complete(task_id):
     """Load merged profile draft for user review and approval."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Profile import result not found', 'error')
         return redirect(url_for('user_profile'))
@@ -3050,36 +3147,30 @@ def analyze_jobs_match():
         flash('No jobs to analyze in this folder.', 'warning')
         return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
-    task_id = create_task(
+    task_id = _enqueue_ai_task(
         'job_match_analyze',
-        meta={
-            'total_jobs': len(jobs),
-            'min_match_score': min_match_score,
+        {
             'return_folder': return_folder,
             'return_search': return_search,
             'return_sort': return_sort,
+            'min_match_score': min_match_score,
+            'meta': {
+                'total_jobs': len(jobs),
+                'min_match_score': min_match_score,
+                'return_folder': return_folder,
+                'return_search': return_search,
+                'return_sort': return_sort,
+            },
         },
     )
     session['job_match_analyze_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_job_match_analyze_task(
-            task_id,
-            jobs,
-            profile,
-            min_match_score,
-            return_folder,
-            return_search,
-            return_sort,
-        ),
-    )
     return redirect(url_for('job_match_analyze_progress', task_id=task_id))
 
 
 @app.route('/jobs/manage/analyze-match/<task_id>')
 def job_match_analyze_progress(task_id):
     """Show progress while jobs are analyzed against the profile."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('task_type') != 'job_match_analyze':
         flash('Match analysis task not found', 'error')
         return redirect(url_for('manage_jobs'))
@@ -3108,7 +3199,7 @@ def job_match_analyze_progress(task_id):
 @app.route('/jobs/manage/analyze-match/complete/<task_id>')
 def job_match_analyze_complete(task_id):
     """Finish match analysis and return to manage jobs."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Match analysis result not found', 'error')
         return redirect(url_for('manage_jobs'))
@@ -3164,35 +3255,29 @@ def batch_ats_friendly():
         flash('No jobs with generated CVs found in this folder.', 'warning')
         return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
-    task_id = create_task(
+    task_id = _enqueue_ai_task(
         'batch_ats_friendly',
-        meta={
-            'total_jobs': len(jobs_with_cv),
-            'passes': len(BATCH_ATS_FRIENDLY_PASSES),
+        {
             'return_folder': return_folder,
             'return_search': return_search,
             'return_sort': return_sort,
+            'meta': {
+                'total_jobs': len(jobs_with_cv),
+                'passes': len(BATCH_ATS_FRIENDLY_PASSES),
+                'return_folder': return_folder,
+                'return_search': return_search,
+                'return_sort': return_sort,
+            },
         },
     )
     session['batch_ats_friendly_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_batch_ats_friendly_task(
-            task_id,
-            jobs_with_cv,
-            profile,
-            return_folder,
-            return_search,
-            return_sort,
-        ),
-    )
     return redirect(url_for('batch_ats_friendly_progress', task_id=task_id))
 
 
 @app.route('/jobs/manage/batch-ats-friendly/<task_id>')
 def batch_ats_friendly_progress(task_id):
     """Show progress while batch ATS optimization runs."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('task_type') != 'batch_ats_friendly':
         flash('Batch ATS optimization task not found', 'error')
         return redirect(url_for('manage_jobs'))
@@ -3221,7 +3306,7 @@ def batch_ats_friendly_progress(task_id):
 @app.route('/jobs/manage/batch-ats-friendly/complete/<task_id>')
 def batch_ats_friendly_complete(task_id):
     """Finish batch ATS optimization and return to manage jobs."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Batch ATS optimization result not found', 'error')
         return redirect(url_for('manage_jobs'))
@@ -3258,64 +3343,6 @@ def batch_ats_friendly_complete(task_id):
     )
 
 
-def _build_job_from_linkedin_scrape(url: str, details: dict) -> dict:
-    """Merge scraped LinkedIn details into a job record for create/edit forms."""
-    job = {column: details.get(column, '') or '' for column in JOB_COLUMNS}
-    job['link'] = parse_linkedin_job_url(url) or url.strip()
-    job['source'] = 'LinkedIn'
-    job['fetch_method'] = 'scrape'
-    job['workflow_status'] = DEFAULT_JOB_STATUS
-    return job
-
-
-def _run_linkedin_import_task(
-    task_id: str,
-    linkedin_url: str,
-    return_folder: str,
-    return_search: str,
-) -> None:
-    try:
-        with dev_task(task_id, "linkedin_job_import"):
-            update_task(
-                task_id,
-                status='running',
-                step='opening',
-                message='Opening the LinkedIn job page…',
-                percent=15,
-            )
-            scraper = LinkedInScraper(headless=True)
-            with dev_agent("LinkedInScraper"):
-                details = scraper.fetch_job_details(linkedin_url)
-
-            update_task(
-                task_id,
-                step='building',
-                message='Building job details…',
-                percent=85,
-            )
-            job = _build_job_from_linkedin_scrape(linkedin_url, details)
-            if not job.get('title'):
-                fail_task(
-                    task_id,
-                    'Could not extract a job title from that LinkedIn page. '
-                    'The listing may require sign-in or the page layout may have changed.',
-                )
-                return
-
-            complete_task(
-                task_id,
-                {
-                    'job': job,
-                    'return_folder': return_folder,
-                    'return_search': return_search,
-                },
-                message='LinkedIn job imported successfully',
-            )
-    except Exception as exc:
-        logger.exception('LinkedIn job import failed for %s', linkedin_url)
-        fail_task(task_id, f'LinkedIn import failed: {exc}')
-
-
 @app.route('/jobs/new/linkedin', methods=['GET', 'POST'])
 def create_job_from_linkedin():
     """Import a job by scraping a LinkedIn job share link."""
@@ -3340,18 +3367,19 @@ def create_job_from_linkedin():
                 return_search=return_search,
             )
 
-        task_id = create_task(
+        task_id = _enqueue_urgent_task(
             'linkedin_job_import',
-            meta={'linkedin_url': linkedin_url},
+            {
+                'linkedin_url': linkedin_url,
+                'return_folder': return_folder,
+                'return_search': return_search,
+                'meta': {'linkedin_url': linkedin_url},
+            },
         )
-        start_background_task(
-            task_id,
-            lambda: _run_linkedin_import_task(
-                task_id,
-                linkedin_url,
-                return_folder,
-                return_search,
-            ),
+        flash(
+            'LinkedIn import queued — the urgent worker will scrape it shortly '
+            '(run: job-apply-ai urgent-worker)',
+            'success',
         )
         return redirect(url_for('linkedin_job_import_progress', task_id=task_id))
 
@@ -3366,7 +3394,7 @@ def create_job_from_linkedin():
 @app.route('/jobs/import/linkedin/<task_id>')
 def linkedin_job_import_progress(task_id):
     """Show progress while a LinkedIn job is being scraped."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task:
         flash('Import task not found', 'error')
         return redirect(url_for('create_job_from_linkedin'))
@@ -3383,7 +3411,7 @@ def linkedin_job_import_progress(task_id):
 @app.route('/jobs/import/linkedin/complete/<task_id>')
 def linkedin_job_import_complete(task_id):
     """Save the scraped job and open it for review."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('LinkedIn import result not found', 'error')
         return redirect(url_for('create_job_from_linkedin'))
@@ -3670,7 +3698,7 @@ def download_excel():
 
 @app.route('/make_cv/<int:job_id>')
 def make_cv(job_id):
-    """Show progress UI while AI CV generation runs in the background."""
+    """Queue single-job AI CV generation and show progress."""
     job = job_repo.get_job(job_id)
     profile = profile_repo.get_profile()
     return_folder = request.args.get('folder', 'all')
@@ -3688,70 +3716,64 @@ def make_cv(job_id):
         flash('Please complete your CV profile first', 'error')
         return redirect(url_for('user_profile'))
 
-    return render_template(
-        'cv_progress.html',
-        job=job,
-        batch=False,
-        start_url=url_for(
-            'start_make_cv',
-            job_id=job_id,
-            folder=return_folder,
-            q=return_search or None,
-            sort=return_sort or None,
-        ),
-        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
-        complete_url_template=url_for('make_cv_complete', task_id='TASK_ID'),
-        back_url=_cv_generation_back_url(
-            return_from_manage,
-            return_folder,
-            return_search,
-            return_sort,
-        ),
+    task_id = _enqueue_ai_task(
+        'single_cv',
+        {
+            'job_id': job_id,
+            'return_folder': return_folder,
+            'return_search': return_search,
+            'return_from_manage': return_from_manage,
+            'return_sort': return_sort,
+        },
+        job_id=job_id,
     )
-
-
-@app.route('/make_cv/<int:job_id>/start', methods=['POST'])
-def start_make_cv(job_id):
-    """Start background AI CV generation for one job."""
-    job = job_repo.get_job(job_id)
-    profile = profile_repo.get_profile()
-    return_folder = request.args.get('folder', 'all')
-    return_search = request.args.get('q', '')
-    return_sort = request.args.get('sort', '')
-    return_from_manage = 'folder' in request.args or bool(return_search)
-
-    if not job:
-        return jsonify({'error': 'Job not found'}), 404
-    if not profile_is_ready(profile):
-        return jsonify({'error': 'Please complete your CV profile first'}), 400
-
-    if _sync_cv_generation_lock():
-        return jsonify({'error': 'Another CV generation is already in progress'}), 409
-
-    task_id = create_task('single_cv', job_id=job_id)
     session['cv_generation_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_single_cv_task(
-            task_id,
-            profile,
-            job,
-            job_id,
-            return_folder,
-            return_search,
-            return_from_manage,
-            return_sort,
-        ),
+    flash(
+        'CV generation queued — track progress here or from the AI queue '
+        '(run: job-apply-ai ai-worker)',
+        'success',
     )
-    return jsonify({'task_id': task_id})
+    return redirect(url_for('ai_cv_task_progress', task_id=task_id))
+
+
+@app.route('/ai_tasks/cv/<task_id>')
+def ai_cv_task_progress(task_id):
+    """Show progress for a queued single or batch CV generation task."""
+    task = _resolve_task(task_id)
+    if not task or task.get('task_type') not in ('single_cv', 'batch_cv'):
+        flash('CV generation task not found', 'error')
+        return redirect(url_for('job_list'))
+
+    meta = task.get('meta') or {}
+    job_count = meta.get('total_jobs', 1)
+    job = None
+    if task.get('task_type') == 'single_cv':
+        job_id = task.get('job_id') or meta.get('job_id')
+        if job_id:
+            job = job_repo.get_job(job_id)
+            job_count = 1
+
+    back_url, back_label = _ai_cv_back_context(task)
+    return render_template(
+        'batch_cv_progress.html',
+        task_id=task_id,
+        job=job,
+        job_count=job_count,
+        status_url=url_for('cv_task_status', task_id=task_id),
+        complete_url=_ai_cv_complete_url(task),
+        control_url=url_for('control_background_task', task_id=task_id),
+        back_url=back_url,
+        back_label=back_label,
+        ai_queue_url=url_for('ai_queue_list'),
+    )
 
 
 @app.route('/api/cv_generation/release', methods=['POST', 'GET'])
 def release_cv_generation_lock():
-    """Clear UI lock after failed, abandoned, or stale CV generation."""
+    """Dismiss the active CV task banner (does not stop the queue worker)."""
     session.pop('cv_generation_active', None)
     if request.method == 'GET':
-        flash('CV generation lock cleared. You can start a new CV.', 'info')
+        flash('Active CV task banner dismissed.', 'info')
         return redirect(request.referrer or url_for('manage_jobs'))
     return jsonify({'ok': True})
 
@@ -3795,6 +3817,40 @@ def control_background_task(task_id):
         updated = to_task_snapshot(batch_queue_repo.get_job_by_task_id(task_id))
         return jsonify(updated)
 
+    ai_job = ai_task_queue_repo.get_job_by_task_id(task_id)
+    if ai_job and ai_job['task_type'] in CONTROLLABLE_AI_TASK_TYPES:
+        payload = request.get_json(silent=True) or {}
+        action = (payload.get('action') or request.form.get('action', '')).strip().lower()
+        handlers = {
+            'pause': lambda: ai_task_queue_repo.pause_job(ai_job['id']),
+            'resume': lambda: ai_task_queue_repo.resume_job(ai_job['id']),
+            'stop': lambda: ai_task_queue_repo.request_stop(ai_job['id']),
+        }
+        handler = handlers.get(action)
+        if not handler:
+            return jsonify({'error': 'Invalid action'}), 400
+        if not handler():
+            return jsonify({'error': f'Cannot {action} task in its current state'}), 409
+        updated = to_ai_task_snapshot(ai_task_queue_repo.get_job_by_task_id(task_id))
+        return jsonify(updated)
+
+    urgent_job = urgent_task_queue_repo.get_job_by_task_id(task_id)
+    if urgent_job and urgent_job['task_type'] in CONTROLLABLE_URGENT_TASK_TYPES:
+        payload = request.get_json(silent=True) or {}
+        action = (payload.get('action') or request.form.get('action', '')).strip().lower()
+        handlers = {
+            'pause': lambda: urgent_task_queue_repo.pause_job(urgent_job['id']),
+            'resume': lambda: urgent_task_queue_repo.resume_job(urgent_job['id']),
+            'stop': lambda: urgent_task_queue_repo.request_stop(urgent_job['id']),
+        }
+        handler = handlers.get(action)
+        if not handler:
+            return jsonify({'error': 'Invalid action'}), 400
+        if not handler():
+            return jsonify({'error': f'Cannot {action} task in its current state'}), 409
+        updated = to_urgent_task_snapshot(urgent_task_queue_repo.get_job_by_task_id(task_id))
+        return jsonify(updated)
+
     task = get_task(task_id)
     if not task or task.get('task_type') not in CONTROLLABLE_TASK_TYPES:
         return jsonify({'error': 'Task not found'}), 404
@@ -3819,7 +3875,7 @@ def control_background_task(task_id):
 @app.route('/make_cv/complete/<task_id>')
 def make_cv_complete(task_id):
     """Render success page after background CV generation completes."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('CV generation result not found', 'error')
         return redirect(url_for('job_list'))
@@ -3999,29 +4055,26 @@ def start_ats_friendly(job_id):
     if _sync_session_background_task('ats_friendly_active'):
         return jsonify({'error': 'Another ATS analysis is already in progress'}), 409
 
-    task_id = create_task('ats_friendly', job_id=job_id)
-    session['ats_friendly_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_ats_friendly_task(
-            task_id,
-            job,
-            job_id,
-            profile,
-            cv_filename,
-            return_folder,
-            return_search,
-            return_from_manage,
-            return_sort,
-        ),
+    task_id = _enqueue_ai_task(
+        'ats_friendly',
+        {
+            'job_id': job_id,
+            'cv_filename': cv_filename,
+            'return_folder': return_folder,
+            'return_search': return_search,
+            'return_from_manage': return_from_manage,
+            'return_sort': return_sort,
+        },
+        job_id=job_id,
     )
+    session['ats_friendly_active'] = task_id
     return jsonify({'task_id': task_id})
 
 
 @app.route('/jobs/<int:job_id>/ats-friendly/complete/<task_id>')
 def ats_friendly_complete(job_id, task_id):
     """Render ATS analysis results after background processing completes."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('ATS analysis result not found', 'error')
         return redirect(url_for('ats_friendly_progress', job_id=job_id))
@@ -4608,7 +4661,7 @@ def download_job_cover_letter_pdf(job_id):
 
 @app.route('/make_all_cvs')
 def make_all_cvs():
-    """Show progress UI while batch AI CV generation runs."""
+    """Queue batch AI CV generation for the current job list view."""
     search_run_id = session.get('search_run_id')
     processed_jobs = _get_jobs_for_view(search_run_id)
     profile = profile_repo.get_profile()
@@ -4621,46 +4674,29 @@ def make_all_cvs():
         flash('Please complete your CV profile first', 'error')
         return redirect(url_for('user_profile'))
 
-    return render_template(
-        'cv_progress.html',
-        job=None,
-        batch=True,
-        job_count=len(processed_jobs),
-        start_url=url_for('start_make_all_cvs'),
-        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
-        complete_url_template=url_for('make_all_cvs_complete', task_id='TASK_ID'),
-        back_url=url_for('job_list'),
+    job_ids = [job['id'] for job in processed_jobs if job.get('id')]
+    task_id = _enqueue_ai_task(
+        'batch_cv',
+        {
+            'job_ids': job_ids,
+            'meta': {'total_jobs': len(processed_jobs)},
+        },
     )
-
-
-@app.route('/make_all_cvs/start', methods=['POST'])
-def start_make_all_cvs():
-    """Start background batch AI CV generation."""
-    search_run_id = session.get('search_run_id')
-    processed_jobs = _get_jobs_for_view(search_run_id)
-    profile = profile_repo.get_profile()
-
-    if not processed_jobs:
-        return jsonify({'error': 'No jobs found'}), 404
-    if not profile_is_ready(profile):
-        return jsonify({'error': 'Please complete your CV profile first'}), 400
-
-    if _sync_cv_generation_lock():
-        return jsonify({'error': 'Another CV generation is already in progress'}), 409
-
-    task_id = create_task('batch_cv', meta={'total_jobs': len(processed_jobs)})
     session['cv_generation_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_batch_cv_task(task_id, profile, processed_jobs),
+    session['batch_cv_back_url'] = url_for('job_list')
+    session['batch_cv_back_label'] = 'Back to Job List'
+    flash(
+        f'Queued CV generation for {len(processed_jobs)} job(s). '
+        'Run: job-apply-ai ai-worker',
+        'success',
     )
-    return jsonify({'task_id': task_id})
+    return redirect(url_for('ai_cv_task_progress', task_id=task_id))
 
 
 @app.route('/make_all_cvs/complete/<task_id>')
 def make_all_cvs_complete(task_id):
     """Render batch success page after background generation completes."""
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Batch CV generation result not found', 'error')
         return redirect(url_for('job_list'))
@@ -4711,91 +4747,46 @@ def batch_make_cvs():
         flash('Please complete your CV profile first', 'error')
         return redirect(url_for('user_profile'))
 
-    if _sync_cv_generation_lock():
-        flash('Another CV generation is already in progress', 'warning')
-        if return_view == 'list':
-            return redirect(url_for('job_list', sort=return_sort or None))
-        return _manage_jobs_redirect(return_folder, return_search, return_sort)
-
-    session['batch_cv_job_ids'] = job_ids
     session['batch_cv_back_url'] = _batch_cv_back_url(
         return_view, return_folder, return_search, return_sort
     )
     session['batch_cv_back_label'] = (
         'Back to Manage Jobs' if return_view == 'manage' else 'Back to Job List'
     )
-    return redirect(url_for('batch_make_cvs_progress'))
+
+    task_id = _enqueue_ai_task(
+        'batch_cv',
+        {
+            'job_ids': job_ids,
+            'meta': {'total_jobs': len(jobs), 'selected': True},
+        },
+    )
+    session['cv_generation_active'] = task_id
+    flash(
+        f'Queued CV generation for {len(jobs)} selected job(s). '
+        'Run: job-apply-ai ai-worker',
+        'success',
+    )
+    return redirect(url_for('ai_cv_task_progress', task_id=task_id))
 
 
 @app.route('/jobs/batch/make_cvs/progress')
-def batch_make_cvs_progress():
-    """Show progress UI while selected jobs are batch-generated."""
-    job_ids = session.get('batch_cv_job_ids')
-    if not job_ids:
-        flash('No jobs selected for batch CV generation', 'warning')
-        return redirect(url_for('job_list'))
-
-    jobs = _get_jobs_by_ids(job_ids)
-    if not jobs:
-        session.pop('batch_cv_job_ids', None)
-        session.pop('batch_cv_back_url', None)
-        flash('Selected jobs were not found', 'error')
-        return redirect(url_for('job_list'))
-
-    profile = profile_repo.get_profile()
-    if not profile_is_ready(profile):
-        flash('Please complete your CV profile first', 'error')
-        return redirect(url_for('user_profile'))
-
-    back_url = session.get('batch_cv_back_url') or url_for('job_list')
-
-    return render_template(
-        'cv_progress.html',
-        job=None,
-        batch=True,
-        job_count=len(jobs),
-        start_url=url_for('start_batch_make_cvs'),
-        status_url_template=url_for('cv_task_status', task_id='TASK_ID'),
-        complete_url_template=url_for('batch_make_cvs_complete', task_id='TASK_ID'),
-        back_url=back_url,
-    )
-
-
-@app.route('/jobs/batch/make_cvs/start', methods=['POST'])
-def start_batch_make_cvs():
-    """Start background batch AI CV generation for selected jobs."""
-    job_ids = session.get('batch_cv_job_ids')
-    if not job_ids:
-        return jsonify({'error': 'No jobs selected'}), 404
-
-    jobs = _get_jobs_by_ids(job_ids)
-    profile = profile_repo.get_profile()
-
-    if not jobs:
-        return jsonify({'error': 'Selected jobs were not found'}), 404
-    if not profile_is_ready(profile):
-        return jsonify({'error': 'Please complete your CV profile first'}), 400
-
-    if _sync_cv_generation_lock():
-        return jsonify({'error': 'Another CV generation is already in progress'}), 409
-
-    task_id = create_task('batch_cv', meta={'total_jobs': len(jobs), 'selected': True})
-    session['cv_generation_active'] = task_id
-    start_background_task(
-        task_id,
-        lambda: _run_batch_cv_task(task_id, profile, jobs),
-    )
-    return jsonify({'task_id': task_id})
+def batch_make_cvs_progress_legacy():
+    """Legacy URL — redirect to active CV task progress if available."""
+    task_id = session.get('cv_generation_active')
+    if task_id and _resolve_task(task_id):
+        return redirect(url_for('ai_cv_task_progress', task_id=task_id))
+    flash('No active batch CV generation.', 'info')
+    return redirect(url_for('job_list'))
 
 
 @app.route('/jobs/batch/make_cvs/complete/<task_id>')
 def batch_make_cvs_complete(task_id):
     """Render batch success page after selected-job generation completes."""
     back_url = session.get('batch_cv_back_url') or url_for('job_list')
-    task = get_task(task_id)
+    task = _resolve_task(task_id)
     if not task or task.get('status') != 'complete' or not task.get('result'):
         flash('Batch CV generation result not found', 'error')
-        session.pop('batch_cv_job_ids', None)
         session.pop('batch_cv_back_url', None)
         session.pop('batch_cv_back_label', None)
         return redirect(back_url)
@@ -4803,7 +4794,6 @@ def batch_make_cvs_complete(task_id):
     result = task['result']
     back_label = session.pop('batch_cv_back_label', None) or 'Back to Job List'
     session.pop('cv_generation_active', None)
-    session.pop('batch_cv_job_ids', None)
     session.pop('batch_cv_back_url', None)
     session['generated_cvs'] = result.get('generated_cvs', [])
     session['successful_jobs'] = result.get('successful_jobs', [])

@@ -10,7 +10,7 @@
     <div class="container config-page">
         <div class="page-intro">
             <h1>Settings</h1>
-            <p>Configure AI models and developer options. Mix local Ollama, cloud Qwen, or FreeLLMAPI.</p>
+            <p>Configure AI models, background workers, and developer options. Mix local Ollama, cloud Qwen, or FreeLLMAPI.</p>
         </div>
 
         {% include '_flashes.html' %}
@@ -20,6 +20,9 @@
                 <nav class="settings-sidebar nav flex-column" id="settingsNav" role="tablist">
                     <button type="button" class="nav-link active" data-section="models">
                         <i class="fas fa-robot me-2"></i>AI Models
+                    </button>
+                    <button type="button" class="nav-link" data-section="workers">
+                        <i class="fas fa-cogs me-2"></i>Workers
                     </button>
                     <button type="button" class="nav-link" data-section="developer">
                         <i class="fas fa-code me-2"></i>Developer
@@ -321,6 +324,60 @@
                             </div>
                         </div>
                         {% endif %}
+                    </section>
+
+                    <section class="tab-panel" data-section="workers">
+                        <div class="section-card">
+                            <div class="section-card-header">
+                                <span><i class="fas fa-cogs me-2 text-primary"></i>Background workers</span>
+                            </div>
+                            <div class="section-card-body">
+                                <p class="section-lead mb-4">
+                                    Control how many tasks each worker process runs at once.
+                                    Run <code>job-apply-ai ai-worker</code> and
+                                    <code>job-apply-ai urgent-worker</code> alongside the web app.
+                                    Changes apply on the next poll cycle — no restart required.
+                                </p>
+                                <h6 class="text-muted mb-3">AI worker (CV, ATS, profile import)</h6>
+                                <div class="row g-3 mb-4">
+                                    <div class="col-md-6">
+                                        <label for="ai_worker_concurrency" class="form-label">Concurrent tasks</label>
+                                        <input type="number" class="form-control" id="ai_worker_concurrency"
+                                               name="ai_worker_concurrency"
+                                               value="{{ worker_settings.ai_worker_concurrency }}"
+                                               min="1" max="16" step="1">
+                                        <div class="field-hint">How many AI jobs run in parallel (1–16)</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="ai_worker_poll_seconds" class="form-label">Poll interval (seconds)</label>
+                                        <input type="number" class="form-control" id="ai_worker_poll_seconds"
+                                               name="ai_worker_poll_seconds"
+                                               value="{{ worker_settings.ai_worker_poll_seconds }}"
+                                               min="0.5" max="30" step="0.5">
+                                        <div class="field-hint">How often the worker checks for new jobs</div>
+                                    </div>
+                                </div>
+                                <h6 class="text-muted mb-3">Urgent worker (search, LinkedIn import)</h6>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <label for="urgent_worker_concurrency" class="form-label">Concurrent tasks</label>
+                                        <input type="number" class="form-control" id="urgent_worker_concurrency"
+                                               name="urgent_worker_concurrency"
+                                               value="{{ worker_settings.urgent_worker_concurrency }}"
+                                               min="1" max="8" step="1">
+                                        <div class="field-hint">How many urgent jobs run in parallel (1–8)</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="urgent_worker_poll_seconds" class="form-label">Poll interval (seconds)</label>
+                                        <input type="number" class="form-control" id="urgent_worker_poll_seconds"
+                                               name="urgent_worker_poll_seconds"
+                                               value="{{ worker_settings.urgent_worker_poll_seconds }}"
+                                               min="0.25" max="30" step="0.25">
+                                        <div class="field-hint">Lower values mean faster UI response for searches</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </section>
 
                     <section class="tab-panel" data-section="developer">

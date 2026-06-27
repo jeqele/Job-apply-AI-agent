@@ -124,6 +124,26 @@ def main():
         help='Process at most one pending job then exit',
     )
 
+    ai_worker_parser = subparsers.add_parser(
+        'ai-worker',
+        help='Run the AI task queue worker (CV, ATS, profile match, import)',
+    )
+    ai_worker_parser.add_argument(
+        '--once',
+        action='store_true',
+        help='Process until the queue is idle then exit',
+    )
+
+    urgent_worker_parser = subparsers.add_parser(
+        'urgent-worker',
+        help='Run the urgent I/O queue worker (single search, LinkedIn scrape)',
+    )
+    urgent_worker_parser.add_argument(
+        '--once',
+        action='store_true',
+        help='Process until the queue is idle then exit',
+    )
+
     backup_parser = subparsers.add_parser('backup', help='Export profile, jobs, and CV history to a zip file')
     backup_parser.add_argument(
         '--output',
@@ -367,6 +387,16 @@ def main():
         from job_apply_ai.worker.batch_search_worker import run_worker
 
         run_worker(once=args.once)
+
+    elif args.command == 'ai-worker':
+        from job_apply_ai.worker.ai_task_worker import run_worker as run_ai_worker
+
+        run_ai_worker(once=args.once)
+
+    elif args.command == 'urgent-worker':
+        from job_apply_ai.worker.urgent_task_worker import run_worker as run_urgent_worker
+
+        run_urgent_worker(once=args.once)
 
     elif args.command == 'backup':
         from job_apply_ai.storage.backup import backup_filename, export_backup

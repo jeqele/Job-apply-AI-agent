@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% set page_title = 'AI Task Queue' %}
+    {% include '_app_head.html' %}
+</head>
+<body>
+    {% include '_config_nav.html' %}
+
+    <div class="container config-page">
+        <div class="page-intro d-flex flex-wrap justify-content-between align-items-start gap-3">
+            <div>
+                <h1>AI task queue</h1>
+                <p class="mb-0">
+                    CV generation, ATS analysis, profile match, and imports run in the
+                    <strong>ai-worker</strong> process — separate from urgent search/scrape jobs.
+                </p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                {% if stoppable_count %}
+                    <form method="post" action="{{ url_for('ai_queue_stop_all') }}" class="d-inline"
+                          onsubmit="return confirm('Stop {{ stoppable_count }} active AI task(s)?');">
+                        <button type="submit" class="btn btn-outline-warning">
+                            <i class="fas fa-stop me-2"></i>Stop all
+                        </button>
+                    </form>
+                {% endif %}
+                {% if finished_count %}
+                    <form method="post" action="{{ url_for('ai_queue_clear') }}" class="d-inline"
+                          onsubmit="return confirm('Remove {{ finished_count }} finished task(s)?');">
+                        <button type="submit" class="btn btn-outline-danger">
+                            <i class="fas fa-eraser me-2"></i>Clear finished
+                        </button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+
+        {% include '_flashes.html' %}
+
+        <div class="section-card">
+            <div class="section-card-header">
+                <span><i class="fas fa-robot me-2 text-primary"></i>Queued AI tasks</span>
+            </div>
+            <div class="section-card-body p-0">
+                {% if jobs %}
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0 align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Task</th>
+                                    <th>Status</th>
+                                    <th>Progress</th>
+                                    <th>Updated</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for job in jobs %}
+                                    <tr>
+                                        <td>
+                                            <div class="fw-semibold">{{ task_type_labels.get(job.task_type, job.task_type) }}</div>
+                                            <div class="small text-muted">#{{ job.id }} · {{ job.task_id[:8] }}…</div>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-secondary">{{ status_labels.get(job.status, job.status) }}</span>
+                                        </td>
+                                        <td style="min-width: 160px;">
+                                            {% if job.status in ('pending', 'running', 'paused') %}
+                                                <div class="small">{{ job.progress_message or '—' }}</div>
+                                                <div class="progress mt-1" style="height: 6px;">
+                                                    <div class="progress-bar" style="width: {{ job.progress_percent }}%;"></div>
+                                                </div>
+                                            {% elif job.status == 'completed' %}
+                                                <span class="small text-muted">{{ job.progress_message or 'Complete' }}</span>
+                                            {% else %}
+                                                <span class="small text-danger">{{ job.last_error or job.progress_message or '—' }}</span>
+                                            {% endif %}
+                                        </td>
+                                        <td><span class="small text-muted">{{ job.updated_at or '—' }}</span></td>
+                                        <td class="text-end">
+                                            <div class="d-flex flex-wrap gap-1 justify-content-end">
+                                                {% if job.progress_url %}
+                                                    <a href="{{ job.progress_url }}" class="btn btn-sm btn-outline-primary">Progress</a>
+                                                {% endif %}
+                                                {% if job.status == 'running' %}
+                                                    <form method="post" action="{{ url_for('ai_queue_pause', job_id=job.id) }}" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-outline-warning">Pause</button>
+                                                    </form>
+                                                {% elif job.status == 'paused' %}
+                                                    <form method="post" action="{{ url_for('ai_queue_resume', job_id=job.id) }}" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-outline-success">Resume</button>
+                                                    </form>
+                                                {% endif %}
+                                                {% if job.status in ('pending', 'running', 'paused') %}
+                                                    <form method="post" action="{{ url_for('ai_queue_stop', job_id=job.id) }}" class="d-inline">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger">Stop</button>
+                                                    </form>
+                                                {% endif %}
+                                                {% if job.status != 'running' %}
+                                                    <form method="post" action="{{ url_for('ai_queue_delete', job_id=job.id) }}" class="d-inline"
+                                                          onsubmit="return confirm('Delete this queue task?');">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                                    </form>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="p-4 text-center text-muted">
+                        No AI tasks in the queue yet. Start CV generation or analysis from the Jobs pages.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="alert alert-light border mt-4 mb-0">
+            <strong>Tip:</strong> Run <code>job-apply-ai ai-worker</code> to process this queue.
+            Concurrency is configured in <a href="{{ url_for('app_settings') }}">Settings → Workers</a>.
+            Urgent searches use <code>urgent-worker</code>; batch searches use <code>batch-worker</code>.
+        </div>
+    </div>
+</body>
+</html>

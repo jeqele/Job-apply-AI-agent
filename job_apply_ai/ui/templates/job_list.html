@@ -85,15 +85,9 @@
                     
                     <div>
                         {% if jobs %}
-                            {% if cv_generation_active %}
-                                <button type="button" class="btn btn-primary" disabled>
-                                    <i class="fas fa-wand-magic-sparkles me-2"></i>Generate All CVs
-                                </button>
-                            {% else %}
-                                <a href="{{ url_for('make_all_cvs') }}" class="btn btn-primary">
-                                    <i class="fas fa-wand-magic-sparkles me-2"></i>Generate All CVs
-                                </a>
-                            {% endif %}
+                            <a href="{{ url_for('make_all_cvs') }}" class="btn btn-primary">
+                                <i class="fas fa-wand-magic-sparkles me-2"></i>Generate All CVs
+                            </a>
                         {% endif %}
                     </div>
                 </div>
@@ -138,15 +132,9 @@
                 <i class="fas fa-arrow-left me-2"></i>Back to Home
             </a>
             {% if jobs %}
-                {% if cv_generation_active %}
-                    <button type="button" class="btn btn-primary ms-2" disabled>
-                        <i class="fas fa-wand-magic-sparkles me-2"></i>Generate All CVs
-                    </button>
-                {% else %}
-                    <a href="{{ url_for('make_all_cvs') }}" class="btn btn-primary ms-2">
-                        <i class="fas fa-wand-magic-sparkles me-2"></i>Generate All CVs
-                    </a>
-                {% endif %}
+                <a href="{{ url_for('make_all_cvs') }}" class="btn btn-primary ms-2">
+                    <i class="fas fa-wand-magic-sparkles me-2"></i>Generate All CVs
+                </a>
             {% endif %}
         </div>
     </div>

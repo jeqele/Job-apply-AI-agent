@@ -210,6 +210,52 @@ def init_db(db_path: str | None = None) -> None:
             ON batch_search_jobs(task_id);
             CREATE INDEX IF NOT EXISTS idx_batch_search_jobs_next_run
             ON batch_search_jobs(next_run_at);
+
+            CREATE TABLE IF NOT EXISTS ai_task_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                control TEXT,
+                job_id INTEGER,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                progress_percent INTEGER NOT NULL DEFAULT 0,
+                progress_message TEXT NOT NULL DEFAULT '',
+                progress_step TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                task_id TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_task_jobs_status
+            ON ai_task_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_ai_task_jobs_task_id
+            ON ai_task_jobs(task_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_task_jobs_task_type
+            ON ai_task_jobs(task_type);
+
+            CREATE TABLE IF NOT EXISTS urgent_task_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                control TEXT,
+                job_id INTEGER,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                progress_percent INTEGER NOT NULL DEFAULT 0,
+                progress_message TEXT NOT NULL DEFAULT '',
+                progress_step TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                task_id TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_urgent_task_jobs_status
+            ON urgent_task_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_urgent_task_jobs_task_id
+            ON urgent_task_jobs(task_id);
             """
         )
         conn.commit()

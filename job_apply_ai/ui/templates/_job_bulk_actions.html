@@ -38,15 +38,9 @@
                     Clear selection
                 </button>
             </form>
-            {% if cv_generation_active %}
-                <button type="button" class="btn btn-success btn-sm" disabled>
-                    <i class="fas fa-wand-magic-sparkles me-1"></i>Generate CVs
-                </button>
-            {% else %}
-                <button type="button" class="btn btn-success btn-sm" id="job-bulk-generate-cvs" disabled>
-                    <i class="fas fa-wand-magic-sparkles me-1"></i>Generate CVs
-                </button>
-            {% endif %}
+            <button type="button" class="btn btn-success btn-sm" id="job-bulk-generate-cvs" disabled>
+                <i class="fas fa-wand-magic-sparkles me-1"></i>Generate CVs
+            </button>
         </div>
     </div>
 </div>
