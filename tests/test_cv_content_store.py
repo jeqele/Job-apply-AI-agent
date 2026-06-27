@@ -22,6 +22,10 @@ def test_delete_cv_artifacts_removes_cv_cover_letter_and_sidecar(tmp_path: Path)
 
     cv_path.write_text("cv", encoding="utf-8")
     cl_path.write_text("letter", encoding="utf-8")
+    cv_pdf_path = output_dir / "CV_2026-01-01_Acme_Engineer.pdf"
+    cl_pdf_path = output_dir / "CoverLetter_2026-01-01_Acme_Engineer.pdf"
+    cv_pdf_path.write_text("cv pdf", encoding="utf-8")
+    cl_pdf_path.write_text("letter pdf", encoding="utf-8")
     sidecar_path.write_text("{}", encoding="utf-8")
 
     delete_cv_artifacts(
@@ -32,6 +36,8 @@ def test_delete_cv_artifacts_removes_cv_cover_letter_and_sidecar(tmp_path: Path)
 
     assert not cv_path.exists()
     assert not cl_path.exists()
+    assert not cv_pdf_path.exists()
+    assert not cl_pdf_path.exists()
     assert not sidecar_path.exists()
 
 

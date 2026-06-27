@@ -7,7 +7,9 @@ import os
 from datetime import datetime
 from typing import Any, Callable
 
+from job_apply_ai.cv_modifier.chat_context import cv_content_to_preview_lines
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
+from job_apply_ai.cv_modifier.pdf_builder import build_cv_pdf
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.dev_logging import dev_llm_context
 from job_apply_ai.cv_modifier.rag_system import CVRAGSystem
@@ -144,6 +146,10 @@ class RAGCVGenerator:
         report("building_document", "Building the tailored Word document…", 88)
         builder = CVDocumentBuilder(template_path)
         builder.build(output_path, tailored_content, profile=profile)
+
+        profile_name = str((profile or {}).get("full_name", "") or "")
+        preview_lines = cv_content_to_preview_lines(tailored_content, profile_name)
+        build_cv_pdf(output_path, preview_lines, profile, tailored_content)
 
         report("saving", "Finalizing your CV file…", 96)
 

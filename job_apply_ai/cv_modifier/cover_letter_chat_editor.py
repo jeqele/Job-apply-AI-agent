@@ -8,6 +8,7 @@ from typing import Any
 
 from job_apply_ai.cv_modifier.chat_context import build_job_context, build_profile_context
 from job_apply_ai.cv_modifier.cover_letter_builder import CoverLetterBuilder
+from job_apply_ai.cv_modifier.pdf_builder import build_cover_letter_pdf
 from job_apply_ai.cv_modifier.cover_letter_generator import CoverLetterGenerator
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.dev_logging import dev_llm_context
@@ -119,6 +120,7 @@ Return JSON with this exact shape:
     @staticmethod
     def rebuild_document(output_path: str, content: dict[str, Any]) -> None:
         CoverLetterBuilder().build(output_path, content)
+        build_cover_letter_pdf(output_path, content)
 
     @staticmethod
     def _format_history(chat_history: list[dict[str, str]]) -> str:

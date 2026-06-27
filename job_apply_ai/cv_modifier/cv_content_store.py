@@ -42,6 +42,16 @@ def cv_content_path(output_dir: str, cv_filename: str) -> str:
     return os.path.join(output_dir, f"{base}.content.json")
 
 
+def _remove_document_pair(path: str) -> None:
+    """Remove a generated document and its paired PDF export, if present."""
+    if os.path.isfile(path):
+        os.remove(path)
+    base, _ = os.path.splitext(path)
+    pdf_path = f"{base}.pdf"
+    if os.path.isfile(pdf_path):
+        os.remove(pdf_path)
+
+
 def delete_cv_artifacts(
     output_dir: str,
     cv_filename: str = "",
@@ -50,16 +60,12 @@ def delete_cv_artifacts(
 ) -> None:
     """Remove generated CV, cover letter, and sidecar content files from disk."""
     if cv_filename:
-        cv_path = os.path.join(output_dir, cv_filename)
-        if os.path.isfile(cv_path):
-            os.remove(cv_path)
+        _remove_document_pair(os.path.join(output_dir, cv_filename))
         content_path = cv_content_path(output_dir, cv_filename)
         if os.path.isfile(content_path):
             os.remove(content_path)
     if cover_letter_filename:
-        cl_path = os.path.join(output_dir, cover_letter_filename)
-        if os.path.isfile(cl_path):
-            os.remove(cl_path)
+        _remove_document_pair(os.path.join(output_dir, cover_letter_filename))
 
 
 def _utc_now() -> str:

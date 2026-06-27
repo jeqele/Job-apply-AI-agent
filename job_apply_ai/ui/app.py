@@ -73,6 +73,7 @@ from job_apply_ai.cv_modifier.chat_context import (
     resolve_effective_tailored_content,
 )
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
+from job_apply_ai.cv_modifier.pdf_builder import build_cover_letter_pdf, build_cv_pdf, pdf_path_for_docx
 from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
     ATSFriendlyAnalyzer,
     get_suggestion,
@@ -499,6 +500,7 @@ def _sync_job_cv_docx_from_preview(
     cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
     builder = CVDocumentBuilder(get_default_cv_template_path())
     builder.build_from_preview_lines(cv_path, preview_lines, profile, updated_content)
+    build_cv_pdf(cv_path, preview_lines, profile, updated_content)
 
     if persist_store:
         _save_job_cv_content(cv_filename, updated_content, store=store)
@@ -632,6 +634,7 @@ def _generate_and_save_cover_letter(
     with dev_agent("CoverLetterGenerator", job_id=job_id):
         cl_content = generator.generate(job, profile, tailored_content)
     CoverLetterBuilder().build(cl_path, cl_content)
+    build_cover_letter_pdf(cl_path, cl_content)
 
     if job_id:
         job['cover_letter_filename'] = cl_filename
@@ -730,8 +733,18 @@ def _cv_preview_context(
             if job_id
             else url_for('download_cv')
         ),
+        'download_pdf_url': (
+            url_for('download_job_cv_pdf', job_id=job_id)
+            if job_id
+            else None
+        ),
         'cover_letter_download_url': (
             url_for('download_job_cover_letter', job_id=job_id)
+            if job_id and cover_letter_filename
+            else None
+        ),
+        'cover_letter_download_pdf_url': (
+            url_for('download_job_cover_letter_pdf', job_id=job_id)
             if job_id and cover_letter_filename
             else None
         ),
@@ -3986,6 +3999,7 @@ def generate_job_cover_letter(job_id):
             'cover_letter_filename': cl_filename,
             'cover_letter': cl_content,
             'cover_letter_download_url': url_for('download_job_cover_letter', job_id=job_id),
+            'cover_letter_download_pdf_url': url_for('download_job_cover_letter_pdf', job_id=job_id),
         })
     except Exception as exc:
         logger.error('Cover letter generation failed for job %s: %s', job_id, exc)
@@ -4049,6 +4063,41 @@ def download_job_cv(job_id):
     return send_file(cv_path, as_attachment=True, download_name=cv_filename)
 
 
+@app.route('/jobs/<int:job_id>/cv/pdf')
+def download_job_cv_pdf(job_id):
+    """Download the AI-generated CV as PDF."""
+    job = job_repo.get_job(job_id)
+    cv_filename = (job or {}).get('cv_filename', '')
+    if not job or not cv_filename:
+        flash('No CV has been generated for this job yet', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    cv_path = os.path.join(app.config['CV_OUTPUT_DIR'], cv_filename)
+    pdf_path = pdf_path_for_docx(cv_path)
+    if not os.path.exists(cv_path):
+        flash('CV file not found on disk', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    if not os.path.exists(pdf_path):
+        profile = profile_repo.get_profile()
+        store = normalize_store(_load_job_cv_store(cv_filename) or {})
+        content = store.get('tailored_content') or {}
+        preview_lines = resolve_cv_preview_lines(
+            content,
+            profile.get('full_name', ''),
+            stored_lines=store.get('cv_preview_lines'),
+            customized=bool(store.get('cv_preview_customized')),
+        )
+        if preview_lines:
+            build_cv_pdf(cv_path, preview_lines, profile, content)
+        else:
+            flash('Could not build PDF export for this CV', 'error')
+            return redirect(url_for('manage_jobs'))
+
+    pdf_filename = os.path.splitext(cv_filename)[0] + '.pdf'
+    return send_file(pdf_path, as_attachment=True, download_name=pdf_filename, mimetype='application/pdf')
+
+
 @app.route('/jobs/<int:job_id>/cover-letter')
 def download_job_cover_letter(job_id):
     """Download the AI-generated cover letter stored for a job."""
@@ -4064,6 +4113,34 @@ def download_job_cover_letter(job_id):
         return redirect(url_for('manage_jobs'))
 
     return send_file(cl_path, as_attachment=True, download_name=cl_filename)
+
+
+@app.route('/jobs/<int:job_id>/cover-letter/pdf')
+def download_job_cover_letter_pdf(job_id):
+    """Download the AI-generated cover letter as PDF."""
+    job = job_repo.get_job(job_id)
+    cl_filename = (job or {}).get('cover_letter_filename', '')
+    if not job or not cl_filename:
+        flash('No cover letter has been generated for this job yet', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    cl_path = os.path.join(app.config['CV_OUTPUT_DIR'], cl_filename)
+    pdf_path = pdf_path_for_docx(cl_path)
+    if not os.path.exists(cl_path):
+        flash('Cover letter file not found on disk', 'error')
+        return redirect(url_for('manage_jobs'))
+
+    if not os.path.exists(pdf_path):
+        cv_filename = job.get('cv_filename', '')
+        store = normalize_store(_load_job_cv_store(cv_filename) or {}) if cv_filename else {}
+        cover_letter = store.get('cover_letter') or {}
+        if not cover_letter.get('body_paragraphs'):
+            flash('Could not build PDF export for this cover letter', 'error')
+            return redirect(url_for('manage_jobs'))
+        build_cover_letter_pdf(cl_path, cover_letter)
+
+    pdf_filename = os.path.splitext(cl_filename)[0] + '.pdf'
+    return send_file(pdf_path, as_attachment=True, download_name=pdf_filename, mimetype='application/pdf')
 
 
 @app.route('/make_all_cvs')
@@ -4296,8 +4373,10 @@ def download_all_cvs():
     with zipfile.ZipFile(memory_file, 'w') as zf:
         for cv_path in generated_cvs:
             if os.path.exists(cv_path):
-                # Add file to zip with just the filename (not the full path)
                 zf.write(cv_path, os.path.basename(cv_path))
+                pdf_path = pdf_path_for_docx(cv_path)
+                if os.path.exists(pdf_path):
+                    zf.write(pdf_path, os.path.basename(pdf_path))
     
     # Reset file pointer
     memory_file.seek(0)

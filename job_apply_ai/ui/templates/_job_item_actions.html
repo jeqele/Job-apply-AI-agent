@@ -23,11 +23,17 @@
                 <i class="fas fa-eye {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Preview & Edit
             </a>
             <a href="{{ url_for('download_job_cv', job_id=job.id) }}" class="btn btn-outline-success {{ btn_size }}">
-                <i class="fas fa-file-word {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Download CV
+                <i class="fas fa-file-word {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>CV (DOCX)
+            </a>
+            <a href="{{ url_for('download_job_cv_pdf', job_id=job.id) }}" class="btn btn-outline-success {{ btn_size }}">
+                <i class="fas fa-file-pdf {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>CV (PDF)
             </a>
             {% if job.cover_letter_filename %}
             <a href="{{ url_for('download_job_cover_letter', job_id=job.id) }}" class="btn btn-outline-primary {{ btn_size }}">
-                <i class="fas fa-envelope {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Cover Letter
+                <i class="fas fa-envelope {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Letter (DOCX)
+            </a>
+            <a href="{{ url_for('download_job_cover_letter_pdf', job_id=job.id) }}" class="btn btn-outline-primary {{ btn_size }}">
+                <i class="fas fa-file-pdf {% if manage_mode %}me-1{% else %}me-2{% endif %}"></i>Letter (PDF)
             </a>
             {% endif %}
             {% if smtp_configured and job.emails and job.cv_filename %}

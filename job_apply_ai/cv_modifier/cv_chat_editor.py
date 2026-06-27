@@ -17,6 +17,7 @@ from job_apply_ai.cv_modifier.chat_context import (
 )
 from job_apply_ai.cv_modifier.cv_generator import RAGCVGenerator
 from job_apply_ai.cv_modifier.docx_builder import CVDocumentBuilder
+from job_apply_ai.cv_modifier.pdf_builder import build_cv_pdf
 from job_apply_ai.cv_modifier.llm_client import LLMClient, get_llm_client
 from job_apply_ai.dev_logging import dev_llm_context
 from job_apply_ai.storage.user_profile import get_default_cv_template_path
@@ -199,8 +200,15 @@ Return JSON with this exact shape:
                 profile,
                 synced_content,
             )
+            build_cv_pdf(output_path, preview_lines, profile, synced_content)
             return
         builder.build(output_path, content, profile=profile)
+        build_cv_pdf(
+            output_path,
+            cv_content_to_preview_lines(content, str(profile.get("full_name", "") or "")),
+            profile,
+            content,
+        )
 
     @staticmethod
     def content_to_matched_categories(content: dict[str, Any]) -> dict[str, list[str]]:

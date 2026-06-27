@@ -125,17 +125,46 @@
                 {% endif %}
             </div>
             <div class="d-flex gap-2 flex-wrap">
-                <a href="{{ download_url }}" class="btn btn-primary btn-sm">
-                    <i class="fas fa-download me-2"></i>Download CV
-                </a>
-                {% if cover_letter_download_url %}
-                <a href="{{ cover_letter_download_url }}" class="btn btn-outline-primary btn-sm" id="downloadCoverLetterBtn">
-                    <i class="fas fa-envelope me-2"></i>Download Cover Letter
-                </a>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Download CV">
+                    <a href="{{ download_url }}" class="btn btn-primary">
+                        <i class="fas fa-file-word me-1"></i>CV (DOCX)
+                    </a>
+                    {% if download_pdf_url %}
+                    <a href="{{ download_pdf_url }}" class="btn btn-outline-primary">
+                        <i class="fas fa-file-pdf me-1"></i>CV (PDF)
+                    </a>
+                    {% endif %}
+                </div>
+                {% if cover_letter_download_url or cover_letter_download_pdf_url %}
+                <div class="btn-group btn-group-sm" role="group" aria-label="Download cover letter" id="coverLetterDownloadGroup">
+                    {% if cover_letter_download_url %}
+                    <a href="{{ cover_letter_download_url }}" class="btn btn-outline-primary" id="downloadCoverLetterDocxBtn">
+                        <i class="fas fa-envelope me-1"></i>Letter (DOCX)
+                    </a>
+                    {% else %}
+                    <a href="#" class="btn btn-outline-primary d-none" id="downloadCoverLetterDocxBtn">
+                        <i class="fas fa-envelope me-1"></i>Letter (DOCX)
+                    </a>
+                    {% endif %}
+                    {% if cover_letter_download_pdf_url %}
+                    <a href="{{ cover_letter_download_pdf_url }}" class="btn btn-outline-primary" id="downloadCoverLetterPdfBtn">
+                        <i class="fas fa-file-pdf me-1"></i>Letter (PDF)
+                    </a>
+                    {% else %}
+                    <a href="#" class="btn btn-outline-primary d-none" id="downloadCoverLetterPdfBtn">
+                        <i class="fas fa-file-pdf me-1"></i>Letter (PDF)
+                    </a>
+                    {% endif %}
+                </div>
                 {% else %}
-                <button type="button" class="btn btn-outline-primary btn-sm d-none" id="downloadCoverLetterBtn">
-                    <i class="fas fa-envelope me-2"></i>Download Cover Letter
-                </button>
+                <div class="btn-group btn-group-sm d-none" role="group" aria-label="Download cover letter" id="coverLetterDownloadGroup">
+                    <a href="#" class="btn btn-outline-primary d-none" id="downloadCoverLetterDocxBtn">
+                        <i class="fas fa-envelope me-1"></i>Letter (DOCX)
+                    </a>
+                    <a href="#" class="btn btn-outline-primary d-none" id="downloadCoverLetterPdfBtn">
+                        <i class="fas fa-file-pdf me-1"></i>Letter (PDF)
+                    </a>
+                </div>
                 {% endif %}
                 {% if can_send_application and send_application_url %}
                 {% if smtp_accounts|length > 1 %}
@@ -1008,7 +1037,7 @@
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.error || 'Generation failed');
                     coverLetter = data.cover_letter || coverLetter;
-                    showCoverLetterDownload(data.cover_letter_download_url);
+                    showCoverLetterDownload(data.cover_letter_download_url, data.cover_letter_download_pdf_url);
                     renderCoverLetterPreview();
                     document.getElementById('cover-letter-tab').click();
                 } catch (error) {
@@ -1020,19 +1049,20 @@
             });
         }
 
-        function showCoverLetterDownload(url) {
-            const btn = document.getElementById('downloadCoverLetterBtn');
-            if (!btn || !url) return;
-            btn.href = url;
-            btn.classList.remove('d-none');
-            if (btn.tagName === 'BUTTON') {
-                const link = document.createElement('a');
-                link.id = 'downloadCoverLetterBtn';
-                link.className = btn.className.replace('d-none', '').trim();
-                link.href = url;
-                link.innerHTML = btn.innerHTML;
-                btn.replaceWith(link);
+        function showCoverLetterDownload(docxUrl, pdfUrl) {
+            const group = document.getElementById('coverLetterDownloadGroup');
+            const docxBtn = document.getElementById('downloadCoverLetterDocxBtn');
+            const pdfBtn = document.getElementById('downloadCoverLetterPdfBtn');
+            if (!group || !docxBtn) return;
+            if (docxUrl) {
+                docxBtn.href = docxUrl;
+                docxBtn.classList.remove('d-none');
             }
+            if (pdfBtn && pdfUrl) {
+                pdfBtn.href = pdfUrl;
+                pdfBtn.classList.remove('d-none');
+            }
+            group.classList.remove('d-none');
         }
 
         function updateChatChrome() {
