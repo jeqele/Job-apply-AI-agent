@@ -370,6 +370,31 @@ class BatchQueueRepository:
             )
         return cursor.rowcount
 
+    def stop_all_active_jobs(self) -> tuple[int, int]:
+        """Cancel pending jobs and request stop for running or paused jobs."""
+        now = _now_iso()
+        with get_connection() as conn:
+            cancelled = conn.execute(
+                """
+                UPDATE batch_search_jobs
+                SET status = 'cancelled',
+                    control = 'stop',
+                    progress_message = 'Cancelled',
+                    updated_at = ?
+                WHERE status = 'pending'
+                """,
+                (now,),
+            ).rowcount
+            stop_requested = conn.execute(
+                """
+                UPDATE batch_search_jobs
+                SET control = 'stop', updated_at = ?
+                WHERE status IN ('running', 'paused')
+                """,
+                (now,),
+            ).rowcount
+        return cancelled, stop_requested
+
     def pause_job(self, job_id: int) -> bool:
         with get_connection() as conn:
             updated = conn.execute(

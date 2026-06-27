@@ -226,6 +226,58 @@ class BatchQueueRepositoryTests(unittest.TestCase):
         self.assertEqual(remaining[0]["id"], pending["id"])
         self.assertEqual(remaining[0]["status"], "pending")
 
+    def test_stop_all_active_jobs_cancels_pending_and_requests_stop(self):
+        completed = self.repo.create_job(
+            name="Finished",
+            titles=["Dev"],
+            locations=["Paris"],
+        )
+        claimed = self.repo.claim_next_pending()
+        self.assertEqual(claimed["id"], completed["id"])
+        self.repo.complete_job(
+            completed["id"],
+            search_run_id=1,
+            result={"search_run_id": 1, "total_jobs": 1},
+            message="Done",
+            reschedule=False,
+        )
+
+        paused = self.repo.create_job(
+            name="On hold",
+            titles=["Analyst"],
+            locations=["Remote"],
+        )
+        running = self.repo.create_job(
+            name="In progress",
+            titles=["Engineer"],
+            locations=["Berlin"],
+        )
+        pending = self.repo.create_job(
+            name="Waiting",
+            titles=["QA"],
+            locations=["London"],
+        )
+
+        claimed = self.repo.claim_next_pending()
+        self.assertEqual(claimed["id"], paused["id"])
+        self.repo.pause_job(paused["id"])
+
+        claimed = self.repo.claim_next_pending()
+        self.assertEqual(claimed["id"], running["id"])
+
+        cancelled, stop_requested = self.repo.stop_all_active_jobs()
+        self.assertEqual(cancelled, 1)
+        self.assertEqual(stop_requested, 2)
+
+        self.assertEqual(self.repo.get_job(pending["id"])["status"], "cancelled")
+        self.assertEqual(self.repo.get_job(running["id"])["status"], "running")
+        _, running_control = self.repo.get_control_state(running["id"])
+        self.assertEqual(running_control, "stop")
+        self.assertEqual(self.repo.get_job(paused["id"])["status"], "paused")
+        _, paused_control = self.repo.get_control_state(paused["id"])
+        self.assertEqual(paused_control, "stop")
+        self.assertEqual(self.repo.get_job(completed["id"])["status"], "completed")
+
 
 class QueueCheckpointTests(unittest.TestCase):
     def test_stop_raises(self):

@@ -1621,10 +1621,14 @@ def batch_queue_list():
     finished_count = sum(
         1 for job in jobs if job['status'] in ('completed', 'failed', 'cancelled')
     )
+    stoppable_count = sum(
+        1 for job in jobs if job['status'] in ('pending', 'running', 'paused')
+    )
     return render_template(
         'batch_queue.html',
         jobs=jobs,
         finished_count=finished_count,
+        stoppable_count=stoppable_count,
         status_labels=STATUS_LABELS,
         schedule_labels=SCHEDULE_LABELS,
     )
@@ -1769,6 +1773,24 @@ def batch_queue_clear():
         flash(f'Removed {deleted} finished batch search job(s).', 'success')
     else:
         flash('No finished batch search jobs to clear.', 'info')
+    return redirect(url_for('batch_queue_list'))
+
+
+@app.route('/batch-queue/stop-all', methods=['POST'])
+def batch_queue_stop_all():
+    """Cancel pending jobs and request stop for all running or paused queue jobs."""
+    cancelled, stop_requested = batch_queue_repo.stop_all_active_jobs()
+    if cancelled or stop_requested:
+        parts = []
+        if cancelled:
+            parts.append(f'{cancelled} pending job(s) cancelled')
+        if stop_requested:
+            parts.append(
+                f'stop requested for {stop_requested} running or paused job(s)'
+            )
+        flash(f'Stop all: {", ".join(parts)}.', 'success')
+    else:
+        flash('No active batch search jobs to stop.', 'info')
     return redirect(url_for('batch_queue_list'))
 
 
