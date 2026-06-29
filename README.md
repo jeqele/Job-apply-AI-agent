@@ -32,10 +32,20 @@ cd Job-apply-AI-agent
 2. Run the installation script:
 ```bash
 # On Unix-based systems (macOS, Linux)
-./install.sh
+python3 install.py
+
+# If shell scripts already have Unix line endings (LF), you can also run:
+# ./install.sh
 
 # On Windows
 install.bat
+```
+
+If `./install.sh` fails with ``bad interpreter`` or ``$'\r': command not found``, normalize line endings first:
+
+```bash
+python3 scripts/fix_line_endings.py
+./install.sh
 ```
 
 This will:
