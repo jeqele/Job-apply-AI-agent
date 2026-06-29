@@ -2,34 +2,116 @@
 
 import logging
 import os
+import shutil
 import sqlite3
+import threading
 from contextlib import contextmanager
 from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "outputs",
-    "data",
+DEFAULT_DB_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "outputs",
+        "data",
+    )
 )
+
+_DB_CONNECT_TIMEOUT_SECONDS = 30.0
+_init_lock = threading.Lock()
+_initialized_paths: set[str] = set()
+
+
+def _ensure_db_parent_dir(path: str) -> None:
+    """Create the parent directory for a SQLite database file when needed."""
+    parent = os.path.dirname(path)
+    if not parent:
+        return
+    os.makedirs(parent, exist_ok=True)
+
+
+def _diagnose_db_open_error(path: str, exc: Exception) -> str:
+    """Build a human-readable hint for SQLite open/write failures."""
+    parent = os.path.dirname(path) or "."
+    details = [f"SQLite error for database {path!r}: {exc}"]
+
+    if not os.path.exists(parent):
+        details.append(f"Parent directory does not exist: {parent!r}")
+    elif not os.access(parent, os.W_OK):
+        details.append(f"Parent directory is not writable: {parent!r}")
+
+    try:
+        usage = shutil.disk_usage(parent)
+        free_mb = usage.free // (1024 * 1024)
+        details.append(f"Disk free in parent directory: {free_mb} MB")
+        if free_mb < 64:
+            details.append("Disk space is critically low; SQLite cannot create journal files")
+    except OSError as disk_exc:
+        details.append(f"Could not inspect disk usage for {parent!r}: {disk_exc}")
+
+    details.append(
+        "Ensure web UI and all workers share the same absolute JOB_APPLY_AI_DB path"
+    )
+    return ". ".join(details)
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    """Open a SQLite connection with a generous lock timeout."""
+    try:
+        return sqlite3.connect(path, timeout=_DB_CONNECT_TIMEOUT_SECONDS)
+    except sqlite3.OperationalError as exc:
+        message = _diagnose_db_open_error(path, exc)
+        logger.error(message)
+        raise sqlite3.OperationalError(message) from exc
 
 
 def get_db_path() -> str:
-    """Return the path to the SQLite database file."""
-    custom = os.environ.get("JOB_APPLY_AI_DB")
+    """Return the absolute path to the SQLite database file."""
+    custom = os.environ.get("JOB_APPLY_AI_DB", "").strip()
     if custom:
-        return custom
-    os.makedirs(DEFAULT_DB_DIR, exist_ok=True)
+        path = os.path.abspath(os.path.expanduser(custom))
+        _ensure_db_parent_dir(path)
+        return path
+
+    _ensure_db_parent_dir(os.path.join(DEFAULT_DB_DIR, "jobs.db"))
     return os.path.join(DEFAULT_DB_DIR, "jobs.db")
+
+
+def reset_init_cache() -> None:
+    """Clear the init_db cache (used by tests)."""
+    with _init_lock:
+        _initialized_paths.clear()
 
 
 def init_db(db_path: str | None = None) -> None:
     """Create tables if they do not exist."""
-    path = db_path or get_db_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    path = os.path.abspath(db_path) if db_path else get_db_path()
+    with _init_lock:
+        if path in _initialized_paths:
+            return
 
-    with sqlite3.connect(path) as conn:
+    _ensure_db_parent_dir(path)
+
+    try:
+        with _connect(path) as conn:
+            _initialize_schema(conn)
+    except sqlite3.OperationalError as exc:
+        message = _diagnose_db_open_error(path, exc)
+        logger.error(message)
+        raise sqlite3.OperationalError(message) from exc
+    except Exception as exc:
+        message = _diagnose_db_open_error(path, exc)
+        logger.error(message)
+        raise sqlite3.OperationalError(message) from exc
+
+    with _init_lock:
+        _initialized_paths.add(path)
+
+
+def _initialize_schema(conn: sqlite3.Connection) -> None:
+    """Apply schema migrations to an open SQLite connection."""
+    with conn:
         conn.row_factory = sqlite3.Row
         conn.executescript(
             """
@@ -339,9 +421,9 @@ def _backfill_dedupe_keys(conn: sqlite3.Connection) -> None:
 @contextmanager
 def get_connection(db_path: str | None = None) -> Iterator[sqlite3.Connection]:
     """Yield a SQLite connection with row factory enabled."""
-    path = db_path or get_db_path()
+    path = os.path.abspath(db_path) if db_path else get_db_path()
     init_db(path)
-    conn = sqlite3.connect(path)
+    conn = _connect(path)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

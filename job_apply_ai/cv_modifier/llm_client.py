@@ -87,9 +87,11 @@ class DevLoggingLLMClient:
         parse = getattr(self._client, "_parse_json_response", None)
         if callable(parse):
             return parse(raw)
-        import json
+        if not raw or not raw.strip():
+            raise ValueError("Model returned an empty response")
+        from job_apply_ai.cv_modifier.ollama_client import OllamaClient
 
-        return json.loads(raw)
+        return OllamaClient._parse_json_response(raw)
 
     def _generate_raw(
         self,
