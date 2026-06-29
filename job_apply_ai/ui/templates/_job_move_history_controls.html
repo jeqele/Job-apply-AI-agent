@@ -1,0 +1,76 @@
+{# Undo/redo controls for job folder moves. Set return_view to "list" or "manage". #}
+{% set history_return_view = return_view|default('manage') %}
+{% if can_undo_job_moves or can_redo_job_moves %}
+<div class="btn-group btn-group-sm" role="group" aria-label="Job move history">
+    <form method="post"
+          action="{{ url_for('undo_job_move') }}"
+          class="d-inline mb-0"
+          id="job-move-undo-form">
+        <input type="hidden" name="return_view" value="{{ history_return_view }}">
+        {% if history_return_view == 'manage' %}
+            <input type="hidden" name="return_folder" value="{{ current_folder|default('all') }}">
+            <input type="hidden" name="return_search" value="{{ search_query|default('') }}">
+            {% if sort_query %}
+                <input type="hidden" name="return_sort" value="{{ sort_query }}">
+            {% endif %}
+        {% elif sort_query %}
+            <input type="hidden" name="return_sort" value="{{ sort_query }}">
+        {% endif %}
+        <button type="submit"
+                class="btn btn-outline-secondary"
+                id="job-move-undo-btn"
+                {% if not can_undo_job_moves %}disabled{% endif %}
+                title="{% if undo_job_move_label %}Undo: {{ undo_job_move_label }}{% else %}Undo last job move{% endif %}">
+            <i class="fas fa-undo me-1"></i>Undo
+        </button>
+    </form>
+    <form method="post"
+          action="{{ url_for('redo_job_move') }}"
+          class="d-inline mb-0"
+          id="job-move-redo-form">
+        <input type="hidden" name="return_view" value="{{ history_return_view }}">
+        {% if history_return_view == 'manage' %}
+            <input type="hidden" name="return_folder" value="{{ current_folder|default('all') }}">
+            <input type="hidden" name="return_search" value="{{ search_query|default('') }}">
+            {% if sort_query %}
+                <input type="hidden" name="return_sort" value="{{ sort_query }}">
+            {% endif %}
+        {% elif sort_query %}
+            <input type="hidden" name="return_sort" value="{{ sort_query }}">
+        {% endif %}
+        <button type="submit"
+                class="btn btn-outline-secondary"
+                id="job-move-redo-btn"
+                {% if not can_redo_job_moves %}disabled{% endif %}
+                title="{% if redo_job_move_label %}Redo: {{ redo_job_move_label }}{% else %}Redo last undone move{% endif %}">
+            <i class="fas fa-redo me-1"></i>Redo
+        </button>
+    </form>
+</div>
+<script>
+    (function () {
+        document.addEventListener('keydown', (event) => {
+            const tag = (event.target && event.target.tagName) || '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) {
+                return;
+            }
+            const undoForm = document.getElementById('job-move-undo-form');
+            const redoForm = document.getElementById('job-move-redo-form');
+            if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+                if (undoForm && !document.getElementById('job-move-undo-btn')?.disabled) {
+                    event.preventDefault();
+                    undoForm.requestSubmit();
+                }
+            } else if (
+                (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'z') ||
+                (event.ctrlKey && event.key.toLowerCase() === 'y')
+            ) {
+                if (redoForm && !document.getElementById('job-move-redo-btn')?.disabled) {
+                    event.preventDefault();
+                    redoForm.requestSubmit();
+                }
+            }
+        });
+    })();
+</script>
+{% endif %}

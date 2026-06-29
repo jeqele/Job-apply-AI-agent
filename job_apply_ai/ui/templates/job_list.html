@@ -69,6 +69,8 @@
                                 {% endfor %}
                             </select>
                         </form>
+                        {% set return_view = 'list' %}
+                        {% include '_job_move_history_controls.html' %}
                         <a href="{{ url_for('manage_jobs') }}" class="btn btn-secondary">
                             <i class="fas fa-database me-2"></i>Manage Jobs
                         </a>

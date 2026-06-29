@@ -262,23 +262,92 @@ class JobRepository:
     def update_job_status(self, job_id: int, workflow_status: str) -> bool:
         return self.update_jobs_status([job_id], workflow_status) == 1
 
-    def update_jobs_status(self, job_ids: list[int], workflow_status: str) -> int:
+    def move_jobs_status(
+        self,
+        job_ids: list[int],
+        workflow_status: str,
+    ) -> list[dict[str, int | str]]:
+        """Move jobs to a folder and return change records for undo/redo."""
         if not job_ids or not is_valid_job_status(workflow_status):
-            return 0
+            return []
 
         unique_ids = sorted({int(job_id) for job_id in job_ids})
-        now = datetime.utcnow().isoformat(timespec="seconds")
         placeholders = ", ".join("?" for _ in unique_ids)
+        changes: list[dict[str, int | str]] = []
+
         with get_connection() as conn:
-            cursor = conn.execute(
+            rows = conn.execute(
+                f"""
+                SELECT id, workflow_status
+                FROM jobs
+                WHERE id IN ({placeholders})
+                """,
+                unique_ids,
+            ).fetchall()
+
+            for row in rows:
+                from_status = row["workflow_status"] or DEFAULT_JOB_STATUS
+                if from_status == workflow_status:
+                    continue
+                changes.append(
+                    {
+                        "job_id": int(row["id"]),
+                        "from_status": from_status,
+                        "to_status": workflow_status,
+                    }
+                )
+
+            if not changes:
+                return []
+
+            now = datetime.utcnow().isoformat(timespec="seconds")
+            change_ids = [int(change["job_id"]) for change in changes]
+            change_placeholders = ", ".join("?" for _ in change_ids)
+            conn.execute(
                 f"""
                 UPDATE jobs
                 SET workflow_status = ?, updated_at = ?
-                WHERE id IN ({placeholders})
+                WHERE id IN ({change_placeholders})
                 """,
-                (workflow_status, now, *unique_ids),
+                (workflow_status, now, *change_ids),
             )
-        return int(cursor.rowcount)
+
+        return changes
+
+    def apply_job_status_changes(
+        self,
+        changes: list[dict[str, int | str]],
+        *,
+        use_from_status: bool,
+    ) -> int:
+        """Restore or re-apply folder moves from stored change records."""
+        if not changes:
+            return 0
+
+        status_key = "from_status" if use_from_status else "to_status"
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        updated = 0
+
+        with get_connection() as conn:
+            for change in changes:
+                job_id = int(change["job_id"])
+                workflow_status = change.get(status_key)
+                if not is_valid_job_status(workflow_status):
+                    continue
+                cursor = conn.execute(
+                    """
+                    UPDATE jobs
+                    SET workflow_status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (workflow_status, now, job_id),
+                )
+                updated += int(cursor.rowcount)
+
+        return updated
+
+    def update_jobs_status(self, job_ids: list[int], workflow_status: str) -> int:
+        return len(self.move_jobs_status(job_ids, workflow_status))
 
     def count_jobs(
         self,

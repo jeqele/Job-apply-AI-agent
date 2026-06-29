@@ -58,6 +58,15 @@ from job_apply_ai.job_status import (
     is_valid_job_status,
     job_status_label,
 )
+from job_apply_ai.job_move_history import (
+    can_redo_job_moves,
+    can_undo_job_moves,
+    pop_redo_job_moves,
+    pop_undo_job_moves,
+    record_job_moves,
+    redo_job_move_label,
+    undo_job_move_label,
+)
 from job_apply_ai.cv_modifier.cv_analyzer import CVAnalyzer
 from job_apply_ai.cv_modifier.job_match_analyzer import (
     NOT_MATCH_STATUS,
@@ -771,7 +780,11 @@ def _send_application_for_job(job_id: int, account_id: str | None = None) -> tup
         logger.error('Application email failed for job %s: %s', job_id, exc)
         return {'error': f'Failed to send email: {exc}'}, 500
 
-    job_repo.update_job_status(job_id, 'cv_sent')
+    _move_jobs_with_history(
+        [job_id],
+        'cv_sent',
+        history_label='Mark as CV Sent after send',
+    )
     from_email = str(account.get('email') or '')
     return {
         'ok': True,
@@ -1608,6 +1621,91 @@ def _manage_jobs_redirect(folder: str = 'all', search: str = '', sort: str = '')
     if folder and folder != 'all':
         kwargs['folder'] = folder
     return redirect(url_for('manage_jobs', **kwargs))
+
+
+def _job_move_history_context() -> dict[str, Any]:
+    return {
+        'can_undo_job_moves': can_undo_job_moves(session),
+        'can_redo_job_moves': can_redo_job_moves(session),
+        'undo_job_move_label': undo_job_move_label(session),
+        'redo_job_move_label': redo_job_move_label(session),
+    }
+
+
+def _move_jobs_with_history(
+    job_ids: list[int],
+    workflow_status: str,
+    *,
+    history_label: str | None = None,
+) -> int:
+    changes = job_repo.move_jobs_status(job_ids, workflow_status)
+    if changes:
+        label = history_label or f'Move to {job_status_label(workflow_status)}'
+        record_job_moves(session, changes, label)
+    return len(changes)
+
+
+def _record_job_status_changes(
+    changes: list[dict],
+    *,
+    history_label: str,
+) -> None:
+    if changes:
+        record_job_moves(session, changes, history_label)
+
+
+def _undo_job_moves_redirect(
+    return_view: str,
+    return_folder: str,
+    return_search: str,
+    return_sort: str,
+):
+    entry = pop_undo_job_moves(session)
+    if not entry:
+        flash('Nothing to undo', 'info')
+    else:
+        restored = job_repo.apply_job_status_changes(
+            entry.get('changes', []),
+            use_from_status=True,
+        )
+        if restored:
+            flash(f'Undid: {entry.get("label", "job move")}', 'success')
+        else:
+            flash('Could not undo the last job move', 'warning')
+
+    if return_view == 'list':
+        kwargs = {}
+        if return_sort and return_sort != DEFAULT_JOB_SORT:
+            kwargs['sort'] = return_sort
+        return redirect(url_for('job_list', **kwargs))
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+
+def _redo_job_moves_redirect(
+    return_view: str,
+    return_folder: str,
+    return_search: str,
+    return_sort: str,
+):
+    entry = pop_redo_job_moves(session)
+    if not entry:
+        flash('Nothing to redo', 'info')
+    else:
+        restored = job_repo.apply_job_status_changes(
+            entry.get('changes', []),
+            use_from_status=False,
+        )
+        if restored:
+            flash(f'Redid: {entry.get("label", "job move")}', 'success')
+        else:
+            flash('Could not redo the last job move', 'warning')
+
+    if return_view == 'list':
+        kwargs = {}
+        if return_sort and return_sort != DEFAULT_JOB_SORT:
+            kwargs['sort'] = return_sort
+        return redirect(url_for('job_list', **kwargs))
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
 
 def _redirect_after_job_status_update(
@@ -3062,6 +3160,9 @@ def job_list():
         current_sort=sort_by,
         sort_query=sort_query,
         job_sort_options=JOB_SORT_OPTIONS,
+        job_statuses=JOB_WORKFLOW_STATUSES,
+        status_labels=JOB_STATUS_LABELS,
+        **_job_move_history_context(),
     )
 
 
@@ -3115,6 +3216,7 @@ def manage_jobs(folder='all'):
         profile_has_matchable_skills=profile_has_matchable_skills(profile),
         profile_ready=profile_is_ready(profile),
         jobs_with_cv_count=jobs_with_cv_count,
+        **_job_move_history_context(),
     )
 
 
@@ -3179,6 +3281,7 @@ def _run_job_match_analyze_task(
                 should_continue=should_continue,
             )
 
+            status_changes: list[dict] = []
             for job, updated in zip(jobs, result['jobs']):
                 job_id = job.get('id')
                 if not job_id:
@@ -3193,7 +3296,7 @@ def _run_job_match_analyze_task(
                 previous_status = job.get('workflow_status') or DEFAULT_JOB_STATUS
                 new_status = updated.get('workflow_status') or previous_status
                 if new_status != previous_status:
-                    job_repo.update_job_status(job_id, new_status)
+                    status_changes.extend(job_repo.move_jobs_status([job_id], new_status))
 
             stats = result['stats']
             current_task = get_task(task_id)
@@ -3207,6 +3310,7 @@ def _run_job_match_analyze_task(
                     task_id,
                     {
                         'stats': stats,
+                        'status_changes': status_changes,
                         'return_folder': return_folder,
                         'return_search': return_search,
                         'return_sort': return_sort,
@@ -3220,6 +3324,7 @@ def _run_job_match_analyze_task(
                 task_id,
                 {
                     'stats': stats,
+                    'status_changes': status_changes,
                     'return_folder': return_folder,
                     'return_search': return_search,
                     'return_sort': return_sort,
@@ -3319,6 +3424,20 @@ def job_match_analyze_complete(task_id):
     restored = stats.get('restored_to_new', 0)
 
     session.pop('job_match_analyze_active', None)
+
+    status_changes = result.get('status_changes', [])
+    if status_changes:
+        moved = stats.get('moved_to_not_match', 0)
+        restored = stats.get('restored_to_new', 0)
+        label_parts = []
+        if moved:
+            label_parts.append(f'moved {moved} to Not Match')
+        if restored:
+            label_parts.append(f'restored {restored} to New')
+        history_label = 'AI match analysis'
+        if label_parts:
+            history_label = f'AI match analysis ({", ".join(label_parts)})'
+        _record_job_status_changes(status_changes, history_label=history_label)
 
     if result.get('stopped'):
         flash(
@@ -3613,8 +3732,13 @@ def edit_job(job_id):
 
         workflow_status = job_data.pop('workflow_status', DEFAULT_JOB_STATUS)
         job_repo.update_job(job_id, job_data)
-        if workflow_status != job.get('workflow_status', DEFAULT_JOB_STATUS):
-            job_repo.update_job_status(job_id, workflow_status)
+        previous_status = job.get('workflow_status', DEFAULT_JOB_STATUS)
+        if workflow_status != previous_status:
+            _move_jobs_with_history(
+                [job_id],
+                workflow_status,
+                history_label=f'Move to {job_status_label(workflow_status)}',
+            )
         flash('Job updated successfully', 'success')
         return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
@@ -3651,10 +3775,27 @@ def update_job_status(job_id):
             return_from_manage,
         )
 
-    if job_repo.update_job_status(job_id, workflow_status):
+    job = job_repo.get_job(job_id)
+    if not job:
+        flash('Job not found', 'error')
+        return _redirect_after_job_status_update(
+            return_view,
+            job_id,
+            workflow_status,
+            return_folder,
+            return_search,
+            return_sort,
+            return_from_manage,
+        )
+
+    if _move_jobs_with_history(
+        [job_id],
+        workflow_status,
+        history_label=f'Move to {job_status_label(workflow_status)}',
+    ):
         flash(f'Job moved to {job_status_label(workflow_status)}', 'success')
     else:
-        flash('Job not found', 'error')
+        flash(f'Job is already in {job_status_label(workflow_status)}', 'info')
     return _redirect_after_job_status_update(
         return_view,
         job_id,
@@ -3739,7 +3880,11 @@ def batch_update_job_status():
             return redirect(url_for('job_list', sort=return_sort or None))
         return _manage_jobs_redirect(return_folder, return_search, return_sort)
 
-    updated = job_repo.update_jobs_status(job_ids, workflow_status)
+    updated = _move_jobs_with_history(
+        job_ids,
+        workflow_status,
+        history_label=f'Move {len(job_ids)} job(s) to {job_status_label(workflow_status)}',
+    )
     if updated:
         flash(
             f'Moved {updated} job{"s" if updated != 1 else ""} to {job_status_label(workflow_status)}',
@@ -3751,6 +3896,62 @@ def batch_update_job_status():
     if return_view == 'list':
         return redirect(url_for('job_list', sort=return_sort or None))
     return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+
+@app.route('/jobs/manage/archive-folder', methods=['POST'])
+def archive_folder_jobs():
+    """Move every job in the current folder to Archived in one action."""
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '').strip()
+    return_sort = request.form.get('return_sort', '').strip()
+
+    if return_folder == 'archived':
+        flash('Jobs are already in Archived.', 'info')
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    jobs = _jobs_for_manage_folder(return_folder, return_search)
+    job_ids = [int(job['id']) for job in jobs if job.get('id')]
+    if not job_ids:
+        flash('No jobs to archive in this folder.', 'warning')
+        return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+    if return_folder == 'all':
+        folder_label = 'All Jobs'
+    else:
+        folder_label = job_status_label(return_folder)
+
+    updated = _move_jobs_with_history(
+        job_ids,
+        'archived',
+        history_label=f'Archive all in {folder_label}',
+    )
+    flash(
+        f'Archived {updated} job{"s" if updated != 1 else ""} from {folder_label}',
+        'success',
+    )
+    return _manage_jobs_redirect(return_folder, return_search, return_sort)
+
+
+@app.route('/jobs/manage/undo-move', methods=['POST'])
+@app.route('/jobs/undo-move', methods=['POST'])
+def undo_job_move():
+    """Undo the most recent job folder move."""
+    return_view = request.form.get('return_view', 'manage')
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '').strip()
+    return_sort = request.form.get('return_sort', '').strip()
+    return _undo_job_moves_redirect(return_view, return_folder, return_search, return_sort)
+
+
+@app.route('/jobs/manage/redo-move', methods=['POST'])
+@app.route('/jobs/redo-move', methods=['POST'])
+def redo_job_move():
+    """Redo the most recently undone job folder move."""
+    return_view = request.form.get('return_view', 'manage')
+    return_folder = request.form.get('return_folder', 'all')
+    return_search = request.form.get('return_search', '').strip()
+    return_sort = request.form.get('return_sort', '').strip()
+    return _redo_job_moves_redirect(return_view, return_folder, return_search, return_sort)
 
 
 @app.route('/export/<fmt>')
