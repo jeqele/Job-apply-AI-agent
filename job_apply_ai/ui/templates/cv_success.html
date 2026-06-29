@@ -62,6 +62,8 @@
         .chat-empty { color: #6c757d; text-align: center; padding: 2rem 1rem; }
         .chat-session-bar { background: rgba(255,255,255,0.12); padding: 0.65rem 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.15); }
         .chat-session-bar .form-select { min-width: 0; }
+        .chat-mode-toggle .btn { font-size: 0.78rem; font-weight: 600; padding: 0.2rem 0.55rem; }
+        .chat-mode-toggle .btn.active { background: #0d6efd; border-color: #0d6efd; color: #fff; }
         .job-preview-panel { background: white; border-radius: 0.75rem; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; margin-bottom: 1rem; }
         .job-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; }
         .job-preview-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; }
@@ -237,8 +239,14 @@
 
             <div class="col-lg-4">
                 <div class="card chat-pane">
-                    <div class="card-header" id="chatHeader">
-                        <i class="fas fa-comments me-2"></i>Chat to Modify CV
+                    <div class="card-header d-flex align-items-center justify-content-between gap-2 flex-wrap" id="chatHeaderBar">
+                        <div id="chatHeader" class="d-flex align-items-center gap-2 flex-wrap">
+                            <span id="chatHeaderLabel"><i class="fas fa-comments me-2"></i>Chat to Modify CV</span>
+                            <div class="btn-group btn-group-sm chat-mode-toggle d-none" role="group" aria-label="CV chat mode" id="cvChatModeToggle">
+                                <button type="button" class="btn btn-outline-primary active" data-chat-mode="modify" id="cvChatModeModifyBtn">Modify</button>
+                                <button type="button" class="btn btn-outline-primary" data-chat-mode="ask" id="cvChatModeAskBtn">Ask From CV</button>
+                            </div>
+                        </div>
                     </div>
                     {% if chat_sessions_api_url %}
                     <div class="chat-session-bar">
@@ -254,7 +262,7 @@
                     <div class="typing-indicator d-none" id="chatTyping">
                         <i class="fas fa-spinner fa-spin me-2"></i><span id="chatTypingText">AI is updating your CV…</span>
                     </div>
-                    {% if chat_api_url %}
+                    {% if chat_api_url or cv_ask_api_url %}
                     <div class="chat-input-area">
                         <form id="chatForm">
                             <div class="input-group">
@@ -288,8 +296,12 @@
     <script id="coverLetterChatSessionsData" type="application/json">{{ cover_letter_chat_sessions | tojson }}</script>
     <script id="cvChatActiveSessionData" type="application/json">{{ cv_chat_active_session_id | tojson }}</script>
     <script id="coverLetterChatActiveSessionData" type="application/json">{{ cover_letter_chat_active_session_id | tojson }}</script>
+    <script id="cvAskChatHistoryData" type="application/json">{{ cv_ask_chat_history | tojson }}</script>
+    <script id="cvAskChatSessionsData" type="application/json">{{ cv_ask_chat_sessions | tojson }}</script>
+    <script id="cvAskChatActiveSessionData" type="application/json">{{ cv_ask_chat_active_session_id | tojson }}</script>
     <script>
         const chatApiUrl = {{ chat_api_url | tojson }};
+        const cvAskApiUrl = {{ cv_ask_api_url | tojson }};
         const previewLinesApiUrl = {{ preview_lines_api_url | tojson }};
         const chatSessionsApiUrl = {{ chat_sessions_api_url | tojson }};
         const generateCoverLetterUrl = {{ generate_cover_letter_url | tojson }};
@@ -307,18 +319,30 @@
         let coverLetterChatSessions = JSON.parse(document.getElementById('coverLetterChatSessionsData').textContent || '[]');
         let cvChatActiveSessionId = JSON.parse(document.getElementById('cvChatActiveSessionData').textContent || '""');
         let coverLetterChatActiveSessionId = JSON.parse(document.getElementById('coverLetterChatActiveSessionData').textContent || '""');
+        let cvAskChatHistory = JSON.parse(document.getElementById('cvAskChatHistoryData').textContent || '[]');
+        let cvAskChatSessions = JSON.parse(document.getElementById('cvAskChatSessionsData').textContent || '[]');
+        let cvAskChatActiveSessionId = JSON.parse(document.getElementById('cvAskChatActiveSessionData').textContent || '""');
+        let cvChatMode = 'modify';
 
         const chatPlaceholders = {
             cv: 'e.g. Shorten line 4 and emphasize Python on line 12',
+            cv_ask: 'e.g. Which job requirements am I missing from my CV?',
             cover_letter: 'e.g. Make the opening paragraph more enthusiastic and mention the company mission',
         };
         const chatHelp = {
             cv: 'Reference line numbers from the CV preview (e.g. "Rewrite line 4"). Ask for changes to summary, skills, experience bullets, or title. Press Enter to send, Ctrl+Enter for a new line.',
+            cv_ask: 'Ask about fit, gaps, strengths, or interview prep. Answers use the job and CV only — nothing is changed. Press Enter to send, Ctrl+Enter for a new line.',
             cover_letter: 'Ask for changes to tone, opening hook, paragraph length, or closing call to action. Press Enter to send, Ctrl+Enter for a new line.',
         };
         const chatEmptyHints = {
             cv: '"Shorten line 4 to 2 sentences"<br>"Make line 12 emphasize Python more"',
+            cv_ask: '"What skills from the job am I missing?"<br>"How well does my experience match this role?"',
             cover_letter: '"Make the tone more confident"<br>"Shorten to 3 paragraphs and mention remote work interest"',
+        };
+        const chatTypingText = {
+            cv: 'AI is updating your CV…',
+            cv_ask: 'AI is thinking…',
+            cover_letter: 'AI is updating your cover letter…',
         };
 
         function escapeHtml(text) {
@@ -327,30 +351,44 @@
             return div.innerHTML;
         }
 
+        function activeChatDocument() {
+            if (activeDocument === 'cover_letter') return 'cover_letter';
+            return cvChatMode === 'ask' ? 'cv_ask' : 'cv';
+        }
+
         function activeChatHistory() {
-            return activeDocument === 'cover_letter' ? coverLetterChatHistory : cvChatHistory;
+            if (activeDocument === 'cover_letter') return coverLetterChatHistory;
+            if (cvChatMode === 'ask') return cvAskChatHistory;
+            return cvChatHistory;
         }
 
         function setActiveChatHistory(history) {
             if (activeDocument === 'cover_letter') coverLetterChatHistory = history;
+            else if (cvChatMode === 'ask') cvAskChatHistory = history;
             else cvChatHistory = history;
         }
 
         function activeChatSessions() {
-            return activeDocument === 'cover_letter' ? coverLetterChatSessions : cvChatSessions;
+            if (activeDocument === 'cover_letter') return coverLetterChatSessions;
+            if (cvChatMode === 'ask') return cvAskChatSessions;
+            return cvChatSessions;
         }
 
         function activeChatSessionId() {
-            return activeDocument === 'cover_letter' ? coverLetterChatActiveSessionId : cvChatActiveSessionId;
+            if (activeDocument === 'cover_letter') return coverLetterChatActiveSessionId;
+            if (cvChatMode === 'ask') return cvAskChatActiveSessionId;
+            return cvChatActiveSessionId;
         }
 
         function setActiveChatSessionId(sessionId) {
             if (activeDocument === 'cover_letter') coverLetterChatActiveSessionId = sessionId;
+            else if (cvChatMode === 'ask') cvAskChatActiveSessionId = sessionId;
             else cvChatActiveSessionId = sessionId;
         }
 
         function setActiveChatSessions(sessions) {
             if (activeDocument === 'cover_letter') coverLetterChatSessions = sessions;
+            else if (cvChatMode === 'ask') cvAskChatSessions = sessions;
             else cvChatSessions = sessions;
         }
 
@@ -358,10 +396,13 @@
             if (!data) return;
             cvChatHistory = data.chat_history || cvChatHistory;
             coverLetterChatHistory = data.cover_letter_chat_history || coverLetterChatHistory;
+            cvAskChatHistory = data.cv_ask_chat_history || cvAskChatHistory;
             cvChatSessions = data.cv_chat_sessions || cvChatSessions;
             coverLetterChatSessions = data.cover_letter_chat_sessions || coverLetterChatSessions;
+            cvAskChatSessions = data.cv_ask_chat_sessions || cvAskChatSessions;
             cvChatActiveSessionId = data.cv_chat_active_session_id || cvChatActiveSessionId;
             coverLetterChatActiveSessionId = data.cover_letter_chat_active_session_id || coverLetterChatActiveSessionId;
+            cvAskChatActiveSessionId = data.cv_ask_chat_active_session_id || cvAskChatActiveSessionId;
             renderSessionSelect();
             renderChat();
         }
@@ -390,7 +431,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    document: activeDocument,
+                    document: activeChatDocument(),
                     action,
                     session_id: sessionId,
                 }),
@@ -1066,13 +1107,34 @@
         }
 
         function updateChatChrome() {
-            const label = activeDocument === 'cover_letter' ? 'Cover Letter' : 'CV';
-            document.getElementById('chatHeader').innerHTML = `<i class="fas fa-comments me-2"></i>Chat to Modify ${label}`;
-            document.getElementById('chatTypingText').textContent = `AI is updating your ${label}…`;
-            document.getElementById('chatInput').placeholder = chatPlaceholders[activeDocument];
-            document.getElementById('chatHelpText').textContent = chatHelp[activeDocument];
+            const modeToggle = document.getElementById('cvChatModeToggle');
+            const headerLabel = document.getElementById('chatHeaderLabel');
+            if (activeDocument === 'cover_letter') {
+                if (modeToggle) modeToggle.classList.add('d-none');
+                headerLabel.innerHTML = '<i class="fas fa-comments me-2"></i>Chat to Modify Cover Letter';
+            } else {
+                if (modeToggle) modeToggle.classList.remove('d-none');
+                if (cvChatMode === 'ask') {
+                    headerLabel.innerHTML = '<i class="fas fa-circle-question me-2"></i>Ask From CV';
+                } else {
+                    headerLabel.innerHTML = '<i class="fas fa-comments me-2"></i>Chat to Modify CV';
+                }
+                document.getElementById('cvChatModeModifyBtn')?.classList.toggle('active', cvChatMode === 'modify');
+                document.getElementById('cvChatModeAskBtn')?.classList.toggle('active', cvChatMode === 'ask');
+            }
+            const chatDoc = activeChatDocument();
+            document.getElementById('chatTypingText').textContent = chatTypingText[chatDoc];
+            document.getElementById('chatInput').placeholder = chatPlaceholders[chatDoc];
+            document.getElementById('chatHelpText').textContent = chatHelp[chatDoc];
             renderSessionSelect();
             renderChat();
+        }
+
+        function setCvChatMode(mode) {
+            if (mode !== 'modify' && mode !== 'ask') return;
+            if (cvChatMode === mode) return;
+            cvChatMode = mode;
+            updateChatChrome();
         }
 
         function renderChat() {
@@ -1083,7 +1145,7 @@
                     <div class="chat-empty">
                         <i class="fas fa-lightbulb fa-2x mb-3 d-block"></i>
                         <p class="mb-1">Try asking:</p>
-                        <p class="small mb-0">${chatEmptyHints[activeDocument]}</p>
+                        <p class="small mb-0">${chatEmptyHints[activeChatDocument()]}</p>
                     </div>`;
                 return;
             }
@@ -1095,6 +1157,9 @@
 
         document.getElementById('cv-tab').addEventListener('shown.bs.tab', () => { activeDocument = 'cv'; updateChatChrome(); });
         document.getElementById('cover-letter-tab').addEventListener('shown.bs.tab', () => { activeDocument = 'cover_letter'; updateChatChrome(); });
+
+        document.getElementById('cvChatModeModifyBtn')?.addEventListener('click', () => setCvChatMode('modify'));
+        document.getElementById('cvChatModeAskBtn')?.addEventListener('click', () => setCvChatMode('ask'));
 
         renderCvPreview();
         renderCoverLetterPreview();
@@ -1146,11 +1211,17 @@
                 }
             });
         }
-        if (chatForm && chatApiUrl) {
+        if (chatForm && (chatApiUrl || cvAskApiUrl)) {
             chatForm.addEventListener('submit', async (event) => {
                 event.preventDefault();
                 if (activeDocument === 'cover_letter' && !(coverLetter.body_paragraphs || []).length) {
                     alert('Generate a cover letter first.');
+                    return;
+                }
+                const isAskMode = activeDocument === 'cv' && cvChatMode === 'ask';
+                const apiUrl = isAskMode ? cvAskApiUrl : chatApiUrl;
+                if (!apiUrl) {
+                    alert(isAskMode ? 'Ask From CV is unavailable for this session.' : 'Chat editing is unavailable for this session.');
                     return;
                 }
                 const input = document.getElementById('chatInput');
@@ -1169,27 +1240,34 @@
                 typing.classList.remove('d-none');
 
                 try {
-                    const response = await fetch(chatApiUrl, {
+                    const response = await fetch(apiUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message, document: activeDocument }),
+                        body: JSON.stringify(
+                            isAskMode
+                                ? { message }
+                                : { message, document: activeDocument },
+                        ),
                     });
                     const data = await response.json();
                     if (!response.ok) throw new Error(data.error || 'Request failed');
 
-                    if (data.document === 'cover_letter') {
-                        coverLetter = data.cover_letter || coverLetter;
-                        renderCoverLetterPreview();
-                    } else {
-                        cvContent = data.content || cvContent;
-                        cvPreviewLines = data.cv_preview_lines || cvPreviewLines;
-                        editingLineIndex = null;
-                        resetPreviewHistory();
-                        renderCvPreview();
+                    if (!isAskMode) {
+                        if (data.document === 'cover_letter') {
+                            coverLetter = data.cover_letter || coverLetter;
+                            renderCoverLetterPreview();
+                        } else {
+                            cvContent = data.content || cvContent;
+                            cvPreviewLines = data.cv_preview_lines || cvPreviewLines;
+                            editingLineIndex = null;
+                            resetPreviewHistory();
+                            renderCvPreview();
+                        }
                     }
                     applyChatSessionPayload(data);
                 } catch (error) {
-                    history = activeChatHistory().concat([{ role: 'assistant', content: 'Sorry, I could not apply that change: ' + error.message }]);
+                    const prefix = isAskMode ? 'Sorry, I could not answer that: ' : 'Sorry, I could not apply that change: ';
+                    history = activeChatHistory().concat([{ role: 'assistant', content: prefix + error.message }]);
                     setActiveChatHistory(history);
                     renderChat();
                 } finally {

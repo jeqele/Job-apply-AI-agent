@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any, Literal
 
-DocumentKind = Literal["cv", "cover_letter"]
+DocumentKind = Literal["cv", "cover_letter", "cv_ask"]
 
 DEFAULT_STORE: dict[str, Any] = {
     "tailored_content": {},
@@ -20,6 +20,9 @@ DEFAULT_STORE: dict[str, Any] = {
     "cv_chat_active_session_id": "",
     "cover_letter_chat_sessions": [],
     "cover_letter_chat_active_session_id": "",
+    "cv_ask_chat_history": [],
+    "cv_ask_chat_sessions": [],
+    "cv_ask_chat_active_session_id": "",
     "ats_analysis": {},
     "cv_preview_lines": [],
     "cv_preview_customized": False,
@@ -32,6 +35,11 @@ _SESSION_FIELDS: dict[DocumentKind, tuple[str, str, str]] = {
         "cover_letter_chat_history",
         "cover_letter_chat_sessions",
         "cover_letter_chat_active_session_id",
+    ),
+    "cv_ask": (
+        "cv_ask_chat_history",
+        "cv_ask_chat_sessions",
+        "cv_ask_chat_active_session_id",
     ),
 }
 
@@ -123,6 +131,7 @@ def normalize_store(data: dict[str, Any] | None) -> dict[str, Any]:
             store[key] = deepcopy(default) if isinstance(default, (list, dict)) else default
     _ensure_chat_sessions(store, "cv")
     _ensure_chat_sessions(store, "cover_letter")
+    _ensure_chat_sessions(store, "cv_ask")
     return store
 
 
@@ -276,6 +285,9 @@ def save_cv_content(
         "cv_chat_active_session_id": existing.get("cv_chat_active_session_id", ""),
         "cover_letter_chat_sessions": deepcopy(existing.get("cover_letter_chat_sessions", [])),
         "cover_letter_chat_active_session_id": existing.get("cover_letter_chat_active_session_id", ""),
+        "cv_ask_chat_history": deepcopy(existing.get("cv_ask_chat_history", [])),
+        "cv_ask_chat_sessions": deepcopy(existing.get("cv_ask_chat_sessions", [])),
+        "cv_ask_chat_active_session_id": existing.get("cv_ask_chat_active_session_id", ""),
         "ats_analysis": deepcopy(existing.get("ats_analysis", {})),
         "cv_preview_lines": deepcopy(existing.get("cv_preview_lines", [])),
         "cv_preview_customized": bool(existing.get("cv_preview_customized")),

@@ -91,6 +91,7 @@ from job_apply_ai.cv_modifier.ats_friendly_analyzer import (
     update_suggestions_status,
 )
 from job_apply_ai.cv_modifier.cv_chat_editor import CVChatEditor
+from job_apply_ai.cv_modifier.cv_ask_assistant import CVAskAssistant
 from job_apply_ai.cv_modifier.cv_content_store import (
     append_active_chat_messages,
     delete_cv_artifacts,
@@ -587,14 +588,27 @@ def _document_chat_payload(
         'document': document,
         'chat_history': get_active_chat_messages(store, 'cv'),
         'cover_letter_chat_history': get_active_chat_messages(store, 'cover_letter'),
+        'cv_ask_chat_history': get_active_chat_messages(store, 'cv_ask'),
         'cv_chat_sessions': get_chat_sessions(store, 'cv'),
         'cover_letter_chat_sessions': get_chat_sessions(store, 'cover_letter'),
+        'cv_ask_chat_sessions': get_chat_sessions(store, 'cv_ask'),
         'cv_chat_active_session_id': get_active_chat_session_id(store, 'cv'),
         'cover_letter_chat_active_session_id': get_active_chat_session_id(store, 'cover_letter'),
+        'cv_ask_chat_active_session_id': get_active_chat_session_id(store, 'cv_ask'),
     }
     if extra:
         payload.update(extra)
     return payload
+
+
+def _resolve_chat_document(document_type: str) -> str:
+    """Map API document type strings to storage document kinds."""
+    normalized = str(document_type or 'cv').strip().lower()
+    if normalized in {'cover_letter', 'cover-letter'}:
+        return 'cover_letter'
+    if normalized in {'cv_ask', 'ask'}:
+        return 'cv_ask'
+    return 'cv'
 
 
 def _load_job_cv_store(cv_filename: str) -> dict | None:
@@ -834,10 +848,13 @@ def _cv_preview_context(
     chat_history = get_active_chat_messages(store, 'cv')
     cover_letter = store.get('cover_letter', {})
     cover_letter_chat_history = get_active_chat_messages(store, 'cover_letter')
+    cv_ask_chat_history = get_active_chat_messages(store, 'cv_ask')
     cv_chat_sessions = get_chat_sessions(store, 'cv')
     cover_letter_chat_sessions = get_chat_sessions(store, 'cover_letter')
+    cv_ask_chat_sessions = get_chat_sessions(store, 'cv_ask')
     cv_chat_active_session_id = get_active_chat_session_id(store, 'cv')
     cover_letter_chat_active_session_id = get_active_chat_session_id(store, 'cover_letter')
+    cv_ask_chat_active_session_id = get_active_chat_session_id(store, 'cv_ask')
     categories = matched_categories or CVChatEditor.content_to_matched_categories(content)
     job_id = job.get('id')
     cover_letter_filename = job.get('cover_letter_filename', '')
@@ -859,10 +876,13 @@ def _cv_preview_context(
         'rag_chunk_count': rag_chunk_count,
         'chat_history': chat_history,
         'cover_letter_chat_history': cover_letter_chat_history,
+        'cv_ask_chat_history': cv_ask_chat_history,
         'cv_chat_sessions': cv_chat_sessions,
         'cover_letter_chat_sessions': cover_letter_chat_sessions,
+        'cv_ask_chat_sessions': cv_ask_chat_sessions,
         'cv_chat_active_session_id': cv_chat_active_session_id,
         'cover_letter_chat_active_session_id': cover_letter_chat_active_session_id,
+        'cv_ask_chat_active_session_id': cv_ask_chat_active_session_id,
         'chat_sessions_api_url': (
             url_for('document_chat_sessions', job_id=job_id) if job_id else None
         ),
@@ -900,6 +920,7 @@ def _cv_preview_context(
             else None
         ),
         'chat_api_url': url_for('document_chat', job_id=job_id) if job_id else None,
+        'cv_ask_api_url': url_for('cv_ask_chat', job_id=job_id) if job_id else None,
         'preview_lines_api_url': (
             url_for('cv_preview_lines_update', job_id=job_id) if job_id else None
         ),
@@ -4491,6 +4512,81 @@ def document_chat(job_id):
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/jobs/<int:job_id>/cv/ask', methods=['POST'])
+def cv_ask_chat(job_id):
+    """Answer questions about the job and tailored CV without modifying documents."""
+    job = job_repo.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cv_filename = job.get('cv_filename', '')
+    if not cv_filename:
+        return jsonify({'error': 'No CV file found for this job'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    user_message = str(payload.get('message', '')).strip()
+    if not user_message:
+        return jsonify({'error': 'Message is required'}), 400
+
+    store = normalize_store(_load_job_cv_store(cv_filename) or {})
+    if not store.get('tailored_content'):
+        return jsonify({'error': 'CV content not available'}), 404
+
+    profile = profile_repo.get_profile()
+    chat_history = get_active_chat_messages(store, 'cv_ask')
+    current_content = store['tailored_content']
+    profile_name = profile.get('full_name', '')
+    current_preview_lines = resolve_cv_preview_lines(
+        current_content,
+        profile_name,
+        stored_lines=store.get('cv_preview_lines'),
+        customized=bool(store.get('cv_preview_customized')),
+    )
+
+    try:
+        endpoint = f"POST /api/jobs/{job_id}/cv/ask"
+        assistant = CVAskAssistant()
+        with dev_llm_context(
+            endpoint=endpoint,
+            operation="cv_ask",
+            chat_history=chat_history,
+            context={"user_message": user_message, "document_type": "cv_ask"},
+        ), dev_agent("CVAskAssistant", job_id=job_id):
+            reply = assistant.ask(
+                current_content=current_content,
+                user_message=user_message,
+                job=job,
+                profile=profile,
+                chat_history=chat_history,
+                preview_lines=current_preview_lines,
+                preview_customized=bool(store.get('cv_preview_customized')),
+            )
+
+        append_active_chat_messages(
+            store,
+            'cv_ask',
+            [
+                {'role': 'user', 'content': user_message},
+                {'role': 'assistant', 'content': reply},
+            ],
+        )
+        _save_job_cv_content(
+            cv_filename,
+            current_content,
+            cover_letter=store.get('cover_letter', {}),
+            store=store,
+        )
+
+        return jsonify(_document_chat_payload(
+            store,
+            'cv_ask',
+            extra={'reply': reply, 'document': 'cv_ask'},
+        ))
+    except Exception as exc:
+        logger.error('CV ask chat failed for job %s: %s', job_id, exc)
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/api/jobs/<int:job_id>/cv/preview-lines', methods=['POST'])
 @app.route('/api/jobs/<int:job_id>/cv/preview-lines/reorder', methods=['POST'])
 def cv_preview_lines_update(job_id):
@@ -4556,7 +4652,7 @@ def document_chat_sessions(job_id):
     session_id = str(payload.get('session_id', '')).strip()
 
     store = normalize_store(_load_job_cv_store(cv_filename) or {})
-    document = 'cover_letter' if document_type == 'cover_letter' else 'cv'
+    document = _resolve_chat_document(document_type)
 
     if action == 'switch':
         if not session_id:

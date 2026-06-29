@@ -55,3 +55,13 @@ def test_cover_letter_sessions_are_independent_from_cv():
     assert get_active_chat_messages(store, "cv")[0]["content"] == "CV edit"
     assert get_active_chat_messages(store, "cover_letter")[0]["content"] == "Letter edit"
     assert get_active_chat_session_id(store, "cv") != get_active_chat_session_id(store, "cover_letter")
+
+
+def test_cv_ask_sessions_are_independent_from_modify_chat():
+    store = normalize_store({})
+    append_active_chat_messages(store, "cv", [{"role": "user", "content": "Shorten summary"}])
+    append_active_chat_messages(store, "cv_ask", [{"role": "user", "content": "What skills am I missing?"}])
+
+    assert get_active_chat_messages(store, "cv")[0]["content"] == "Shorten summary"
+    assert get_active_chat_messages(store, "cv_ask")[0]["content"] == "What skills am I missing?"
+    assert get_active_chat_session_id(store, "cv") != get_active_chat_session_id(store, "cv_ask")
